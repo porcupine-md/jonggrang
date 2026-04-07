@@ -38,6 +38,11 @@ const showLogPanel = ref(true);
 const planDescription = ref('');
 const newTask = ref({ title: '', description: '', priority: 1 });
 
+// Parallel state
+const executionMode = ref('idle'); // 'idle' | 'sequential' | 'parallel'
+const taskGroups = ref([]);        // [{ id, taskIds, status, branch }]
+const showMergePanel = ref(false);
+
 // ============================================================
 // COMPUTED
 // ============================================================
@@ -125,7 +130,29 @@ const graphNodes = computed(() => {
 // SOCKET EVENTS
 // ============================================================
 onMounted(() => {
-  socket.on('jonggrang_status', (data) => { isJonggrangRunning.value = data.isRunning; });
+  socket.on('jonggrang_status', (data) => {
+    isJonggrangRunning.value = data.isRunning;
+    executionMode.value = data.mode || (data.isRunning ? 'sequential' : 'idle');
+  });
+
+  socket.on('group_status', (data) => {
+    const idx = taskGroups.value.findIndex(g => g.id === data.groupId);
+    if (idx >= 0) {
+      taskGroups.value[idx] = { ...taskGroups.value[idx], ...data };
+    } else {
+      taskGroups.value.push(data);
+    }
+  });
+
+  socket.on('parallel_complete', (data) => {
+    taskGroups.value = data.groups;
+    showMergePanel.value = true;
+  });
+
+  socket.on('group_review_complete', (data) => {
+    const g = taskGroups.value.find(g => g.id === data.groupId);
+    if (g) g.reviewDone = data.code === 0;
+  });
 
   socket.on('tasks_update', (data) => {
     if (data && data.tasks) {
@@ -293,7 +320,46 @@ async function startJonggrang(taskId) {
 }
 
 async function stopJonggrang() {
-  await apiPost('/api/jonggrang/stop');
+  if (executionMode.value === 'parallel') {
+    await apiPost('/api/jonggrang/stop-parallel');
+  } else {
+    await apiPost('/api/jonggrang/stop');
+  }
+}
+
+async function startParallel() {
+  logs.value = '';
+  logContentLength.value = 0;
+  if (terminalInstance.value) terminalInstance.value.clear();
+  taskGroups.value = [];
+  showMergePanel.value = false;
+  const tool = projectConfig.value?.tool || 'opencode';
+  const result = await apiPost('/api/jonggrang/start-parallel', { tool });
+  if (result.groups) taskGroups.value = result.groups.map(g => ({ ...g, status: 'running' }));
+}
+
+async function reviewGroup(groupId) {
+  await apiPost(`/api/jonggrang/groups/${groupId}/review`);
+}
+
+async function mergeGroup(groupId) {
+  await apiPost(`/api/jonggrang/groups/${groupId}/merge`);
+}
+
+async function mergeAll() {
+  await apiPost('/api/jonggrang/groups/merge-all');
+  showMergePanel.value = false;
+  taskGroups.value = [];
+}
+
+function groupForTask(taskId) {
+  return taskGroups.value.find(g => g.taskIds && g.taskIds.includes(taskId));
+}
+
+const GROUP_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#ec4899', '#06b6d4', '#84cc16'];
+function groupColor(taskId) {
+  const idx = taskGroups.value.findIndex(g => g.taskIds && g.taskIds.includes(taskId));
+  return idx >= 0 ? GROUP_COLORS[idx % GROUP_COLORS.length] : 'transparent';
 }
 
 async function startPlan() {
@@ -410,22 +476,22 @@ function onDrop(e, columnKey) {
         </button>
         <div class="separator"></div>
 
-        <button
-          v-if="!isJonggrangRunning"
-          class="run-btn"
-          @click="startJonggrang()"
-        >
-          <PlayIcon :size="13" />
-          <span>Run</span>
-          <span class="run-branch" v-if="branchName">{{ branchName }}</span>
-        </button>
-        <button
-          v-else
-          class="stop-btn"
-          @click="stopJonggrang"
-        >
+        <template v-if="!isJonggrangRunning">
+          <button class="run-btn" @click="startJonggrang()">
+            <PlayIcon :size="13" />
+            <span>Run</span>
+          </button>
+          <button class="run-btn parallel-btn" @click="startParallel()">
+            <GitBranchIcon :size="13" />
+            <span>Parallel</span>
+          </button>
+        </template>
+        <button v-else class="stop-btn" @click="stopJonggrang">
           <SquareIcon :size="12" />
           <span>Stop</span>
+        </button>
+        <button v-if="taskGroups.length > 0 && !isJonggrangRunning" class="topbar-btn merge-trigger" @click="showMergePanel = !showMergePanel" title="Merge groups">
+          <GitBranchIcon :size="15" />
         </button>
       </div>
 
@@ -443,6 +509,17 @@ function onDrop(e, columnKey) {
     <!-- ==================== PROGRESS BAR ==================== -->
     <div class="progress-strip" v-if="totalTasks > 0">
       <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+    </div>
+
+    <!-- GROUP STATUS STRIP -->
+    <div class="groups-strip" v-if="taskGroups.length > 0">
+      <div v-for="(group, i) in taskGroups" :key="group.id"
+        class="group-pill" :class="group.status"
+        :style="{ borderColor: GROUP_COLORS[i % GROUP_COLORS.length] }">
+        <span class="group-pill-dot" :style="{ background: GROUP_COLORS[i % GROUP_COLORS.length] }"></span>
+        {{ group.id }}
+        <span class="group-pill-status">{{ group.status }}</span>
+      </div>
     </div>
 
     <!-- ==================== MAIN CONTENT ==================== -->
@@ -476,7 +553,7 @@ function onDrop(e, columnKey) {
                   @dragstart="(e) => onDragStart(e, task)"
                   @click="selectTask(task)"
                 >
-                  <div class="card-indicator" :style="{ background: statusColor(task.status) }"></div>
+                  <div class="card-indicator" :style="{ background: groupForTask(task.id) ? groupColor(task.id) : statusColor(task.status) }"></div>
                   <div class="card-body">
                     <h4 class="card-title">{{ task.title }}</h4>
                     <p class="card-desc" v-if="task.description && task.description !== task.title">{{ task.description }}</p>
@@ -728,6 +805,47 @@ function onDrop(e, columnKey) {
         </div>
       </div>
     </Teleport>
+
+    <!-- ==================== MERGE PANEL ==================== -->
+    <Teleport to="body">
+      <div v-if="showMergePanel" class="modal-overlay" @click.self="showMergePanel = false">
+        <div class="modal modal-wide">
+          <div class="modal-header">
+            <h3>Review & Merge Groups</h3>
+            <button class="modal-close" @click="showMergePanel = false"><XIcon :size="16" /></button>
+          </div>
+          <div class="modal-body">
+            <div v-for="(group, i) in taskGroups" :key="group.id" class="merge-group-row">
+              <div class="merge-group-info">
+                <span class="merge-group-dot" :style="{ background: GROUP_COLORS[i % GROUP_COLORS.length] }"></span>
+                <div>
+                  <strong>{{ group.id }}</strong>
+                  <span class="merge-group-branch" v-if="group.branch">{{ group.branch }}</span>
+                  <span class="merge-group-status" :class="group.status">{{ group.status }}</span>
+                </div>
+              </div>
+              <div class="merge-group-tasks">
+                <span v-for="id in (group.taskIds || [])" :key="id" class="detail-tag">{{ id }}</span>
+              </div>
+              <div class="merge-group-actions">
+                <button class="btn btn-ghost btn-sm" @click="reviewGroup(group.id)" :disabled="group.status === 'merged'">
+                  <EyeIcon :size="12" /> Review
+                </button>
+                <button class="btn btn-primary btn-sm" @click="mergeGroup(group.id)" :disabled="group.status === 'merged'">
+                  <GitBranchIcon :size="12" /> Merge
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="showMergePanel = false">Close</button>
+            <button class="btn btn-primary" @click="mergeAll">
+              <GitBranchIcon :size="14" /> Merge All
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -842,6 +960,17 @@ function onDrop(e, columnKey) {
 .run-btn:hover {
   background: rgba(16, 185, 129, 0.25);
   border-color: var(--green);
+}
+.parallel-btn {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.parallel-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: var(--blue);
+}
+.merge-trigger {
+  color: var(--yellow);
 }
 .run-branch {
   font-size: 11px;
@@ -1609,4 +1738,92 @@ function onDrop(e, columnKey) {
   color: var(--red-text);
 }
 .btn-danger:hover { background: rgba(239, 68, 68, 0.2); }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+
+/* ==================== GROUPS STRIP ==================== */
+.groups-strip {
+  display: flex;
+  gap: 6px;
+  padding: 6px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+.group-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid;
+  color: var(--text-secondary);
+}
+.group-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.group-pill-status {
+  font-weight: 400;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+}
+.group-pill.running .group-pill-dot { animation: log-pulse 1.5s ease-in-out infinite; }
+.group-pill.done { opacity: 0.6; }
+.group-pill.merged { opacity: 0.4; }
+
+/* ==================== MERGE PANEL ==================== */
+.merge-group-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.merge-group-row:last-child { border-bottom: none; }
+.merge-group-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 160px;
+}
+.merge-group-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.merge-group-branch {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  display: block;
+}
+.merge-group-status {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-left: 6px;
+}
+.merge-group-status.done { color: var(--green); }
+.merge-group-status.failed { color: var(--red); }
+.merge-group-status.merged { color: var(--text-muted); }
+.merge-group-status.running { color: var(--blue); }
+.merge-group-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  flex: 1;
+}
+.merge-group-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
 </style>

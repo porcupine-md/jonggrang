@@ -56,6 +56,8 @@ let VERBOSE = process.env.JONGGRANG_VERBOSE === 'true';
 let DRY_RUN = process.env.JONGGRANG_DRY_RUN === 'false';
 let WEB_PORT = parseInt(process.env.JONGGRANG_WEB_PORT || '3001', 10);
 let WEB_OPEN = true;
+let WORKTREE_MODE = false;
+let GROUP_TASK_IDS = [];
 
 // Init options
 let INIT_NAME = '';
@@ -160,12 +162,21 @@ function ask(rl, prompt, defaultVal, options) {
 // WORK LOOP
 // ============================================================
 
+function emitSignal(type, data) {
+  console.log(JSON.stringify({ type, ...data }));
+}
+
 async function runIteration(iteration, taskId) {
   const task = lib.getTask(TASKS_FILE, taskId);
   const taskTitle = task ? task.title : taskId;
 
   logHeader(`Iteration ${iteration}: ${taskTitle}`);
-  lib.updateTaskStatus(TASKS_FILE, taskId, 'in_progress');
+
+  if (WORKTREE_MODE) {
+    emitSignal('task_status', { taskId, status: 'in_progress' });
+  } else {
+    lib.updateTaskStatus(TASKS_FILE, taskId, 'in_progress');
+  }
 
   const prompt = lib.buildWorkPrompt(taskId, TASKS_FILE, MODE);
 
@@ -184,15 +195,24 @@ async function runIteration(iteration, taskId) {
     const t = data.tasks.find(t => t.id === taskId);
     if (t && t.status === 'completed') {
       logSuccess(`Task ${taskId} completed successfully`);
+      if (WORKTREE_MODE) emitSignal('task_status', { taskId, status: 'completed' });
       return true;
     } else {
       logWarn('Agent finished but did not mark task complete. Reverting to pending.');
-      lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+      if (WORKTREE_MODE) {
+        emitSignal('task_status', { taskId, status: 'pending' });
+      } else {
+        lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+      }
       return false;
     }
   } else {
     logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
-    lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+    if (WORKTREE_MODE) {
+      emitSignal('task_status', { taskId, status: 'pending' });
+    } else {
+      lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+    }
     return false;
   }
 }
@@ -210,13 +230,18 @@ async function cmdWork() {
   const configMax = parseInt(lib.readConfig(CONFIG_FILE, 'work.max_iterations', '0'), 10);
   if (MAX_ITERATIONS === 0) MAX_ITERATIONS = configMax;
 
+  // In worktree mode or with explicit group tasks, don't limit — run until all tasks done
+  if (WORKTREE_MODE || GROUP_TASK_IDS.length > 0) MAX_ITERATIONS = 0;
+
   logHeader('JONGGRANG Work Loop');
   logInfo(`Tool: ${TOOL}`);
   logInfo(`Mode: ${MODE}`);
+  if (WORKTREE_MODE) logInfo('Worktree mode: ON');
   logInfo(MAX_ITERATIONS === 0 ? 'Max iterations: unlimited' : `Max iterations: ${MAX_ITERATIONS}`);
   logInfo(`Tasks: ${lib.countPending(TASKS_FILE)} pending / ${lib.countTotal(TASKS_FILE)} total`);
 
-  if (BRANCH) {
+  // Skip branch checkout in worktree mode (worktree already on its own branch)
+  if (!WORKTREE_MODE && BRANCH) {
     logInfo(`Branch: ${BRANCH}`);
     try {
       execSync(`git checkout -b ${BRANCH}`, { cwd: PROJECT_ROOT, stdio: 'ignore' });
@@ -225,20 +250,28 @@ async function cmdWork() {
     }
   }
 
-  // If a specific task is requested, resolve its dependency chain
+  // Build task queue
   let taskQueue = [];
-  if (TASK_ID) {
+  if (GROUP_TASK_IDS.length > 0) {
+    // Worktree mode: use the provided group task list
+    taskQueue = GROUP_TASK_IDS.filter(id => {
+      const t = lib.getTask(TASKS_FILE, id);
+      return t && t.status !== 'completed';
+    });
+    logInfo(`Group tasks: ${taskQueue.join(', ')}`);
+  } else if (TASK_ID) {
     taskQueue = lib.getTaskQueue(TASKS_FILE, TASK_ID);
     if (taskQueue.length > 1) {
       logInfo(`Task ${TASK_ID} has ${taskQueue.length - 1} pending dependencies — will process them first`);
     }
-    // Mark all queued tasks as waiting (moved to IN PROGRESS board)
-    taskQueue.forEach((id, i) => {
-      const t = lib.getTask(TASKS_FILE, id);
-      const label = id === TASK_ID ? '(target)' : `(dep ${i + 1})`;
-      lib.updateTaskStatus(TASKS_FILE, id, 'waiting');
-      logInfo(`  ${i + 1}. ${id}: ${t ? t.title : '?'} ${label}`);
-    });
+    if (!WORKTREE_MODE) {
+      taskQueue.forEach((id, i) => {
+        const t = lib.getTask(TASKS_FILE, id);
+        const label = id === TASK_ID ? '(target)' : `(dep ${i + 1})`;
+        lib.updateTaskStatus(TASKS_FILE, id, 'waiting');
+        logInfo(`  ${i + 1}. ${id}: ${t ? t.title : '?'} ${label}`);
+      });
+    }
     TASK_ID = '';
   }
 
@@ -295,8 +328,7 @@ async function cmdWork() {
     console.log('');
   }
 
-  // Revert any remaining waiting tasks back to pending
-  lib.revertWaiting(TASKS_FILE);
+  if (!WORKTREE_MODE) lib.revertWaiting(TASKS_FILE);
 
   logWarn(`Max iterations (${MAX_ITERATIONS}) reached. Run 'jonggrang work' to continue.`);
   logInfo(`Completed: ${lib.countCompleted(TASKS_FILE)} / ${lib.countTotal(TASKS_FILE)}`);
@@ -1082,6 +1114,8 @@ async function main() {
       case '--tool':          TOOL = rest[++i]; INIT_TOOL = rest[i]; TOOL_SET = true; break;
       case '--verbose':       VERBOSE = true; break;
       case '--dry-run':       DRY_RUN = true; break;
+      case '--worktree':     WORKTREE_MODE = true; break;
+      case '--group-tasks':  GROUP_TASK_IDS = rest[++i].split(','); break;
       case '--name':          INIT_NAME = rest[++i]; break;
       case '--type':          INIT_TYPE = rest[++i]; break;
       case '--work-mode':     INIT_WORK_MODE = rest[++i]; break;
