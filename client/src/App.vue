@@ -167,18 +167,19 @@ function attachTerminal(container) {
   const term = terminalInstance.value;
 
   if (term.element) {
-    // Terminal already opened — move its DOM to the new container
     container.innerHTML = '';
     container.appendChild(term.element);
   } else {
-    // First open
     container.innerHTML = '';
     term.open(container);
   }
 
-  fitAddon.value?.fit();
-  logContentLength.value = 0;
-  renderFullLog();
+  // Delay fit until layout has settled so xterm measures the correct width
+  requestAnimationFrame(() => {
+    fitAddon.value?.fit();
+    logContentLength.value = 0;
+    renderFullLog();
+  });
 
   resizeObserver?.disconnect();
   resizeObserver = new ResizeObserver(() => {
@@ -191,7 +192,7 @@ onMounted(() => {
   const term = new Terminal({
     convertEol: true,
     scrollback: 5000,
-    fontSize: 13,
+    fontSize: 12,
     fontFamily: 'JetBrains Mono, Fira Code, monospace',
     theme: {
       background: '#05060a',
@@ -1311,7 +1312,7 @@ function onDrop(e, columnKey) {
 .xterm-container {
   width: 100%;
   height: 100%;
-  padding: 12px 16px;
+  padding: 4px;
   box-sizing: border-box;
   background: rgba(5, 6, 10, 0.85);
   border-radius: var(--radius-md);
