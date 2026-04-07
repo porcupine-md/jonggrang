@@ -283,6 +283,21 @@ Full reference: [docs/CONFIG.md](docs/CONFIG.md)
 - [WORKFLOW.md](docs/WORKFLOW.md) — Detailed workflow documentation
 - [CONFIG.md](docs/CONFIG.md) — Configuration reference
 
+## Release Workflow
+
+Use the provided Make targets to bump versions and produce a fresh build:
+
+```bash
+# defaults to patch bump
+make release
+
+# explicit bump level
+make release BUMP=minor
+make release-major
+```
+
+`make release` updates versions in both `package.json` files (root and client), refreshes `package-lock.json`, and runs `npm run build` so the dist assets stay in sync with the new release.
+
 ## License
 
 MIT © Porcupine Team
