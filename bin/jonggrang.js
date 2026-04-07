@@ -397,13 +397,19 @@ async function cmdPlan(args) {
 async function cmdInit() {
   logHeader('JONGGRANG — Project Setup');
 
+  const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
+
   if (lib.fileExists(CONFIG_FILE) && !INIT_FORCE) {
-    if (process.stdin.isTTY) {
-      const rl = createRL();
-      logWarn('jonggrang.json already exists. Overwrite? [y/N]');
-      const answer = await new Promise(r => rl.question('', r));
-      rl.close();
-      if (answer !== 'y' && answer !== 'Y') {
+    if (isInteractiveTTY) {
+      const overwrite = await confirm({
+        message: 'jonggrang.json already exists. Overwrite?',
+        initialValue: false,
+      });
+      if (isCancel(overwrite)) {
+        cancel('Init cancelled.');
+        return;
+      }
+      if (!overwrite) {
         logInfo('Aborted.');
         return;
       }
@@ -415,62 +421,262 @@ async function cmdInit() {
 
   console.log('');
 
-  const rl = createRL();
+  if (isInteractiveTTY) {
+    intro('Jonggrang Init Wizard');
 
-  if (!INIT_NAME) INIT_NAME = await ask(rl, 'Project name:', path.basename(PROJECT_ROOT));
-  if (!INIT_TYPE) INIT_TYPE = await ask(rl, 'Project type:', 'api', 'web-app|api|library|cli|tui');
-  if (!INIT_WORK_MODE) INIT_WORK_MODE = await ask(rl, 'Work mode:', 'solo', 'solo|team');
+    const defaultName = path.basename(PROJECT_ROOT);
 
-  if (INIT_WORK_MODE === 'team' && !INIT_TEAM_SIZE) {
-    INIT_TEAM_SIZE = await ask(rl, 'Team size:', '3', '2-5');
-  } else if (!INIT_TEAM_SIZE) {
-    INIT_TEAM_SIZE = '1';
-  }
+    if (!INIT_NAME) {
+      const nameAnswer = await text({
+        message: 'Project name',
+        initialValue: defaultName,
+        validate(value) {
+          if (!value || !value.trim()) return 'Project name is required.';
+        },
+      });
+      if (isCancel(nameAnswer)) {
+        cancel('Init cancelled.');
+        return;
+      }
+      INIT_NAME = nameAnswer.trim();
+    }
 
-  if (!INIT_STATE) INIT_STATE = await ask(rl, 'Project state:', 'existing', 'new|existing');
+    if (!INIT_TYPE) {
+      const typeAnswer = await select({
+        message: 'Project type',
+        initialValue: 'api',
+        options: [
+          { value: 'web-app', label: 'web-app' },
+          { value: 'api', label: 'api' },
+          { value: 'library', label: 'library' },
+          { value: 'cli', label: 'cli' },
+          { value: 'tui', label: 'tui' },
+        ],
+      });
+      if (isCancel(typeAnswer)) {
+        cancel('Init cancelled.');
+        return;
+      }
+      INIT_TYPE = typeAnswer;
+    }
 
-  if (!INIT_STACK) {
-    if (INIT_STATE === 'existing') {
-      const detected = lib.detectStack(PROJECT_ROOT);
-      if (detected !== 'unknown') {
-        INIT_STACK = detected;
-        logInfo(`Detected stack: ${INIT_STACK}`);
+    if (!INIT_WORK_MODE) {
+      const workModeAnswer = await select({
+        message: 'Work mode',
+        initialValue: 'solo',
+        options: [
+          { value: 'solo', label: 'Solo' },
+          { value: 'team', label: 'Team' },
+        ],
+      });
+      if (isCancel(workModeAnswer)) {
+        cancel('Init cancelled.');
+        return;
+      }
+      INIT_WORK_MODE = workModeAnswer;
+    }
+
+    if (INIT_WORK_MODE === 'team' && !INIT_TEAM_SIZE) {
+      const teamSizeAnswer = await select({
+        message: 'Team size',
+        initialValue: '3',
+        options: ['2', '3', '4', '5'].map((value) => ({ value, label: value })),
+      });
+      if (isCancel(teamSizeAnswer)) {
+        cancel('Init cancelled.');
+        return;
+      }
+      INIT_TEAM_SIZE = teamSizeAnswer;
+    } else if (!INIT_TEAM_SIZE) {
+      INIT_TEAM_SIZE = '1';
+    }
+
+    if (!INIT_STATE) {
+      const stateAnswer = await select({
+        message: 'Project state',
+        initialValue: 'existing',
+        options: [
+          { value: 'new', label: 'New project' },
+          { value: 'existing', label: 'Adopt existing codebase' },
+        ],
+      });
+      if (isCancel(stateAnswer)) {
+        cancel('Init cancelled.');
+        return;
+      }
+      INIT_STATE = stateAnswer;
+    }
+
+    if (!INIT_STACK) {
+      if (INIT_STATE === 'existing') {
+        const detected = lib.detectStack(PROJECT_ROOT);
+        if (detected !== 'unknown') {
+          INIT_STACK = detected;
+          logInfo(`Detected stack: ${INIT_STACK}`);
+        }
+      }
+      if (!INIT_STACK) {
+        const stackOptions = {
+          'web-app': 'nextjs-typescript|express-typescript|node-typescript',
+          'api': 'express-typescript|go|python-fastapi|node-typescript',
+          'library': 'library-typescript|go|python|rust',
+          'cli': 'go|rust|node-typescript|python',
+          'tui': 'go|rust|python|node-typescript',
+        };
+        const stackDefaults = {
+          'web-app': 'nextjs-typescript',
+          'api': 'express-typescript',
+          'library': 'library-typescript',
+          'cli': 'go',
+          'tui': 'go',
+        };
+        const allowedStacks = (stackOptions[INIT_TYPE] || 'node-typescript').split('|');
+        const stackAnswer = await select({
+          message: 'Stack',
+          initialValue: stackDefaults[INIT_TYPE] || allowedStacks[0],
+          options: allowedStacks.map((value) => ({ value, label: value })),
+        });
+        if (isCancel(stackAnswer)) {
+          cancel('Init cancelled.');
+          return;
+        }
+        INIT_STACK = stackAnswer;
       }
     }
+
+    if (!INIT_TOOL) {
+      const toolAnswer = await select({
+        message: 'AI agent tool',
+        initialValue: 'opencode',
+        options: [
+          { value: 'opencode', label: 'OpenCode' },
+          { value: 'claude', label: 'Claude Code' },
+        ],
+      });
+      if (isCancel(toolAnswer)) {
+        cancel('Init cancelled.');
+        return;
+      }
+      INIT_TOOL = toolAnswer;
+    }
+
+    if (!INIT_AUTONOMY) {
+      const autonomyAnswer = await select({
+        message: 'Default autonomy mode',
+        initialValue: 'autonomous',
+        options: [
+          { value: 'supervised', label: 'Supervised' },
+          { value: 'balanced', label: 'Balanced' },
+          { value: 'autonomous', label: 'Autonomous' },
+        ],
+      });
+      if (isCancel(autonomyAnswer)) {
+        cancel('Init cancelled.');
+        return;
+      }
+      INIT_AUTONOMY = autonomyAnswer;
+    }
+
+    if (!INIT_CI) {
+      const detectedCI = lib.detectCI(PROJECT_ROOT) || 'none';
+      const ciAnswer = await select({
+        message: 'CI/CD provider',
+        initialValue: ['github-actions', 'gitlab-ci'].includes(detectedCI) ? detectedCI : 'none',
+        options: [
+          { value: 'github-actions', label: 'GitHub Actions' },
+          { value: 'gitlab-ci', label: 'GitLab CI' },
+          { value: 'none', label: 'None' },
+        ],
+      });
+      if (isCancel(ciAnswer)) {
+        cancel('Init cancelled.');
+        return;
+      }
+      INIT_CI = ciAnswer;
+    }
+
+    if (!INIT_TESTING) {
+      const detectedTest = lib.detectTestFramework(PROJECT_ROOT);
+      if (detectedTest !== 'none') {
+        INIT_TESTING = detectedTest;
+        logInfo(`Detected test framework: ${INIT_TESTING}`);
+      } else {
+        const testingAnswer = await select({
+          message: 'Test framework',
+          initialValue: 'vitest',
+          options: [
+            { value: 'vitest', label: 'Vitest' },
+            { value: 'jest', label: 'Jest' },
+            { value: 'go-test', label: 'Go test' },
+            { value: 'pytest', label: 'Pytest' },
+            { value: 'none', label: 'None' },
+          ],
+        });
+        if (isCancel(testingAnswer)) {
+          cancel('Init cancelled.');
+          return;
+        }
+        INIT_TESTING = testingAnswer;
+      }
+    }
+  } else {
+    const rl = createRL();
+
+    if (!INIT_NAME) INIT_NAME = await ask(rl, 'Project name:', path.basename(PROJECT_ROOT));
+    if (!INIT_TYPE) INIT_TYPE = await ask(rl, 'Project type:', 'api', 'web-app|api|library|cli|tui');
+    if (!INIT_WORK_MODE) INIT_WORK_MODE = await ask(rl, 'Work mode:', 'solo', 'solo|team');
+
+    if (INIT_WORK_MODE === 'team' && !INIT_TEAM_SIZE) {
+      INIT_TEAM_SIZE = await ask(rl, 'Team size:', '3', '2-5');
+    } else if (!INIT_TEAM_SIZE) {
+      INIT_TEAM_SIZE = '1';
+    }
+
+    if (!INIT_STATE) INIT_STATE = await ask(rl, 'Project state:', 'existing', 'new|existing');
+
     if (!INIT_STACK) {
-      const stackOptions = {
-        'web-app': 'nextjs-typescript|express-typescript|node-typescript',
-        'api': 'express-typescript|go|python-fastapi|node-typescript',
-        'library': 'library-typescript|go|python|rust',
-        'cli': 'go|rust|node-typescript|python',
-        'tui': 'go|rust|python|node-typescript',
-      };
-      const stackDefaults = {
-        'web-app': 'nextjs-typescript',
-        'api': 'express-typescript',
-        'library': 'library-typescript',
-        'cli': 'go',
-        'tui': 'go',
-      };
-      INIT_STACK = await ask(rl, 'Stack:', stackDefaults[INIT_TYPE] || 'node-typescript', stackOptions[INIT_TYPE] || 'node-typescript');
+      if (INIT_STATE === 'existing') {
+        const detected = lib.detectStack(PROJECT_ROOT);
+        if (detected !== 'unknown') {
+          INIT_STACK = detected;
+          logInfo(`Detected stack: ${INIT_STACK}`);
+        }
+      }
+      if (!INIT_STACK) {
+        const stackOptions = {
+          'web-app': 'nextjs-typescript|express-typescript|node-typescript',
+          'api': 'express-typescript|go|python-fastapi|node-typescript',
+          'library': 'library-typescript|go|python|rust',
+          'cli': 'go|rust|node-typescript|python',
+          'tui': 'go|rust|python|node-typescript',
+        };
+        const stackDefaults = {
+          'web-app': 'nextjs-typescript',
+          'api': 'express-typescript',
+          'library': 'library-typescript',
+          'cli': 'go',
+          'tui': 'go',
+        };
+        INIT_STACK = await ask(rl, 'Stack:', stackDefaults[INIT_TYPE] || 'node-typescript', stackOptions[INIT_TYPE] || 'node-typescript');
+      }
     }
-  }
 
-  if (!INIT_TOOL) INIT_TOOL = await ask(rl, 'AI agent tool:', 'opencode', 'opencode|claude');
-  if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:', 'autonomous', 'supervised|balanced|autonomous');
-  if (!INIT_CI) INIT_CI = await ask(rl, 'CI/CD provider:', lib.detectCI(PROJECT_ROOT), 'github-actions|gitlab-ci|none');
+    if (!INIT_TOOL) INIT_TOOL = await ask(rl, 'AI agent tool:', 'opencode', 'opencode|claude');
+    if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:', 'autonomous', 'supervised|balanced|autonomous');
+    if (!INIT_CI) INIT_CI = await ask(rl, 'CI/CD provider:', lib.detectCI(PROJECT_ROOT), 'github-actions|gitlab-ci|none');
 
-  if (!INIT_TESTING) {
-    const detected = lib.detectTestFramework(PROJECT_ROOT);
-    if (detected !== 'none') {
-      INIT_TESTING = detected;
-      logInfo(`Detected test framework: ${INIT_TESTING}`);
-    } else {
-      INIT_TESTING = await ask(rl, 'Test framework:', 'vitest', 'vitest|jest|go-test|pytest|none');
+    if (!INIT_TESTING) {
+      const detected = lib.detectTestFramework(PROJECT_ROOT);
+      if (detected !== 'none') {
+        INIT_TESTING = detected;
+        logInfo(`Detected test framework: ${INIT_TESTING}`);
+      } else {
+        INIT_TESTING = await ask(rl, 'Test framework:', 'vitest', 'vitest|jest|go-test|pytest|none');
+      }
     }
-  }
 
-  rl.close();
+    rl.close();
+  }
 
   console.log('');
   logInfo('Generating project files...');
