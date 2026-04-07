@@ -73,7 +73,8 @@ const graphNodes = computed(() => {
   const roots = tasks.filter(t => !t.blocked_by || t.blocked_by.length === 0);
 
   function assignLevel(taskId, level) {
-    if ((nodeLevels.get(taskId) || 0) < level) {
+    const current = nodeLevels.get(taskId);
+    if (current === undefined || current < level) {
       nodeLevels.set(taskId, level);
       const children = tasks.filter(t => t.blocked_by && t.blocked_by.includes(taskId));
       children.forEach(c => assignLevel(c.id, level + 1));
@@ -81,11 +82,16 @@ const graphNodes = computed(() => {
   }
   roots.forEach(r => assignLevel(r.id, 0));
 
+  // Vertical layout: y = level (row), x = staggered per row
   tasks.forEach(task => {
-    const level = nodeLevels.get(task.id) || 0;
+    const level = nodeLevels.get(task.id) ?? 0;
     const sameLevelNodes = levelMap.get(level) || [];
-    const x = level * 300 + 60;
-    const y = sameLevelNodes.length * 130 + 60;
+    const col = sameLevelNodes.length;
+    // Stagger: odd rows offset right, multiple nodes spread horizontally
+    const baseX = col * 260;
+    const offset = (level % 2 === 1) ? 100 : 0;
+    const x = baseX + offset + 60;
+    const y = level * 140 + 60;
     levelMap.set(level, [...sameLevelNodes, task]);
 
     nodes.push({
