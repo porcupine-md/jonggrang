@@ -587,6 +587,137 @@ function cmdWeb() {
 }
 
 // ============================================================
+// INTERACTIVE MENU
+// ============================================================
+
+async function cmdMenu() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    cmdHelp();
+    return;
+  }
+
+  let keepRunning = true;
+
+  while (keepRunning) {
+    logHeader('JONGGRANG Interactive CLI');
+    console.log('  1. Initialize project');
+    console.log('  2. Plan feature');
+    console.log('  3. Start work loop');
+    console.log('  4. Show status board');
+    console.log('  5. Run review');
+    console.log('  6. Launch web dashboard');
+    console.log('  7. Exit');
+    console.log('');
+
+    const rl = createRL();
+    const askSimple = (prompt, defaultVal = '') => new Promise((resolve) => {
+      const opt = defaultVal ? ` (default: ${defaultVal})` : '';
+      rl.question(`  ${CYAN}?${NC} ${prompt}${opt}\n    > `, (answer) => {
+        resolve((answer || '').trim() || defaultVal);
+      });
+    });
+
+    const choiceRaw = await askSimple('Select option [1-7]:', '1');
+    let planDescription = '';
+    let planUpdate = false;
+    let webPortInput = '';
+    let webAutoOpen = true;
+
+    const normalizedChoice = (choiceRaw || '').trim().toLowerCase();
+
+    if (normalizedChoice === '2' || normalizedChoice === 'plan') {
+      planDescription = await askSimple('Feature description:', '');
+      const updateAnswer = (await askSimple('Update existing plan? (y/N):', 'n')).toLowerCase();
+      planUpdate = updateAnswer === 'y' || updateAnswer === 'yes';
+    }
+
+    if (normalizedChoice === '6' || normalizedChoice === 'web') {
+      webPortInput = await askSimple('Dashboard port (leave empty for default 3001):', '');
+      const openAnswer = (await askSimple('Open browser automatically? (Y/n):', 'y')).toLowerCase();
+      webAutoOpen = !(openAnswer === 'n' || openAnswer === 'no');
+    }
+
+    rl.close();
+
+    try {
+      switch (normalizedChoice) {
+        case '1':
+        case 'init':
+          await cmdInit();
+          break;
+        case '2':
+        case 'plan':
+          if (!planDescription) {
+            logWarn('Plan description is required.');
+            break;
+          }
+          checkDeps();
+          {
+            const args = planUpdate ? ['--update', planDescription] : [planDescription];
+            await cmdPlan(args);
+          }
+          break;
+        case '3':
+        case 'work':
+          checkDeps();
+          await cmdWork();
+          break;
+        case '4':
+        case 'status':
+          cmdStatus();
+          break;
+        case '5':
+        case 'review':
+          checkDeps();
+          await cmdReview();
+          break;
+        case '6':
+        case 'web': {
+          const prevPort = WEB_PORT;
+          const prevOpen = WEB_OPEN;
+          if (webPortInput) {
+            const parsed = parseInt(webPortInput, 10);
+            if (!Number.isNaN(parsed)) WEB_PORT = parsed;
+          }
+          WEB_OPEN = webAutoOpen;
+          cmdWeb();
+          WEB_PORT = prevPort;
+          WEB_OPEN = prevOpen;
+          break;
+        }
+        case '7':
+        case '0':
+        case 'exit':
+        case 'quit':
+          logInfo('Goodbye!');
+          keepRunning = false;
+          break;
+        default:
+          logWarn('Unknown option. Showing help instead.');
+          cmdHelp();
+          keepRunning = false;
+      }
+    } catch (err) {
+      logError((err && err.message) || String(err));
+    }
+
+    if (!keepRunning) break;
+
+    const again = await new Promise((resolve) => {
+      const confirmRl = createRL();
+      confirmRl.question('Run another command? (y/N)\n    > ', (answer) => {
+        confirmRl.close();
+        resolve((answer || '').trim().toLowerCase());
+      });
+    });
+
+    if (again !== 'y' && again !== 'yes') {
+      keepRunning = false;
+    }
+  }
+}
+
+// ============================================================
 // HELP
 // ============================================================
 
@@ -596,6 +727,7 @@ function cmdHelp() {
 Usage: jonggrang <command> [options]
 
 Commands:
+  menu                    Interactive menu launcher
   init                    Setup project (interactive or with flags)
   work                    Start work loop
   review                  Run code review
@@ -649,8 +781,10 @@ Examples:
 
 async function main() {
   const args = process.argv.slice(2);
-  const command = args[0] || 'help';
-  let rest = args.slice(1);
+  const isInteractiveShell = process.stdin.isTTY && process.stdout.isTTY;
+  const providedCommand = args[0];
+  const command = providedCommand || (isInteractiveShell ? 'menu' : 'help');
+  let rest = providedCommand ? args.slice(1) : [];
   const planArgs = [];
 
   // Parse global options
@@ -703,6 +837,10 @@ async function main() {
     case 'web':
     case 'dashboard':
       cmdWeb();
+      break;
+    case 'menu':
+    case 'interactive':
+      await cmdMenu();
       break;
     case 'version':
     case '--version':

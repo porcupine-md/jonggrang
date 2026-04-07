@@ -154,7 +154,13 @@ jonggrang plan "feature"    # Decompose feature into tasks (writes jonggrang-tas
 jonggrang work              # Run work loop (spawns you for each task)
 jonggrang status            # Show task board
 jonggrang review            # Code review
+jonggrang menu              # Interactive launcher with guided prompts
+make release                # Version bump + build (defaults to patch)
+make release BUMP=minor     # Minor version bump + build
+make build-binary           # Compile standalone Bun binary (BIN_OUT configurable)
 ```
+
+If a task involves preparing a release, run the appropriate `make release*` target so both the root and client packages receive the version bump before rebuilding. Confirm which bump level (patch/minor/major) the user expects. For standalone distributions, compile via `make build-binary` and share the generated artifact under the desired `BIN_OUT` path.
 
 ## Example: Completing a Task
 

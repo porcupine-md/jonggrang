@@ -1,8 +1,10 @@
 SHELL := /bin/bash
 
 BUMP ?= patch
+BUN ?= bun
+BIN_OUT ?= dist/jonggrang
 
-.PHONY: install build version-major version-minor version-patch release-major release-minor release-patch release
+.PHONY: install build build-binary version-major version-minor version-patch release-major release-minor release-patch release
 
 install:
 	npm install
@@ -31,3 +33,7 @@ release-patch: version-patch build
 
 release:
 	$(MAKE) release-$(BUMP)
+
+build-binary:
+	mkdir -p $(dir $(BIN_OUT))
+	$(BUN) build bin/jonggrang.js --compile --outfile $(BIN_OUT)

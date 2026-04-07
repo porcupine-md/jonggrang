@@ -168,6 +168,17 @@ Runs a comprehensive code review on all changes:
 
 Output goes to `jonggrang-log/review-{timestamp}.md`.
 
+### Interactive Menu
+
+Run `jonggrang` without arguments (or `jonggrang menu`) to launch an interactive menu. The guided flow lets you:
+
+- Initialize a project via the wizard
+- Provide a feature description for `plan`, including whether to update an existing board
+- Kick off the work loop or review after a quick dependency check
+- Spin up the web dashboard with custom port and auto-open controls
+
+After each action you can choose to run another command or exit, making it handy for newcomers who prefer prompts over flags.
+
 ## Autonomy Modes
 
 | Mode | Behavior | Best for |
@@ -285,18 +296,33 @@ Full reference: [docs/CONFIG.md](docs/CONFIG.md)
 
 ## Release Workflow
 
-Use the provided Make targets to bump versions and produce a fresh build:
+Use the provided Make targets to keep versions and build artifacts in sync:
 
 ```bash
-# defaults to patch bump
+# install dependencies in root + client
+make install
+
+# run the standard build pipeline
+make build
+
+# bump version + rebuild (defaults to patch)
 make release
 
-# explicit bump level
+# explicit bump level shortcuts
 make release BUMP=minor
 make release-major
+make release-minor
+make release-patch
 ```
 
-`make release` updates versions in both `package.json` files (root and client), refreshes `package-lock.json`, and runs `npm run build` so the dist assets stay in sync with the new release.
+Every release target updates `package.json` and `package-lock.json` in both the root package and the `client/` app before running `npm run build`, ensuring the published dist assets reflect the new version.
+
+To produce a standalone binary with Bun:
+
+```bash
+make build-binary                 # outputs dist/jonggrang
+make build-binary BIN_OUT=out/jonggrang-darwin
+```
 
 ## License
 
