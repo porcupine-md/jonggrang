@@ -15,6 +15,7 @@ import {
 } from 'lucide-vue-next';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { marked } from 'marked';
 
 const socket = io({ transports: ['websocket'] });
 
@@ -336,16 +337,9 @@ function selectTask(task) {
   selectedTask.value = selectedTask.value?.id === task.id ? null : task;
 }
 
-function parsedDescription(desc) {
-  if (!desc) return { summary: '', criteria: [] };
-  // Split on "Acceptance criteria:" or similar patterns
-  const match = desc.match(/^(.*?)\s*[Aa]cceptance\s+criteria\s*:\s*(.*)$/s);
-  if (!match) return { summary: desc, criteria: [] };
-  const summary = match[1].replace(/\.\s*$/, '').trim();
-  // Split criteria on semicolons or sentence boundaries
-  const raw = match[2].trim().replace(/\.\s*$/, '');
-  const criteria = raw.split(/;\s*/).map(s => s.trim()).filter(Boolean);
-  return { summary, criteria };
+function renderMarkdown(text) {
+  if (!text) return '';
+  return marked.parse(text, { breaks: true });
 }
 
 function statusIcon(status) {
@@ -602,12 +596,7 @@ function onDrop(e, columnKey) {
 
           <div class="detail-scroll">
             <h2 class="detail-title">{{ selectedTask.title }}</h2>
-            <div class="detail-desc">
-              <p class="detail-summary">{{ parsedDescription(selectedTask.description).summary }}</p>
-              <ul v-if="parsedDescription(selectedTask.description).criteria.length" class="detail-criteria">
-                <li v-for="(c, i) in parsedDescription(selectedTask.description).criteria" :key="i">{{ c }}</li>
-              </ul>
-            </div>
+            <div class="detail-desc markdown-body" v-html="renderMarkdown(selectedTask.description)"></div>
 
             <div class="detail-fields">
               <div class="detail-field" v-if="selectedTask.skill">
@@ -1236,30 +1225,58 @@ function onDrop(e, columnKey) {
 }
 .detail-desc {
   padding: 0 16px 12px;
-}
-.detail-summary {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-secondary);
-  line-height: 1.6;
+  line-height: 1.7;
+  word-break: break-word;
+}
+.detail-desc.markdown-body :deep(p) {
   margin: 0 0 8px;
 }
-.detail-criteria {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.detail-desc.markdown-body :deep(ul),
+.detail-desc.markdown-body :deep(ol) {
+  margin: 4px 0 8px;
+  padding-left: 18px;
 }
-.detail-criteria li {
+.detail-desc.markdown-body :deep(li) {
+  margin-bottom: 3px;
+}
+.detail-desc.markdown-body :deep(code) {
+  font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-muted);
-  line-height: 1.5;
-  padding: 5px 10px;
-  background: rgba(255,255,255,0.03);
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--text-primary);
+}
+.detail-desc.markdown-body :deep(pre) {
+  background: rgba(255,255,255,0.04);
+  padding: 8px 10px;
   border-radius: 4px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.detail-desc.markdown-body :deep(pre code) {
+  background: none;
+  padding: 0;
+}
+.detail-desc.markdown-body :deep(strong) {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.detail-desc.markdown-body :deep(h1),
+.detail-desc.markdown-body :deep(h2),
+.detail-desc.markdown-body :deep(h3) {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  margin: 8px 0 4px;
+}
+.detail-desc.markdown-body :deep(blockquote) {
   border-left: 2px solid rgba(56, 189, 248, 0.3);
-  word-break: break-word;
+  padding-left: 10px;
+  margin: 6px 0;
+  color: var(--text-muted);
 }
 .detail-fields {
   border-top: 1px solid var(--border-subtle);
