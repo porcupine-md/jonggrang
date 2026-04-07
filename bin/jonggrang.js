@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
 const readline = require('readline');
-const { intro, outro, select, confirm, text, isCancel, cancel } = require('@clack/prompts');
+const { intro, outro, select, confirm, text, isCancel, cancel, spinner } = require('@clack/prompts');
 
 const lib = require('../lib/jonggrang');
 
@@ -375,19 +375,47 @@ async function cmdPlan(args) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
   }
 
-  logHeader('JONGGRANG Plan');
-  logInfo(`Feature: ${description}`);
-  logInfo(`Tool: ${TOOL}`);
-  if (updateMode) logInfo('Mode: UPDATE (preserving completed tasks)');
+  const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
+  let planSpinner = null;
+  let outroShown = false;
 
-  const planPrompt = lib.buildPlanPrompt(description, updateMode, TASKS_FILE, SKILLS_DIR);
+  if (isInteractiveTTY) {
+    intro('Jonggrang Planner');
+    planSpinner = spinner();
+    planSpinner.start('Consulting AI agent...');
+  }
 
-  await lib.runAgent(planPrompt, TOOL, 'autonomous', PROJECT_ROOT);
+  try {
+    logHeader('JONGGRANG Plan');
+    logInfo(`Feature: ${description}`);
+    logInfo(`Tool: ${TOOL}`);
+    if (updateMode) logInfo('Mode: UPDATE (preserving completed tasks)');
+    if (planSpinner) planSpinner.message('Consulting AI agent (this can take ~30s)...');
 
-  console.log('');
-  logSuccess('Plan complete. Review the tasks:');
-  console.log('');
-  cmdStatus();
+    const planPrompt = lib.buildPlanPrompt(description, updateMode, TASKS_FILE, SKILLS_DIR);
+
+    await lib.runAgent(planPrompt, TOOL, 'autonomous', PROJECT_ROOT);
+
+    console.log('');
+    logSuccess('Plan complete. Review the tasks:');
+    console.log('');
+    cmdStatus();
+
+    if (planSpinner) {
+      planSpinner.stop('Plan ready. Task board updated.');
+      outro('Tasks updated — run "jonggrang work" when you are ready.');
+      outroShown = true;
+    }
+  } catch (err) {
+    if (planSpinner) {
+      planSpinner.stop(`Plan failed: ${err.message || err}`, 1);
+    }
+    throw err;
+  } finally {
+    if (planSpinner && !outroShown) {
+      planSpinner.stop('Plan finished.');
+    }
+  }
 }
 
 // ============================================================

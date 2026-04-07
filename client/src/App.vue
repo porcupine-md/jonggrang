@@ -143,12 +143,12 @@ socket.on('log', (data) => {
 
 const sidebarTerminalEl = ref(null);
 const logTerminalEl = ref(null);
+const activeTerminalEl = computed(() => sidebarTerminalEl.value || logTerminalEl.value);
 const terminalInstance = shallowRef(null);
 const fitAddon = shallowRef(null);
 const logContentLength = ref(0);
 let resizeHandler = null;
-let observer = null;
-let mutationObserver = null;
+let resizeObserver = null;
 
 function renderFullLog() {
   if (!terminalInstance.value) return;
@@ -164,21 +164,17 @@ function renderFullLog() {
 
 function attachTerminal(container) {
   if (!terminalInstance.value || !container) return;
-  if (mutationObserver) {
-    mutationObserver.disconnect();
-    mutationObserver = null;
-  }
   container.innerHTML = '';
   terminalInstance.value.open(container);
   fitAddon.value?.fit();
   logContentLength.value = 0;
   renderFullLog();
 
-  if (observer) observer.disconnect();
-  observer = new ResizeObserver(() => {
+  resizeObserver?.disconnect();
+  resizeObserver = new ResizeObserver(() => {
     requestAnimationFrame(() => fitAddon.value?.fit());
   });
-  observer.observe(container);
+  resizeObserver.observe(container);
 }
 
 onMounted(() => {
@@ -207,46 +203,21 @@ onMounted(() => {
   window.addEventListener('resize', resizeHandler);
 
   nextTick(() => {
-    if (sidebarTerminalEl.value) {
-      attachTerminal(sidebarTerminalEl.value);
-    } else if (logTerminalEl.value) {
-      attachTerminal(logTerminalEl.value);
-    } else {
-      mutationObserver = new MutationObserver(() => {
-        if (sidebarTerminalEl.value) {
-          attachTerminal(sidebarTerminalEl.value);
-          mutationObserver?.disconnect();
-          mutationObserver = null;
-        } else if (logTerminalEl.value) {
-          attachTerminal(logTerminalEl.value);
-          mutationObserver?.disconnect();
-          mutationObserver = null;
-        }
-      });
-      mutationObserver.observe(document.body, { childList: true, subtree: true });
+    if (activeTerminalEl.value) {
+      attachTerminal(activeTerminalEl.value);
     }
   });
 });
 
-watch(() => sidebarTerminalEl.value, (container) => {
+watch(activeTerminalEl, (container) => {
   if (!container || !terminalInstance.value) return;
-  nextTick(() => {
-    attachTerminal(container);
-  });
-});
-
-watch(() => logTerminalEl.value, (container) => {
-  if (!container || !terminalInstance.value) return;
-  if (sidebarTerminalEl.value) return;
-  nextTick(() => {
-    attachTerminal(container);
-  });
-});
+  nextTick(() => attachTerminal(container));
+}, { flush: 'post' });
 
 watch(logs, (newVal) => {
   if (!terminalInstance.value) return;
   const term = terminalInstance.value;
-  const activeContainer = sidebarTerminalEl.value || logTerminalEl.value;
+  const activeContainer = activeTerminalEl.value;
   if (!activeContainer) return;
   if (!term.element || term.element.parentElement !== activeContainer) {
     return;
@@ -274,8 +245,7 @@ onBeforeUnmount(() => {
   if (resizeHandler) {
     window.removeEventListener('resize', resizeHandler);
   }
-  observer?.disconnect();
-  mutationObserver?.disconnect();
+  resizeObserver?.disconnect();
   terminalInstance.value?.dispose();
   terminalInstance.value = null;
   fitAddon.value = null;
