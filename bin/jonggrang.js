@@ -54,7 +54,7 @@ let TASK_ID = '';
 let BRANCH = '';
 let VERBOSE = process.env.JONGGRANG_VERBOSE === 'true';
 let DRY_RUN = process.env.JONGGRANG_DRY_RUN === 'false';
-let WEB_PORT = parseInt(process.env.JONGGRANG_WEB_PORT || '3001', 10);
+let WEB_PORT = parseInt(process.env.JONGGRANG_WEB_PORT || '7777', 10);
 let WEB_OPEN = true;
 let WORKTREE_MODE = false;
 let GROUP_TASK_IDS = [];
@@ -1075,7 +1075,7 @@ Work options:
   --dry-run               Plan only, no execution
 
 Web options:
-  --port <port>           Dashboard port (default: 3001)
+  --port <port>           Dashboard port (default: 7777-7999 auto)
   --no-open               Don't auto-open browser
 
 Examples:

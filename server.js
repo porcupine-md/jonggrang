@@ -372,6 +372,13 @@ app.post('/api/jonggrang/start-parallel', (req, res) => {
             groupInfo.status = code === 0 ? 'done' : 'failed';
             completedGroups++;
             io.emit('log', `[${group.id}] Exited with code ${code}\n`);
+
+            // Mark group tasks as "review" so they appear in REVIEW column
+            if (groupInfo.status === 'done') {
+                for (const tid of group.taskIds) {
+                    lib.updateTaskStatus(paths.tasksFile, tid, 'review');
+                }
+            }
             io.emit('group_status', { groupId: group.id, status: groupInfo.status });
 
             if (completedGroups >= groupProcesses.size) {
@@ -415,6 +422,75 @@ app.post('/api/jonggrang/groups/:id/review', (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/jonggrang/groups/:id/diff', (req, res) => {
+    const group = groupProcesses.get(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found', diff: '', files: [] });
+
+    try {
+        const diff = require('child_process').execSync(
+            `git diff main...${group.branch}`,
+            { cwd: PROJECT_ROOT, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
+        );
+        const files = require('child_process').execSync(
+            `git diff main...${group.branch} --name-only`,
+            { cwd: PROJECT_ROOT, encoding: 'utf8' }
+        ).trim().split('\n').filter(Boolean);
+        res.json({ diff, files });
+    } catch (err) {
+        res.json({ diff: '', files: [], error: err.message });
+    }
+});
+
+app.post('/api/jonggrang/groups/:id/revise', (req, res) => {
+    const group = groupProcesses.get(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    const { feedback } = req.body;
+    if (!feedback) return res.status(400).json({ error: 'feedback required' });
+
+    const prompt = `# Revision Request\n\nPlease revise the code based on this feedback:\n\n${feedback}\n\nApply the changes and commit.`;
+
+    isJonggrangRunning = true;
+    io.emit('jonggrang_status', { isRunning: true, mode: 'revision' });
+    io.emit('log', `[revise:${req.params.id}] Revising: ${feedback}\n`);
+
+    const tool = latestConfig?.tool || 'opencode';
+    const child = spawnJonggrang(
+        ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--tool', tool],
+        { JONGGRANG_PROJECT_ROOT: group.worktreePath, JONGGRANG_MODE: 'autonomous' }
+    );
+
+    child.stdout.on('data', (d) => {
+        const line = d.toString();
+        try { JSON.parse(line); } catch { io.emit('log', `[revise:${req.params.id}] ${line}`); }
+    });
+    child.stderr.on('data', (d) => io.emit('log', `[revise:${req.params.id}] ${d.toString()}`));
+    child.on('close', (code) => {
+        isJonggrangRunning = false;
+        io.emit('jonggrang_status', { isRunning: false, mode: 'idle' });
+        io.emit('log', `[revise:${req.params.id}] Revision done (code: ${code})\n`);
+    });
+
+    res.json({ success: true });
+});
+
+app.post('/api/jonggrang/groups/:id/cancel', (req, res) => {
+    const group = groupProcesses.get(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    // Revert tasks to pending
+    for (const tid of group.taskIds) {
+        lib.updateTaskStatus(paths.tasksFile, tid, 'pending');
+    }
+
+    // Remove worktree and branch
+    lib.removeWorktree(PROJECT_ROOT, group.worktreePath, group.branch);
+    groupProcesses.delete(req.params.id);
+
+    io.emit('group_status', { groupId: req.params.id, status: 'cancelled' });
+    res.json({ success: true });
+});
+
 app.post('/api/jonggrang/groups/:id/merge', (req, res) => {
     const group = groupProcesses.get(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found' });
@@ -422,7 +498,12 @@ app.post('/api/jonggrang/groups/:id/merge', (req, res) => {
     try {
         lib.mergeWorktreeBranch(PROJECT_ROOT, group.branch);
         lib.removeWorktree(PROJECT_ROOT, group.worktreePath, group.branch);
+        // Mark tasks as completed after successful merge
+        for (const tid of group.taskIds) {
+            lib.markTaskDone(paths.tasksFile, tid);
+        }
         group.status = 'merged';
+        groupProcesses.delete(req.params.id);
         io.emit('group_status', { groupId: req.params.id, status: 'merged' });
         res.json({ success: true });
     } catch (err) {
@@ -505,8 +586,26 @@ app.get('*', (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-    console.log(`Jonggrang dashboard on http://localhost:${PORT}`);
-    console.log(`Project root: ${PROJECT_ROOT}`);
-});
+function findAvailablePort(start, end) {
+    const net = require('net');
+    return new Promise((resolve, reject) => {
+        let port = start;
+        function tryPort() {
+            if (port > end) return reject(new Error(`No available port in ${start}-${end}`));
+            const srv = net.createServer();
+            srv.once('error', () => { port++; tryPort(); });
+            srv.once('listening', () => { srv.close(() => resolve(port)); });
+            srv.listen(port);
+        }
+        tryPort();
+    });
+}
+
+const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : null;
+(async () => {
+    const PORT = envPort || await findAvailablePort(7777, 7999);
+    server.listen(PORT, () => {
+        console.log(`Jonggrang dashboard on http://localhost:${PORT}`);
+        console.log(`Project root: ${PROJECT_ROOT}`);
+    });
+})();
