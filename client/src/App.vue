@@ -46,15 +46,15 @@ const projectName = computed(() => projectConfig.value?.name || 'Jonggrang');
 const columns = computed(() => {
   const cols = [
     { key: 'pending', label: 'TODO', color: 'var(--text-muted)' },
-    { key: 'in_progress', label: 'IN PROGRESS', color: 'var(--blue)' },
+    { key: 'in_progress', label: 'IN PROGRESS', color: 'var(--blue)', include: ['in_progress', 'waiting'] },
     { key: 'blocked', label: 'BLOCKED', color: 'var(--red)' },
     { key: 'completed', label: 'DONE', color: 'var(--green)' },
   ];
-  return cols.map(col => ({
-    ...col,
-    tasks: rawTasks.value.filter(t => t.status === col.key),
-    count: rawTasks.value.filter(t => t.status === col.key).length,
-  }));
+  return cols.map(col => {
+    const statuses = col.include || [col.key];
+    const tasks = rawTasks.value.filter(t => statuses.includes(t.status));
+    return { ...col, tasks, count: tasks.length };
+  });
 });
 
 const totalTasks = computed(() => rawTasks.value.length);
@@ -346,6 +346,7 @@ function statusIcon(status) {
   switch (status) {
     case 'completed': return CheckCircle2Icon;
     case 'in_progress': return Loader2Icon;
+    case 'waiting': return ClockIcon;
     case 'blocked': return CircleAlertIcon;
     default: return CircleIcon;
   }
@@ -355,6 +356,7 @@ function statusColor(status) {
   switch (status) {
     case 'completed': return 'var(--green)';
     case 'in_progress': return 'var(--blue)';
+    case 'waiting': return 'var(--yellow)';
     case 'blocked': return 'var(--red)';
     default: return 'var(--text-muted)';
   }
@@ -483,8 +485,8 @@ function onDrop(e, columnKey) {
                       <span class="card-skill" v-if="task.skill">{{ task.skill }}</span>
                     </div>
                     <div class="card-actions">
-                      <span class="card-status-tag" :style="{ color: statusColor(task.status), background: task.status === 'completed' ? 'var(--green-muted)' : task.status === 'in_progress' ? 'var(--blue-muted)' : task.status === 'blocked' ? 'var(--red-muted)' : 'rgba(255,255,255,0.05)' }">
-                        {{ task.status === 'in_progress' ? 'In Progress' : task.status === 'pending' ? 'Ready' : task.status.charAt(0).toUpperCase() + task.status.slice(1) }}
+                      <span class="card-status-tag" :style="{ color: statusColor(task.status), background: task.status === 'completed' ? 'var(--green-muted)' : task.status === 'in_progress' ? 'var(--blue-muted)' : task.status === 'waiting' ? 'var(--yellow-muted)' : task.status === 'blocked' ? 'var(--red-muted)' : 'rgba(255,255,255,0.05)' }">
+                        {{ task.status === 'in_progress' ? 'In Progress' : task.status === 'pending' ? 'Ready' : task.status === 'waiting' ? 'Waiting' : task.status.charAt(0).toUpperCase() + task.status.slice(1) }}
                       </span>
                       <div class="card-btns">
                         <button
@@ -1144,6 +1146,7 @@ function onDrop(e, columnKey) {
 }
 .graph-node--completed { border-color: rgba(16, 185, 129, 0.3); }
 .graph-node--in_progress { border-color: rgba(59, 130, 246, 0.4); }
+.graph-node--waiting { border-color: rgba(245, 158, 11, 0.4); }
 .graph-node--blocked { border-color: rgba(239, 68, 68, 0.3); }
 
 .graph-node-header {

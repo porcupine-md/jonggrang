@@ -231,12 +231,14 @@ async function cmdWork() {
     taskQueue = lib.getTaskQueue(TASKS_FILE, TASK_ID);
     if (taskQueue.length > 1) {
       logInfo(`Task ${TASK_ID} has ${taskQueue.length - 1} pending dependencies — will process them first`);
-      taskQueue.forEach((id, i) => {
-        const t = lib.getTask(TASKS_FILE, id);
-        const label = id === TASK_ID ? '(target)' : `(dep ${i + 1})`;
-        logInfo(`  ${i + 1}. ${id}: ${t ? t.title : '?'} ${label}`);
-      });
     }
+    // Mark all queued tasks as waiting (moved to IN PROGRESS board)
+    taskQueue.forEach((id, i) => {
+      const t = lib.getTask(TASKS_FILE, id);
+      const label = id === TASK_ID ? '(target)' : `(dep ${i + 1})`;
+      lib.updateTaskStatus(TASKS_FILE, id, 'waiting');
+      logInfo(`  ${i + 1}. ${id}: ${t ? t.title : '?'} ${label}`);
+    });
     TASK_ID = '';
   }
 
@@ -292,6 +294,9 @@ async function cmdWork() {
     }
     console.log('');
   }
+
+  // Revert any remaining waiting tasks back to pending
+  lib.revertWaiting(TASKS_FILE);
 
   logWarn(`Max iterations (${MAX_ITERATIONS}) reached. Run 'jonggrang work' to continue.`);
   logInfo(`Completed: ${lib.countCompleted(TASKS_FILE)} / ${lib.countTotal(TASKS_FILE)}`);
