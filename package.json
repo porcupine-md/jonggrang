@@ -27,6 +27,7 @@
     "install:all": "npm install && cd client && npm install"
   },
   "dependencies": {
+    "@clack/prompts": "^0.7.0",
     "chokidar": "^4.0.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",

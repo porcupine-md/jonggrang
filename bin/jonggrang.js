@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
 const readline = require('readline');
+const { intro, outro, select, confirm, text, isCancel, cancel } = require('@clack/prompts');
 
 const lib = require('../lib/jonggrang');
 
@@ -596,124 +597,154 @@ async function cmdMenu() {
     return;
   }
 
-  let keepRunning = true;
+  intro('Jonggrang Interactive CLI');
 
-  while (keepRunning) {
-    logHeader('JONGGRANG Interactive CLI');
-    console.log('  1. Initialize project');
-    console.log('  2. Plan feature');
-    console.log('  3. Start work loop');
-    console.log('  4. Show status board');
-    console.log('  5. Run review');
-    console.log('  6. Launch web dashboard');
-    console.log('  7. Exit');
-    console.log('');
+  let running = true;
+  let outroShown = false;
 
-    const rl = createRL();
-    const askSimple = (prompt, defaultVal = '') => new Promise((resolve) => {
-      const opt = defaultVal ? ` (default: ${defaultVal})` : '';
-      rl.question(`  ${CYAN}?${NC} ${prompt}${opt}\n    > `, (answer) => {
-        resolve((answer || '').trim() || defaultVal);
-      });
+  while (running) {
+    const choice = await select({
+      message: 'What do you want to do?',
+      initialValue: 'init',
+      options: [
+        { value: 'init', label: 'Initialize project' },
+        { value: 'plan', label: 'Plan feature' },
+        { value: 'work', label: 'Start work loop' },
+        { value: 'status', label: 'Show status board' },
+        { value: 'review', label: 'Run review' },
+        { value: 'web', label: 'Launch web dashboard' },
+        { value: 'exit', label: 'Exit menu' },
+      ],
     });
 
-    const choiceRaw = await askSimple('Select option [1-7]:', '1');
-    let planDescription = '';
-    let planUpdate = false;
-    let webPortInput = '';
-    let webAutoOpen = true;
-
-    const normalizedChoice = (choiceRaw || '').trim().toLowerCase();
-
-    if (normalizedChoice === '2' || normalizedChoice === 'plan') {
-      planDescription = await askSimple('Feature description:', '');
-      const updateAnswer = (await askSimple('Update existing plan? (y/N):', 'n')).toLowerCase();
-      planUpdate = updateAnswer === 'y' || updateAnswer === 'yes';
+    if (isCancel(choice)) {
+      cancel('Exited menu.');
+      outroShown = true;
+      break;
     }
 
-    if (normalizedChoice === '6' || normalizedChoice === 'web') {
-      webPortInput = await askSimple('Dashboard port (leave empty for default 3001):', '');
-      const openAnswer = (await askSimple('Open browser automatically? (Y/n):', 'y')).toLowerCase();
-      webAutoOpen = !(openAnswer === 'n' || openAnswer === 'no');
-    }
-
-    rl.close();
+    let skipContinuePrompt = false;
 
     try {
-      switch (normalizedChoice) {
-        case '1':
+      switch (choice) {
         case 'init':
           await cmdInit();
           break;
-        case '2':
-        case 'plan':
-          if (!planDescription) {
-            logWarn('Plan description is required.');
-            break;
+        case 'plan': {
+          const description = await text({
+            message: 'Feature description',
+            validate(value) {
+              if (!value || !value.trim()) return 'Description is required.';
+            },
+          });
+          if (isCancel(description)) {
+            logWarn('Plan cancelled.');
+            continue;
           }
+
+          const update = await confirm({
+            message: 'Update existing plan?',
+            initialValue: false,
+          });
+          if (isCancel(update)) {
+            logWarn('Plan cancelled.');
+            continue;
+          }
+
           checkDeps();
           {
-            const args = planUpdate ? ['--update', planDescription] : [planDescription];
+            const args = update ? ['--update', description.trim()] : [description.trim()];
             await cmdPlan(args);
           }
           break;
-        case '3':
+        }
         case 'work':
           checkDeps();
           await cmdWork();
           break;
-        case '4':
         case 'status':
           cmdStatus();
           break;
-        case '5':
         case 'review':
           checkDeps();
           await cmdReview();
           break;
-        case '6':
         case 'web': {
+          const portAnswer = await text({
+            message: `Dashboard port (current: ${WEB_PORT})`,
+            initialValue: String(WEB_PORT),
+            validate(value) {
+              if (!value || !value.trim()) return undefined;
+              return /^\d+$/.test(value.trim()) ? undefined : 'Port must be numeric.';
+            },
+          });
+          if (isCancel(portAnswer)) {
+            logWarn('Dashboard launch cancelled.');
+            continue;
+          }
+
+          const autoOpen = await confirm({
+            message: 'Open browser automatically?',
+            initialValue: WEB_OPEN,
+          });
+          if (isCancel(autoOpen)) {
+            logWarn('Dashboard launch cancelled.');
+            continue;
+          }
+
           const prevPort = WEB_PORT;
           const prevOpen = WEB_OPEN;
-          if (webPortInput) {
-            const parsed = parseInt(webPortInput, 10);
+          if (portAnswer.trim()) {
+            const parsed = parseInt(portAnswer.trim(), 10);
             if (!Number.isNaN(parsed)) WEB_PORT = parsed;
           }
-          WEB_OPEN = webAutoOpen;
+          WEB_OPEN = !!autoOpen;
           cmdWeb();
           WEB_PORT = prevPort;
           WEB_OPEN = prevOpen;
           break;
         }
-        case '7':
-        case '0':
         case 'exit':
-        case 'quit':
-          logInfo('Goodbye!');
-          keepRunning = false;
+          running = false;
+          outro('Thanks for using Jonggrang!');
+          skipContinuePrompt = true;
+          outroShown = true;
           break;
         default:
           logWarn('Unknown option. Showing help instead.');
           cmdHelp();
-          keepRunning = false;
+          running = false;
+          skipContinuePrompt = true;
+          outroShown = true;
       }
     } catch (err) {
       logError((err && err.message) || String(err));
     }
 
-    if (!keepRunning) break;
+    if (!running) break;
 
-    const again = await new Promise((resolve) => {
-      const confirmRl = createRL();
-      confirmRl.question('Run another command? (y/N)\n    > ', (answer) => {
-        confirmRl.close();
-        resolve((answer || '').trim().toLowerCase());
+    if (!skipContinuePrompt) {
+      const again = await confirm({
+        message: 'Run another command?',
+        initialValue: false,
       });
-    });
 
-    if (again !== 'y' && again !== 'yes') {
-      keepRunning = false;
+      if (isCancel(again)) {
+        cancel('Exited menu.');
+        outroShown = true;
+        break;
+      }
+
+      if (!again) {
+        running = false;
+        outro('All set. Happy building!');
+        outroShown = true;
+      }
     }
+  }
+
+  if (!outroShown) {
+    outro('All set. Happy building!');
   }
 }
 
