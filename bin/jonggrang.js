@@ -225,6 +225,21 @@ async function cmdWork() {
     }
   }
 
+  // If a specific task is requested, resolve its dependency chain
+  let taskQueue = [];
+  if (TASK_ID) {
+    taskQueue = lib.getTaskQueue(TASKS_FILE, TASK_ID);
+    if (taskQueue.length > 1) {
+      logInfo(`Task ${TASK_ID} has ${taskQueue.length - 1} pending dependencies — will process them first`);
+      taskQueue.forEach((id, i) => {
+        const t = lib.getTask(TASKS_FILE, id);
+        const label = id === TASK_ID ? '(target)' : `(dep ${i + 1})`;
+        logInfo(`  ${i + 1}. ${id}: ${t ? t.title : '?'} ${label}`);
+      });
+    }
+    TASK_ID = '';
+  }
+
   let iteration = 0;
   let consecutiveFails = 0;
   let lastFailedTask = '';
@@ -234,9 +249,8 @@ async function cmdWork() {
     iteration++;
 
     let taskId;
-    if (TASK_ID) {
-      taskId = TASK_ID;
-      TASK_ID = '';
+    if (taskQueue.length > 0) {
+      taskId = taskQueue.shift();
     } else {
       taskId = lib.getNextTask(TASKS_FILE);
     }
