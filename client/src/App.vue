@@ -219,7 +219,7 @@ watch(logs, (newVal) => {
   const term = terminalInstance.value;
   const activeContainer = activeTerminalEl.value;
   if (!activeContainer) return;
-  if (!term.element || term.element.parentElement !== activeContainer) {
+  if (!term.element || !activeContainer.contains(term.element)) {
     return;
   }
 
