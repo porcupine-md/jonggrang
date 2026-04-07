@@ -141,11 +141,14 @@ socket.on('log', (data) => {
 });
 });
 
-const terminalEl = ref(null);
+const sidebarTerminalEl = ref(null);
+const logTerminalEl = ref(null);
 const terminalInstance = shallowRef(null);
 const fitAddon = shallowRef(null);
 const logContentLength = ref(0);
 let resizeHandler = null;
+let observer = null;
+let mutationObserver = null;
 
 function renderFullLog() {
   if (!terminalInstance.value) return;
@@ -161,11 +164,21 @@ function renderFullLog() {
 
 function attachTerminal(container) {
   if (!terminalInstance.value || !container) return;
+  if (mutationObserver) {
+    mutationObserver.disconnect();
+    mutationObserver = null;
+  }
   container.innerHTML = '';
   terminalInstance.value.open(container);
   fitAddon.value?.fit();
   logContentLength.value = 0;
   renderFullLog();
+
+  if (observer) observer.disconnect();
+  observer = new ResizeObserver(() => {
+    requestAnimationFrame(() => fitAddon.value?.fit());
+  });
+  observer.observe(container);
 }
 
 onMounted(() => {
@@ -194,14 +207,37 @@ onMounted(() => {
   window.addEventListener('resize', resizeHandler);
 
   nextTick(() => {
-    if (terminalEl.value) {
-      attachTerminal(terminalEl.value);
+    if (sidebarTerminalEl.value) {
+      attachTerminal(sidebarTerminalEl.value);
+    } else if (logTerminalEl.value) {
+      attachTerminal(logTerminalEl.value);
+    } else {
+      mutationObserver = new MutationObserver(() => {
+        if (sidebarTerminalEl.value) {
+          attachTerminal(sidebarTerminalEl.value);
+          mutationObserver?.disconnect();
+          mutationObserver = null;
+        } else if (logTerminalEl.value) {
+          attachTerminal(logTerminalEl.value);
+          mutationObserver?.disconnect();
+          mutationObserver = null;
+        }
+      });
+      mutationObserver.observe(document.body, { childList: true, subtree: true });
     }
   });
 });
 
-watch(() => terminalEl.value, (container) => {
+watch(() => sidebarTerminalEl.value, (container) => {
   if (!container || !terminalInstance.value) return;
+  nextTick(() => {
+    attachTerminal(container);
+  });
+});
+
+watch(() => logTerminalEl.value, (container) => {
+  if (!container || !terminalInstance.value) return;
+  if (sidebarTerminalEl.value) return;
   nextTick(() => {
     attachTerminal(container);
   });
@@ -210,8 +246,9 @@ watch(() => terminalEl.value, (container) => {
 watch(logs, (newVal) => {
   if (!terminalInstance.value) return;
   const term = terminalInstance.value;
-  if (!terminalEl.value) return;
-  if (!term.element || term.element.parentElement !== terminalEl.value) {
+  const activeContainer = sidebarTerminalEl.value || logTerminalEl.value;
+  if (!activeContainer) return;
+  if (!term.element || term.element.parentElement !== activeContainer) {
     return;
   }
 
@@ -237,6 +274,8 @@ onBeforeUnmount(() => {
   if (resizeHandler) {
     window.removeEventListener('resize', resizeHandler);
   }
+  observer?.disconnect();
+  mutationObserver?.disconnect();
   terminalInstance.value?.dispose();
   terminalInstance.value = null;
   fitAddon.value = null;
@@ -587,7 +626,7 @@ function onDrop(e, columnKey) {
               <div class="log-indicator" :class="{ active: isJonggrangRunning }"></div>
             </div>
             <div class="detail-output-content">
-              <div ref="terminalEl" class="xterm-container"></div>
+              <div ref="sidebarTerminalEl" class="xterm-container"></div>
               <div v-if="!logs" class="xterm-empty">Waiting for output...</div>
             </div>
           </div>
@@ -637,7 +676,7 @@ function onDrop(e, columnKey) {
             <div class="log-indicator" :class="{ active: isJonggrangRunning }"></div>
           </div>
           <div class="log-content">
-            <div ref="terminalEl" class="xterm-container"></div>
+            <div ref="logTerminalEl" class="xterm-container"></div>
             <div v-if="!logs" class="xterm-empty">Waiting for output...</div>
           </div>
         </section>
