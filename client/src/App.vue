@@ -581,34 +581,42 @@ function onDrop(e, columnKey) {
             </div>
             <button class="modal-close" @click="selectedTask = null"><XIcon :size="16" /></button>
           </div>
-          <h2 class="detail-title">{{ selectedTask.title }}</h2>
-          <p class="detail-desc">{{ selectedTask.description }}</p>
 
-          <div class="detail-fields">
-            <div class="detail-row" v-if="selectedTask.skill">
-              <ZapIcon :size="14" class="icon-muted" />
-              <span class="detail-label">Skill</span>
-              <span class="detail-value">{{ selectedTask.skill }}</span>
-            </div>
-            <div class="detail-row" v-if="branchName">
-              <GitBranchIcon :size="14" class="icon-muted" />
-              <span class="detail-label">Branch</span>
-              <span class="detail-value mono">{{ branchName }}</span>
-            </div>
-            <div class="detail-row" v-if="selectedTask.files && selectedTask.files.length">
-              <FileTextIcon :size="14" class="icon-muted" />
-              <span class="detail-label">Files</span>
-              <span class="detail-value mono">{{ selectedTask.files.join(', ') }}</span>
-            </div>
-            <div class="detail-row" v-if="selectedTask.blocked_by && selectedTask.blocked_by.length">
-              <ClockIcon :size="14" class="icon-muted" />
-              <span class="detail-label">Blocked by</span>
-              <span class="detail-value mono">{{ selectedTask.blocked_by.join(', ') }}</span>
-            </div>
-            <div class="detail-row" v-if="selectedTask.completed_at">
-              <CheckCircle2Icon :size="14" class="icon-muted" />
-              <span class="detail-label">Completed</span>
-              <span class="detail-value">{{ new Date(selectedTask.completed_at).toLocaleString() }}</span>
+          <div class="detail-scroll">
+            <h2 class="detail-title">{{ selectedTask.title }}</h2>
+            <p class="detail-desc">{{ selectedTask.description }}</p>
+
+            <div class="detail-fields">
+              <div class="detail-field" v-if="selectedTask.skill">
+                <div class="detail-field-label"><ZapIcon :size="12" /> Skill</div>
+                <div class="detail-field-value">{{ selectedTask.skill }}</div>
+              </div>
+              <div class="detail-field" v-if="branchName">
+                <div class="detail-field-label"><GitBranchIcon :size="12" /> Branch</div>
+                <div class="detail-field-value mono">{{ branchName }}</div>
+              </div>
+              <div class="detail-field" v-if="selectedTask.files && selectedTask.files.length">
+                <div class="detail-field-label"><FileTextIcon :size="12" /> Files</div>
+                <ul class="detail-file-list">
+                  <li v-for="f in selectedTask.files" :key="f">{{ f }}</li>
+                </ul>
+              </div>
+              <div class="detail-field" v-if="selectedTask.blocked_by && selectedTask.blocked_by.length">
+                <div class="detail-field-label"><ClockIcon :size="12" /> Blocked by</div>
+                <div class="detail-tags">
+                  <span class="detail-tag" v-for="b in selectedTask.blocked_by" :key="b">{{ b }}</span>
+                </div>
+              </div>
+              <div class="detail-field" v-if="selectedTask.notes && selectedTask.notes.length">
+                <div class="detail-field-label"><SearchIcon :size="12" /> Notes</div>
+                <ul class="detail-notes-list">
+                  <li v-for="(n, i) in selectedTask.notes" :key="i">{{ n }}</li>
+                </ul>
+              </div>
+              <div class="detail-field" v-if="selectedTask.completed_at">
+                <div class="detail-field-label"><CheckCircle2Icon :size="12" /> Completed</div>
+                <div class="detail-field-value">{{ new Date(selectedTask.completed_at).toLocaleString() }}</div>
+              </div>
             </div>
           </div>
 
@@ -1177,6 +1185,7 @@ function onDrop(e, columnKey) {
   align-items: center;
   justify-content: space-between;
   padding: 14px 16px 0;
+  flex-shrink: 0;
 }
 .detail-status-badge {
   display: flex;
@@ -1186,40 +1195,101 @@ function onDrop(e, columnKey) {
   font-weight: 700;
   letter-spacing: 0.5px;
 }
+
+.detail-scroll {
+  overflow-y: auto;
+  flex-shrink: 1;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+
 .detail-title {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   padding: 10px 16px 6px;
   color: var(--text-primary);
   line-height: 1.35;
 }
 .detail-desc {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-secondary);
   padding: 0 16px 12px;
-  line-height: 1.6;
+  line-height: 1.7;
+  word-break: break-word;
 }
 .detail-fields {
   border-top: 1px solid var(--border-subtle);
-  padding: 12px 16px;
+  padding: 10px 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
-.detail-row {
+.detail-field-label {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 12px;
-}
-.detail-label {
+  align-items: center;
+  gap: 5px;
   color: var(--text-muted);
-  min-width: 72px;
-  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 4px;
 }
-.detail-value {
+.detail-field-value {
   color: var(--text-primary);
+  font-size: 12px;
+  word-break: break-word;
+}
+.detail-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.detail-file-list li {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  padding: 3px 8px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
   word-break: break-all;
+}
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.detail-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  padding: 2px 8px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+}
+.detail-notes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.detail-notes-list li {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 6px 8px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 4px;
+  border-left: 2px solid var(--border-subtle);
+  line-height: 1.5;
+  word-break: break-word;
 }
 .mono { font-family: var(--font-mono); font-size: 12px; }
 
