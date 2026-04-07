@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed, watch, nextTick } from 'vue';
+import { ref, shallowRef, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue';
 import { io } from 'socket.io-client';
 import { VueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
@@ -13,6 +13,8 @@ import {
   SearchIcon, ZapIcon, EyeIcon, ArrowRightIcon,
   ClockIcon, Loader2Icon, BookOpenIcon,
 } from 'lucide-vue-next';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
 
 const socket = io();
 
@@ -132,23 +134,113 @@ onMounted(() => {
 
   socket.on('progress_update', (data) => {
     logs.value = data;
-    scrollLogs();
   });
 
-  socket.on('log', (data) => {
-    logs.value += data;
-    scrollLogs();
+socket.on('log', (data) => {
+  logs.value += data;
+});
+});
+
+const terminalEl = ref(null);
+const terminalInstance = shallowRef(null);
+const fitAddon = shallowRef(null);
+const logContentLength = ref(0);
+let resizeHandler = null;
+
+function renderFullLog() {
+  if (!terminalInstance.value) return;
+  terminalInstance.value.clear();
+  if (logs.value) {
+    terminalInstance.value.write(logs.value.replace(/\r?\n/g, '\r\n'));
+    logContentLength.value = logs.value.length;
+    terminalInstance.value.scrollToBottom();
+  } else {
+    logContentLength.value = 0;
+  }
+}
+
+function attachTerminal(container) {
+  if (!terminalInstance.value || !container) return;
+  container.innerHTML = '';
+  terminalInstance.value.open(container);
+  fitAddon.value?.fit();
+  logContentLength.value = 0;
+  renderFullLog();
+}
+
+onMounted(() => {
+  const term = new Terminal({
+    convertEol: true,
+    scrollback: 5000,
+    fontSize: 13,
+    fontFamily: 'JetBrains Mono, Fira Code, monospace',
+    theme: {
+      background: '#05060a',
+      foreground: '#f4f4f5',
+      cursor: '#38bdf8',
+      cursorAccent: '#05060a',
+      selectionBackground: 'rgba(56,189,248,0.25)',
+    },
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  terminalInstance.value = term;
+  fitAddon.value = fit;
+
+  resizeHandler = () => {
+    if (!terminalEl.value) return;
+    requestAnimationFrame(() => fitAddon.value?.fit());
+  };
+  window.addEventListener('resize', resizeHandler);
+
+  nextTick(() => {
+    if (terminalEl.value) {
+      attachTerminal(terminalEl.value);
+    }
   });
 });
 
-const logContainer = ref(null);
-function scrollLogs() {
+watch(() => terminalEl.value, (container) => {
+  if (!container || !terminalInstance.value) return;
   nextTick(() => {
-    if (logContainer.value) {
-      logContainer.value.scrollTop = logContainer.value.scrollHeight;
-    }
+    attachTerminal(container);
   });
-}
+});
+
+watch(logs, (newVal) => {
+  if (!terminalInstance.value) return;
+  const term = terminalInstance.value;
+  if (!terminalEl.value) return;
+  if (!term.element || term.element.parentElement !== terminalEl.value) {
+    return;
+  }
+
+  if (!newVal) {
+    renderFullLog();
+    return;
+  }
+
+  if (newVal.length < logContentLength.value) {
+    renderFullLog();
+    return;
+  }
+
+  const diff = newVal.slice(logContentLength.value);
+  if (diff) {
+    term.write(diff.replace(/\r?\n/g, '\r\n'));
+    logContentLength.value = newVal.length;
+    term.scrollToBottom();
+  }
+}, { flush: 'post' });
+
+onBeforeUnmount(() => {
+  if (resizeHandler) {
+    window.removeEventListener('resize', resizeHandler);
+  }
+  terminalInstance.value?.dispose();
+  terminalInstance.value = null;
+  fitAddon.value = null;
+});
 
 // ============================================================
 // ACTIONS
@@ -494,8 +586,9 @@ function onDrop(e, columnKey) {
               <span>Agent Output</span>
               <div class="log-indicator" :class="{ active: isJonggrangRunning }"></div>
             </div>
-            <div class="detail-output-content" ref="logContainer">
-              <pre>{{ logs || 'Waiting for output...' }}</pre>
+            <div class="detail-output-content">
+              <div ref="terminalEl" class="xterm-container"></div>
+              <div v-if="!logs" class="xterm-empty">Waiting for output...</div>
             </div>
           </div>
 
@@ -543,8 +636,9 @@ function onDrop(e, columnKey) {
             </h3>
             <div class="log-indicator" :class="{ active: isJonggrangRunning }"></div>
           </div>
-          <div class="log-content" ref="logContainer">
-            <pre>{{ logs || 'Waiting for output...' }}</pre>
+          <div class="log-content">
+            <div ref="terminalEl" class="xterm-container"></div>
+            <div v-if="!logs" class="xterm-empty">Waiting for output...</div>
           </div>
         </section>
       </aside>
@@ -1122,16 +1216,9 @@ function onDrop(e, columnKey) {
 .detail-output-content {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  padding: 12px 16px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--text-muted);
-}
-.detail-output-content pre {
-  white-space: pre-wrap;
-  word-wrap: break-word;
+  position: relative;
+  padding: 0;
+  display: flex;
 }
 
 .detail-actions {
@@ -1184,16 +1271,54 @@ function onDrop(e, columnKey) {
 }
 .log-content {
   flex: 1;
-  overflow-y: auto;
-  padding: 12px 16px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--text-muted);
+  min-height: 0;
+  position: relative;
+  padding: 0;
+  display: flex;
 }
-.log-content pre {
-  white-space: pre-wrap;
-  word-wrap: break-word;
+
+.xterm-container {
+  width: 100%;
+  height: 100%;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  background: rgba(5, 6, 10, 0.85);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  overflow: hidden;
+}
+
+:deep(.xterm) {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+:deep(.xterm .xterm-viewport) {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 189, 248, 0.35) transparent;
+}
+
+:deep(.xterm-viewport::-webkit-scrollbar) {
+  width: 6px;
+  height: 6px;
+}
+
+:deep(.xterm-viewport::-webkit-scrollbar-thumb) {
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.55), rgba(14, 165, 233, 0.35));
+  border-radius: 3px;
+}
+
+.xterm-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
 }
 
 @keyframes fade-in { from { opacity: 0; } }
