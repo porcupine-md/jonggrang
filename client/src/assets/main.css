@@ -1,0 +1,106 @@
+:root {
+    --bg-base: #0e1017;
+    --bg-surface: #151820;
+    --bg-elevated: #1a1e28;
+    --bg-card: #1e2230;
+    --bg-card-hover: #232838;
+    --bg-overlay: rgba(14, 16, 23, 0.85);
+
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-default: rgba(255, 255, 255, 0.1);
+    --border-strong: rgba(255, 255, 255, 0.16);
+
+    --text-primary: #e8ecf4;
+    --text-secondary: #8b95a8;
+    --text-muted: #5a6478;
+    --text-inverse: #0e1017;
+
+    --accent: #6366f1;
+    --accent-hover: #818cf8;
+    --accent-muted: rgba(99, 102, 241, 0.15);
+
+    --green: #10b981;
+    --green-muted: rgba(16, 185, 129, 0.15);
+    --green-text: #34d399;
+
+    --yellow: #f59e0b;
+    --yellow-muted: rgba(245, 158, 11, 0.15);
+    --yellow-text: #fbbf24;
+
+    --red: #ef4444;
+    --red-muted: rgba(239, 68, 68, 0.12);
+    --red-text: #f87171;
+
+    --blue: #3b82f6;
+    --blue-muted: rgba(59, 130, 246, 0.15);
+    --blue-text: #60a5fa;
+
+    --purple: #a855f7;
+    --purple-muted: rgba(168, 85, 247, 0.15);
+
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.15);
+    --shadow-elevated: 0 4px 24px rgba(0, 0, 0, 0.4);
+    --shadow-modal: 0 8px 48px rgba(0, 0, 0, 0.6);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: var(--font-sans);
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+}
+
+#app {
+    height: 100vh;
+    width: 100vw;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#app > * {
+    /* direct child of #app = App.vue root .app div */
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.14); }
+
+/* Vue Flow overrides */
+.vue-flow__edge-path { stroke: rgba(255, 255, 255, 0.15); stroke-width: 2; }
+.vue-flow__controls { box-shadow: none; }
+.vue-flow__controls-button {
+    background: var(--bg-elevated) !important;
+    border: 1px solid var(--border-default) !important;
+    color: var(--text-secondary) !important;
+    fill: var(--text-secondary) !important;
+}
+.vue-flow__controls-button:hover {
+    background: var(--bg-card) !important;
+    color: var(--text-primary) !important;
+    fill: var(--text-primary) !important;
+}
+.vue-flow__minimap { background: var(--bg-surface); border-radius: var(--radius-md); border: 1px solid var(--border-subtle); }
+.vue-flow__background pattern circle { fill: rgba(255, 255, 255, 0.03); }

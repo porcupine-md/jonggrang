@@ -1,0 +1,106 @@
+# AGENTS.md — {{project_name}}
+
+> This file is human-curated project knowledge for AI agents.
+> Agents may propose updates, but humans approve them.
+> Research shows human-written AGENTS.md improves agent success ~4%.
+
+---
+
+## Project Overview
+
+- **Name**: {{project_name}}
+- **Type**: {{project_type}}
+- **Stack**: {{stack}}
+- **Description**: TODO - describe what this project does
+
+---
+
+## Conventions
+
+### File Structure
+```
+TODO - document your project's file structure pattern
+Example:
+src/
+├── routes/       # API route handlers
+├── services/     # Business logic
+├── models/       # Database models/schemas
+├── middleware/    # Express/framework middleware
+├── utils/        # Shared utilities
+└── types/        # TypeScript type definitions
+```
+
+### Naming Conventions
+- Files: `kebab-case.ts`
+- Components: `PascalCase.tsx`
+- Functions: `camelCase`
+- Constants: `UPPER_SNAKE_CASE`
+- Database tables: `snake_case`
+- API endpoints: `kebab-case`
+
+### Code Patterns
+- TODO - document patterns used in this project
+- Example: "All route handlers follow: validate input -> call service -> format response"
+- Example: "Use Zod for all runtime validation"
+- Example: "Error responses always use format: { error: string, code: string }"
+
+### Testing Conventions
+- Framework: {{test_framework}}
+- Command: {{test_command}}
+- Pattern: TODO - describe your test patterns
+- Example: "Integration tests use a real test database, not mocks"
+- Example: "Each test file has its own setup/teardown"
+
+---
+
+## Known Gotchas
+
+- TODO - document things that are surprising or non-obvious
+- Example: "Prisma unique constraint errors throw P2002, need explicit handling"
+- Example: "Test database needs cleanup between runs — use beforeEach, not beforeAll"
+- Example: "The auth middleware reads from both cookie and Authorization header"
+
+---
+
+## Architecture Decisions
+
+- TODO - document why things are the way they are
+- Example: "We use JWT instead of sessions because the API serves mobile + web"
+- Example: "Chose Drizzle over Prisma for better type inference and SQL control"
+- Example: "Monorepo with turborepo because shared types between API and web"
+
+---
+
+## Dependencies & Integrations
+
+- TODO - document external service integrations
+- Example: "Email via SendGrid — API key in SENDGRID_API_KEY env var"
+- Example: "File uploads go to S3 bucket defined in AWS_S3_BUCKET"
+- Example: "Auth tokens are RS256 signed — public key at /api/auth/.well-known/jwks.json"
+
+---
+
+## Development Setup
+
+```bash
+# TODO - document how to run the project locally
+# Example:
+# cp .env.example .env
+# docker-compose up -d    # Start database
+# npm install
+# npm run db:migrate       # Run migrations
+# npm run dev              # Start dev server
+```
+
+---
+
+## Jonggrang Notes
+
+This section is updated by Jonggrang during work sessions.
+Human should review and curate periodically.
+
+### Patterns Discovered
+<!-- Agent appends here, human curates -->
+
+### Gotchas Discovered
+<!-- Agent appends here, human curates -->

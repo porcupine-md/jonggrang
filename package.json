@@ -1,0 +1,35 @@
+{
+  "name": "@porcupine/jonggrang",
+  "version": "1.0.0",
+  "description": "Backend and frontend runner for Jonggrang UI",
+  "license": "MIT",
+  "main": "server.js",
+  "bin": {
+    "jonggrang": "./bin/jonggrang.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "client/dist",
+    "server.js",
+    "templates",
+    "skills",
+    "docs",
+    "SKILL.md",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node server.js",
+    "dev:server": "node server.js",
+    "dev:client": "cd client && npm run dev",
+    "dev": "npm run dev:server & npm run dev:client",
+    "build": "cd client && npm install && npm run build",
+    "install:all": "npm install && cd client && npm install"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}

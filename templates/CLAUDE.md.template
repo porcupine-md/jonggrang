@@ -1,0 +1,38 @@
+# CLAUDE.md — Jonggrang Project Instructions
+
+This project is managed by **Jonggrang**, an AI development workflow orchestrator.
+
+## Before You Start
+
+Read these files in order:
+1. `SKILL.md` — Full agent protocol (how to execute tasks)
+2. `AGENTS.md` — Project-specific conventions and patterns
+3. `progress.txt` — Learnings from previous sessions
+4. `jonggrang-tasks.json` — Your task assignment
+5. `jonggrang.json` — Project config
+
+## Quick Protocol
+
+1. Read context files above
+2. Find your task in `jonggrang-tasks.json` (status: `in_progress`)
+3. If task has `"skill"` field, read `skills/<skill>/SKILL.md`
+4. Implement the task following AGENTS.md conventions
+5. Run validation: typecheck, tests, lint
+6. Update `jonggrang-tasks.json` (status: completed, passes: true)
+7. Append learnings to `progress.txt`
+8. Commit with: `git commit -m "type(scope): description"`
+
+## Project Info
+
+- **Name**: {{project_name}}
+- **Type**: {{project_type}}
+- **Stack**: {{stack}}
+- **Test command**: {{test_command}}
+
+## Rules
+
+- Only modify files listed in your task's `"files"` array
+- Follow patterns in AGENTS.md
+- One atomic commit per task
+- Do not skip validation
+- Log discoveries in progress.txt
