@@ -336,6 +336,18 @@ function selectTask(task) {
   selectedTask.value = selectedTask.value?.id === task.id ? null : task;
 }
 
+function parsedDescription(desc) {
+  if (!desc) return { summary: '', criteria: [] };
+  // Split on "Acceptance criteria:" or similar patterns
+  const match = desc.match(/^(.*?)\s*[Aa]cceptance\s+criteria\s*:\s*(.*)$/s);
+  if (!match) return { summary: desc, criteria: [] };
+  const summary = match[1].replace(/\.\s*$/, '').trim();
+  // Split criteria on semicolons or sentence boundaries
+  const raw = match[2].trim().replace(/\.\s*$/, '');
+  const criteria = raw.split(/;\s*/).map(s => s.trim()).filter(Boolean);
+  return { summary, criteria };
+}
+
 function statusIcon(status) {
   switch (status) {
     case 'completed': return CheckCircle2Icon;
@@ -590,7 +602,12 @@ function onDrop(e, columnKey) {
 
           <div class="detail-scroll">
             <h2 class="detail-title">{{ selectedTask.title }}</h2>
-            <p class="detail-desc">{{ selectedTask.description }}</p>
+            <div class="detail-desc">
+              <p class="detail-summary">{{ parsedDescription(selectedTask.description).summary }}</p>
+              <ul v-if="parsedDescription(selectedTask.description).criteria.length" class="detail-criteria">
+                <li v-for="(c, i) in parsedDescription(selectedTask.description).criteria" :key="i">{{ c }}</li>
+              </ul>
+            </div>
 
             <div class="detail-fields">
               <div class="detail-field" v-if="selectedTask.skill">
@@ -1218,10 +1235,30 @@ function onDrop(e, columnKey) {
   line-height: 1.35;
 }
 .detail-desc {
-  font-size: 12px;
-  color: var(--text-secondary);
   padding: 0 16px 12px;
-  line-height: 1.7;
+}
+.detail-summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0 0 8px;
+}
+.detail-criteria {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.detail-criteria li {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  padding: 5px 10px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 4px;
+  border-left: 2px solid rgba(56, 189, 248, 0.3);
   word-break: break-word;
 }
 .detail-fields {
