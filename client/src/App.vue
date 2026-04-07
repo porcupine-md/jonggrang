@@ -16,7 +16,7 @@ import {
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 
-const socket = io();
+const socket = io({ transports: ['websocket'] });
 
 // ============================================================
 // STATE
@@ -132,8 +132,8 @@ onMounted(() => {
     if (data) projectConfig.value = data;
   });
 
-  socket.on('progress_update', (data) => {
-    logs.value = data;
+  socket.on('progress_update', () => {
+    // progress.txt updates are tracked via file watcher; do not overwrite live logs
   });
 
 socket.on('log', (data) => {
@@ -164,8 +164,18 @@ function renderFullLog() {
 
 function attachTerminal(container) {
   if (!terminalInstance.value || !container) return;
-  container.innerHTML = '';
-  terminalInstance.value.open(container);
+  const term = terminalInstance.value;
+
+  if (term.element) {
+    // Terminal already opened — move its DOM to the new container
+    container.innerHTML = '';
+    container.appendChild(term.element);
+  } else {
+    // First open
+    container.innerHTML = '';
+    term.open(container);
+  }
+
   fitAddon.value?.fit();
   logContentLength.value = 0;
   renderFullLog();
@@ -197,7 +207,7 @@ onMounted(() => {
   fitAddon.value = fit;
 
   resizeHandler = () => {
-    if (!terminalEl.value) return;
+    if (!activeTerminalEl.value) return;
     requestAnimationFrame(() => fitAddon.value?.fit());
   };
   window.addEventListener('resize', resizeHandler);
@@ -219,7 +229,10 @@ watch(logs, (newVal) => {
   const term = terminalInstance.value;
   const activeContainer = activeTerminalEl.value;
   if (!activeContainer) return;
+
+  // Re-attach terminal if it's not mounted in the active container
   if (!term.element || !activeContainer.contains(term.element)) {
+    attachTerminal(activeContainer);
     return;
   }
 
@@ -264,6 +277,9 @@ async function apiPost(url, body = {}) {
 }
 
 async function startJonggrang(taskId) {
+  logs.value = '';
+  logContentLength.value = 0;
+  if (terminalInstance.value) terminalInstance.value.clear();
   const tool = projectConfig.value?.tool || 'opencode';
   await apiPost('/api/jonggrang/start', { taskId, tool });
 }
@@ -274,12 +290,18 @@ async function stopJonggrang() {
 
 async function startPlan() {
   if (!planDescription.value.trim()) return;
+  logs.value = '';
+  logContentLength.value = 0;
+  if (terminalInstance.value) terminalInstance.value.clear();
   await apiPost('/api/jonggrang/plan', { description: planDescription.value });
   showPlanModal.value = false;
   planDescription.value = '';
 }
 
 async function startReview() {
+  logs.value = '';
+  logContentLength.value = 0;
+  if (terminalInstance.value) terminalInstance.value.clear();
   await apiPost('/api/jonggrang/review');
 }
 
