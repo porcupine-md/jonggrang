@@ -113,11 +113,31 @@ io.on('connection', (socket) => {
 });
 
 // Helper to spawn jonggrang CLI
-function spawnJonggrang(args, env = {}) {
+function spawnJonggrang(args, env = {}, cwd = PROJECT_ROOT) {
     const nodeCli = path.join(__dirname, 'bin', 'jonggrang.js');
     return spawn('node', [nodeCli, ...args], {
-        cwd: PROJECT_ROOT,
+        cwd,
         env: { ...process.env, JONGGRANG_HOME, JONGGRANG_PROJECT_ROOT: PROJECT_ROOT, ...env }
+    });
+}
+
+// Stop a group process gracefully (SIGINT → SIGKILL after 5s)
+function stopGroupProcess(group) {
+    const child = group && group.process;
+    if (!child || child.exitCode !== null || child.killed) return Promise.resolve();
+    return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+            try { child.kill('SIGKILL'); } catch { /* ignore */ }
+            resolve();
+        }, 5000);
+        child.once('exit', () => { clearTimeout(timer); resolve(); });
+        child.once('error', () => { clearTimeout(timer); resolve(); });
+        try {
+            child.kill('SIGINT');
+        } catch {
+            clearTimeout(timer);
+            resolve();
+        }
     });
 }
 
@@ -324,6 +344,10 @@ app.post('/api/jonggrang/start-parallel', (req, res) => {
             wt = lib.createWorktree(PROJECT_ROOT, group.id, baseBranch);
         } catch (err) {
             io.emit('log', `[${group.id}] Failed to create worktree: ${err.message}\n`);
+            // Revert this group's tasks back to pending
+            for (const id of group.taskIds) {
+                lib.updateTaskStatus(paths.tasksFile, id, 'pending');
+            }
             continue;
         }
 
@@ -335,12 +359,13 @@ app.post('/api/jonggrang/start-parallel', (req, res) => {
 
         const child = spawnJonggrang(
             ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--tool', tool],
-            { JONGGRANG_PROJECT_ROOT: wt.worktreePath, JONGGRANG_MODE: 'autonomous' }
+            { JONGGRANG_PROJECT_ROOT: wt.worktreePath, JONGGRANG_MODE: 'autonomous' },
+            wt.worktreePath
         );
 
         const groupInfo = {
             process: child, branch: wt.branch, worktreePath: wt.worktreePath,
-            status: 'running', taskIds: group.taskIds,
+            baseSha: wt.baseSha, status: 'running', taskIds: group.taskIds,
         };
         groupProcesses.set(group.id, groupInfo);
 
@@ -427,12 +452,13 @@ app.get('/api/jonggrang/groups/:id/diff', (req, res) => {
     if (!group) return res.status(404).json({ error: 'Group not found', diff: '', files: [] });
 
     try {
+        const base = group.baseSha || 'HEAD';
         const diff = require('child_process').execSync(
-            `git diff main...${group.branch}`,
+            `git diff ${base}...${group.branch}`,
             { cwd: PROJECT_ROOT, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
         );
         const files = require('child_process').execSync(
-            `git diff main...${group.branch} --name-only`,
+            `git diff ${base}...${group.branch} --name-only`,
             { cwd: PROJECT_ROOT, encoding: 'utf8' }
         ).trim().split('\n').filter(Boolean);
         res.json({ diff, files });
@@ -448,8 +474,6 @@ app.post('/api/jonggrang/groups/:id/revise', (req, res) => {
     const { feedback } = req.body;
     if (!feedback) return res.status(400).json({ error: 'feedback required' });
 
-    const prompt = `# Revision Request\n\nPlease revise the code based on this feedback:\n\n${feedback}\n\nApply the changes and commit.`;
-
     isJonggrangRunning = true;
     io.emit('jonggrang_status', { isRunning: true, mode: 'revision' });
     io.emit('log', `[revise:${req.params.id}] Revising: ${feedback}\n`);
@@ -457,7 +481,8 @@ app.post('/api/jonggrang/groups/:id/revise', (req, res) => {
     const tool = latestConfig?.tool || 'opencode';
     const child = spawnJonggrang(
         ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--tool', tool],
-        { JONGGRANG_PROJECT_ROOT: group.worktreePath, JONGGRANG_MODE: 'autonomous' }
+        { JONGGRANG_PROJECT_ROOT: group.worktreePath, JONGGRANG_MODE: 'autonomous', JONGGRANG_REVISION_FEEDBACK: feedback },
+        group.worktreePath
     );
 
     child.stdout.on('data', (d) => {
@@ -474,21 +499,27 @@ app.post('/api/jonggrang/groups/:id/revise', (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/jonggrang/groups/:id/cancel', (req, res) => {
+app.post('/api/jonggrang/groups/:id/cancel', async (req, res) => {
     const group = groupProcesses.get(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found' });
 
-    // Revert tasks to pending
-    for (const tid of group.taskIds) {
-        lib.updateTaskStatus(paths.tasksFile, tid, 'pending');
+    try {
+        await stopGroupProcess(group);
+
+        // Revert tasks to pending
+        for (const tid of group.taskIds) {
+            lib.updateTaskStatus(paths.tasksFile, tid, 'pending');
+        }
+
+        // Remove worktree and branch
+        lib.removeWorktree(PROJECT_ROOT, group.worktreePath, group.branch);
+        groupProcesses.delete(req.params.id);
+
+        io.emit('group_status', { groupId: req.params.id, status: 'cancelled' });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
-
-    // Remove worktree and branch
-    lib.removeWorktree(PROJECT_ROOT, group.worktreePath, group.branch);
-    groupProcesses.delete(req.params.id);
-
-    io.emit('group_status', { groupId: req.params.id, status: 'cancelled' });
-    res.json({ success: true });
 });
 
 app.post('/api/jonggrang/groups/:id/merge', (req, res) => {
@@ -518,7 +549,11 @@ app.post('/api/jonggrang/groups/merge-all', (req, res) => {
         try {
             lib.mergeWorktreeBranch(PROJECT_ROOT, group.branch);
             lib.removeWorktree(PROJECT_ROOT, group.worktreePath, group.branch);
+            for (const tid of group.taskIds) {
+                lib.markTaskDone(paths.tasksFile, tid);
+            }
             group.status = 'merged';
+            groupProcesses.delete(id);
             io.emit('group_status', { groupId: id, status: 'merged' });
             results.push({ id, status: 'merged' });
         } catch (err) {
@@ -528,25 +563,35 @@ app.post('/api/jonggrang/groups/merge-all', (req, res) => {
     res.json({ results });
 });
 
-app.post('/api/jonggrang/stop-parallel', (req, res) => {
+app.post('/api/jonggrang/stop-parallel', async (req, res) => {
+    const groupsToClear = [];
     for (const [id, group] of groupProcesses) {
-        if (group.status === 'running') {
-            group.process.kill('SIGINT');
-        }
+        if (group.status === 'merged') continue;
+        await stopGroupProcess(group);
+        group.status = 'cancelled';
+        io.emit('group_status', { groupId: id, status: 'cancelled' });
+        groupsToClear.push(id);
     }
-    // Revert waiting tasks
+    for (const id of groupsToClear) {
+        groupProcesses.delete(id);
+    }
     lib.revertWaiting(paths.tasksFile);
+    isJonggrangRunning = false;
+    io.emit('jonggrang_status', { isRunning: false });
     res.json({ success: true });
 });
 
-app.post('/api/jonggrang/groups/cleanup', (req, res) => {
+app.post('/api/jonggrang/groups/cleanup', async (req, res) => {
     for (const [id, group] of groupProcesses) {
         if (group.status !== 'merged') {
+            await stopGroupProcess(group);
             lib.removeWorktree(PROJECT_ROOT, group.worktreePath, group.branch);
         }
     }
     groupProcesses.clear();
     lib.revertWaiting(paths.tasksFile);
+    isJonggrangRunning = false;
+    io.emit('jonggrang_status', { isRunning: false });
     res.json({ success: true });
 });
 
@@ -593,7 +638,10 @@ function findAvailablePort(start, end) {
         function tryPort() {
             if (port > end) return reject(new Error(`No available port in ${start}-${end}`));
             const srv = net.createServer();
-            srv.once('error', () => { port++; tryPort(); });
+            srv.once('error', (err) => {
+                if (err && err.code === 'EADDRINUSE') { port++; tryPort(); return; }
+                reject(err);
+            });
             srv.once('listening', () => { srv.close(() => resolve(port)); });
             srv.listen(port);
         }
@@ -601,9 +649,17 @@ function findAvailablePort(start, end) {
     });
 }
 
-const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : null;
+const portEnv = process.env.PORT;
+let envPort = null;
+if (portEnv !== undefined) {
+    const parsedPort = Number(portEnv);
+    if (!Number.isFinite(parsedPort) || !Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65535) {
+        throw new Error(`Invalid PORT environment variable: ${portEnv}`);
+    }
+    envPort = parsedPort;
+}
 (async () => {
-    const PORT = envPort || await findAvailablePort(7777, 7999);
+    const PORT = envPort !== null ? envPort : await findAvailablePort(7777, 7999);
     server.listen(PORT, () => {
         console.log(`Jonggrang dashboard on http://localhost:${PORT}`);
         console.log(`Project root: ${PROJECT_ROOT}`);

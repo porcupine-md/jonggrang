@@ -166,17 +166,22 @@ function emitSignal(type, data) {
   console.log(JSON.stringify({ type, ...data }));
 }
 
+// In worktree mode emit a JSON signal; otherwise write directly to tasks file
+function updateTaskMode(taskId, status) {
+  if (WORKTREE_MODE) {
+    emitSignal('task_status', { taskId, status });
+  } else {
+    lib.updateTaskStatus(TASKS_FILE, taskId, status);
+  }
+}
+
 async function runIteration(iteration, taskId) {
   const task = lib.getTask(TASKS_FILE, taskId);
   const taskTitle = task ? task.title : taskId;
 
   logHeader(`Iteration ${iteration}: ${taskTitle}`);
 
-  if (WORKTREE_MODE) {
-    emitSignal('task_status', { taskId, status: 'in_progress' });
-  } else {
-    lib.updateTaskStatus(TASKS_FILE, taskId, 'in_progress');
-  }
+  updateTaskMode(taskId, 'in_progress');
 
   const prompt = lib.buildWorkPrompt(taskId, TASKS_FILE, MODE);
 
@@ -195,24 +200,16 @@ async function runIteration(iteration, taskId) {
     const t = data.tasks.find(t => t.id === taskId);
     if (t && t.status === 'completed') {
       logSuccess(`Task ${taskId} completed successfully`);
-      if (WORKTREE_MODE) emitSignal('task_status', { taskId, status: 'completed' });
+      updateTaskMode(taskId, 'completed');
       return true;
     } else {
       logWarn('Agent finished but did not mark task complete. Reverting to pending.');
-      if (WORKTREE_MODE) {
-        emitSignal('task_status', { taskId, status: 'pending' });
-      } else {
-        lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
-      }
+      updateTaskMode(taskId, 'pending');
       return false;
     }
   } else {
     logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
-    if (WORKTREE_MODE) {
-      emitSignal('task_status', { taskId, status: 'pending' });
-    } else {
-      lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
-    }
+    updateTaskMode(taskId, 'pending');
     return false;
   }
 }
@@ -313,7 +310,7 @@ async function cmdWork() {
 
       if (consecutiveFails >= killAfter) {
         logError(`Task ${taskId} failed ${consecutiveFails} times. Marking as blocked.`);
-        lib.updateTaskStatus(TASKS_FILE, taskId, 'blocked');
+        updateTaskMode(taskId, 'blocked');
         consecutiveFails = 0;
         lastFailedTask = '';
       }
