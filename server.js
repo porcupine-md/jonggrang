@@ -7,6 +7,9 @@ const path = require('path');
 const chokidar = require('chokidar');
 const { spawn } = require('child_process');
 const lib = require('./lib/jonggrang');
+const orchestration = require('./lib/orchestration');
+const compaction = require('./lib/compaction');
+const feedback = require('./lib/feedback');
 
 const app = express();
 const server = http.createServer(app);
@@ -615,6 +618,158 @@ app.get('/api/jonggrang/config', (req, res) => {
         res.json(latestConfig);
     } else {
         res.status(404).json({ error: 'No config found' });
+    }
+});
+
+// ============================================================
+// ORCHESTRATION API
+// ============================================================
+
+// --- Orchestration: start new run ---
+app.post('/api/jonggrang/orchestrate', async (req, res) => {
+    const { description, workType, tool, mode } = req.body || {};
+    if (!description) return res.status(400).json({ error: 'description required' });
+
+    try {
+        const detectedWorkType = workType || orchestration.classifyWorkType(description);
+        const featureId = orchestration.generateFeatureId(description);
+        const { manifest, manifestPath } = orchestration.createManifest(
+            PROJECT_ROOT, featureId, description, detectedWorkType
+        );
+
+        // Spawn jonggrang orchestrate as a background process
+        const child = spawn('node', [
+            path.join(__dirname, 'bin', 'jonggrang.js'),
+            'orchestrate', description,
+            '--tool', tool || 'opencode',
+            '--mode', mode || 'autonomous',
+        ], {
+            cwd: PROJECT_ROOT,
+            env: { ...process.env, JONGGRANG_PROJECT_ROOT: PROJECT_ROOT },
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        child.stdout.on('data', d => io.emit('log', { stream: 'stdout', data: d.toString() }));
+        child.stderr.on('data', d => io.emit('log', { stream: 'stderr', data: d.toString() }));
+        child.on('close', code => {
+            io.emit('orchestration_complete', { featureId, exitCode: code });
+        });
+
+        res.json({ featureId, manifestPath, workType: detectedWorkType, activePhases: manifest.active_phases });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Orchestration: resume ---
+app.post('/api/jonggrang/orchestrate/resume', async (req, res) => {
+    const { featureId } = req.body || {};
+    try {
+        const entry = featureId
+            ? { featureId, manifest: orchestration.readManifest(orchestration.getManifestPath(PROJECT_ROOT, featureId)) }
+            : orchestration.findIncompleteManifest(PROJECT_ROOT);
+
+        if (!entry || !entry.manifest) {
+            return res.status(404).json({ error: 'No incomplete orchestration found' });
+        }
+
+        const child = spawn('node', [
+            path.join(__dirname, 'bin', 'jonggrang.js'),
+            'orchestrate', '--resume',
+        ], {
+            cwd: PROJECT_ROOT,
+            env: { ...process.env, JONGGRANG_PROJECT_ROOT: PROJECT_ROOT },
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        child.stdout.on('data', d => io.emit('log', { stream: 'stdout', data: d.toString() }));
+        child.stderr.on('data', d => io.emit('log', { stream: 'stderr', data: d.toString() }));
+        child.on('close', code => {
+            io.emit('orchestration_complete', { featureId: entry.featureId, exitCode: code });
+        });
+
+        res.json({ featureId: entry.featureId, manifest: entry.manifest });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Orchestration: list all ---
+app.get('/api/jonggrang/manifests', (req, res) => {
+    try {
+        const manifests = orchestration.listManifests(PROJECT_ROOT);
+        res.json(manifests.map(({ featureId, manifest }) => ({
+            featureId,
+            description: manifest.description,
+            workType: manifest.work_type,
+            status: manifest.status,
+            currentPhase: manifest.current_phase,
+            activePhases: manifest.active_phases,
+            progress: {
+                completed: manifest.active_phases.filter(n => manifest.phases[n]?.status === 'completed').length,
+                total: manifest.active_phases.length,
+            },
+            createdAt: manifest.created_at,
+            updatedAt: manifest.updated_at,
+        })));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Orchestration: get specific manifest ---
+app.get('/api/jonggrang/manifests/:featureId', (req, res) => {
+    try {
+        const manifestPath = orchestration.getManifestPath(PROJECT_ROOT, req.params.featureId);
+        const manifest = orchestration.readManifest(manifestPath);
+        if (!manifest) return res.status(404).json({ error: 'Manifest not found' });
+        res.json({ featureId: req.params.featureId, manifest, manifestPath });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Compaction: get status ---
+app.get('/api/jonggrang/compaction', (req, res) => {
+    try {
+        const state = compaction.refreshCompactionState(PROJECT_ROOT);
+        res.json(state);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Feedback loop: get state ---
+app.get('/api/jonggrang/feedback-state', (req, res) => {
+    try {
+        const state = feedback.readFeedbackState(PROJECT_ROOT);
+        res.json(state);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Feedback loop: record phase result ---
+app.post('/api/jonggrang/feedback-state/record', (req, res) => {
+    const { domain, phase, status, agent } = req.body || {};
+    if (!domain || !phase || !status) {
+        return res.status(400).json({ error: 'domain, phase, status required' });
+    }
+    try {
+        const { state, allPassed } = feedback.recordPhaseResult(PROJECT_ROOT, domain, phase, status, agent);
+        res.json({ state, allPassed });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Feedback loop: clear state ---
+app.delete('/api/jonggrang/feedback-state', (req, res) => {
+    try {
+        feedback.clearFeedbackState(PROJECT_ROOT);
+        res.json({ cleared: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 });
 

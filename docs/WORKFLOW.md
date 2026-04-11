@@ -1,99 +1,22 @@
-# Jonggrang Workflow — Detailed Phase Documentation
+# Jonggrang Workflow — Deep Dive
+
+Jonggrang runs in two distinct modes. The **Work Loop** is the original iterative mode: one agent, one task at a time, stateless iterations. The **Orchestrate Mode** is the new deterministic multi-phase pipeline: five specialist agents, 16 phases, persistent MANIFEST state.
 
 ---
 
-## Phase 1: Init Wizard — Deep Dive
-
-### Wizard Flow
-
-```
-START
-  |
-  v
-[Project Name] --> string input
-  |
-  v
-[Project Type] --> web-app | api | library
-  |
-  v
-[Work Mode] --> solo | team
-  |                |
-  | (solo)         | (team)
-  v                v
-  |           [Team Size] --> 2-5
-  |                |
-  v <--------------+
-  |
-[Project State] --> new | existing
-  |                      |
-  | (new)                | (existing)
-  v                      v
-[Select Template]   [Auto-detect Stack]
-  |                      |
-  v <--------------------+
-  |
-[Autonomy Mode] --> supervised | balanced | autonomous
-  |
-  v
-[CI/CD Setup] --> github-actions | gitlab-ci | none | custom
-  |
-  v
-[Testing Setup] --> auto-detect | manual select | skip
-  |
-  v
-[GENERATE]
-  ├── jonggrang.json
-  ├── AGENTS.md (template)
-  ├── skills/ (filtered by project type)
-  ├── jonggrang-tasks.json (empty)
-  ├── progress.txt (empty)
-  └── [template files if new project]
-  |
-  v
-DONE --> "Run `jonggrang work` to start"
-```
-
-### Stack Auto-detection (Existing Projects)
-
-Jonggrang automatically detects the stack based on file markers:
-
-| File Detected | Stack Identified |
-|--------------|-----------------|
-| `package.json` + `next.config.*` | Next.js |
-| `package.json` + `express` in deps | Express |
-| `go.mod` | Go |
-| `requirements.txt` / `pyproject.toml` | Python |
-| `Cargo.toml` | Rust |
-| `tsconfig.json` + no framework | TypeScript Library |
-
-| File Detected | Test Framework |
-|--------------|---------------|
-| `vitest.config.*` | Vitest |
-| `jest.config.*` | Jest |
-| `*_test.go` | Go Test |
-| `pytest.ini` / `conftest.py` | Pytest |
-
-| File Detected | CI/CD |
-|--------------|-------|
-| `.github/workflows/` | GitHub Actions |
-| `.gitlab-ci.yml` | GitLab CI |
-| `Jenkinsfile` | Jenkins |
-
----
-
-## Phase 2: Work Loop — Deep Dive
+## Mode 1: Work Loop
 
 ### Iteration Lifecycle
 
-Each iteration is **stateless** — a fresh context window. This prevents accumulated confusion that occurs in long-running sessions.
+Each iteration is **stateless** — a fresh context window. This prevents accumulated confusion from long-running sessions.
 
 #### Step 1: Load Context
 
 Agent reads these files at start of every iteration:
 
 ```
-AGENTS.md          --> Project conventions, gotchas, patterns
-progress.txt       --> Learnings from previous iterations
+AGENTS.md              --> Project conventions, gotchas, patterns
+progress.txt           --> Learnings from previous iterations
 jonggrang-tasks.json   --> Current task state
 git log --oneline -20  --> Recent changes for context
 jonggrang.json         --> Project config
@@ -107,59 +30,31 @@ Priority algorithm:
 1. Task with `status: "pending"` and the highest `priority` number (1 = highest)
 2. If a task has `blocked_by`, skip to the next task
 3. If `--task <id>` is specified, override priority
+4. If task has `role` field, only match if current agent's inferred role matches
 
 #### Step 3: Plan
 
 Agent generates an implementation plan based on:
 - Task description
-- Relevant skill template (auto-detected or specified)
+- Relevant skill (auto-detected via Gateway routing or explicit `skill` field)
 - AGENTS.md conventions
 - Existing codebase context
 
-Plan format:
-```
-Task: [task title]
-Skill: [matched skill or "custom"]
-Files to create/modify:
-  - path/to/file1.ts (create)
-  - path/to/file2.ts (modify)
-Approach:
-  1. Step description
-  2. Step description
-  3. Step description
-Tests:
-  - Test case 1
-  - Test case 2
-Risk assessment: low|medium|high
-Estimated scope: small|medium|large
-```
-
 #### Step 4: Implement
 
-Claude Code executes the plan:
-1. Read relevant skill template
-2. Follow skill instructions with interpolated variables
-3. Execute inline scripts if any
-4. Create/modify files as planned
+Claude Code or OpenCode executes the plan:
+1. Invoke gateway to resolve the right skill tier (core or library)
+2. Read skill instructions
+3. Follow step-by-step, creating/modifying files
 
 #### Step 5: Validate
 
 Run hooks from `jonggrang.json`:
 ```bash
-# post_implement hooks
-npm run typecheck    # or: tsc --noEmit
-npm run lint         # or: eslint .
-
-# pre_commit hooks
-npm run test         # or: vitest run
+npm run typecheck
+npm run lint
+npm run test
 ```
-
-Validation outcomes:
-- **PASS** --> proceed to commit
-- **FAIL** -->
-  - supervised: immediate pause, show error to human
-  - balanced: show error, ask fix/skip/abort
-  - autonomous: auto-retry (max 2x), then skip
 
 #### Step 6: Commit
 
@@ -169,7 +64,7 @@ feat(users): add registration endpoint
 
 - Created POST /api/users with email validation
 - Added Zod schema for request body
-- Added 4 tests (happy path + validation errors)
+- Added 4 tests
 
 Task: task-001
 Skill: scaffold-api
@@ -177,186 +72,345 @@ Skill: scaffold-api
 
 #### Step 7: Update State
 
-```javascript
-// jonggrang-tasks.json
-task.status = "completed"
-task.passes = true
-task.completed_at = now()
-
-// progress.txt (append)
-`## Session ${timestamp} — Task: ${task.title}
-### What was done
-...
-### What was learned
-...
-### Patterns discovered
-...`
-
-// AGENTS.md (propose update if new pattern found)
-// Only human can approve AGENTS.md changes
+```
+jonggrang-tasks.json  --> task.status = "completed"
+progress.txt          --> append session learnings
+AGENTS.md             --> propose update if new pattern found (human approval required)
 ```
 
 #### Step 8: Loop Decision
 
 ```
-if (all tasks completed) --> EXIT: COMPLETE
-if (iteration >= max_iterations) --> EXIT: PAUSED
-if (same task failed 3x) --> EXIT: BLOCKED
-else --> next iteration (fresh context)
+all tasks completed          --> EXIT: COMPLETE
+iteration >= max_iterations  --> EXIT: PAUSED
+same task failed 3x          --> EXIT: BLOCKED
+else                         --> next iteration (fresh context)
 ```
-
----
 
 ### Work Loop Variants
 
-#### Standard: Task-based Loop
 ```bash
-$ jonggrang work
-# Picks tasks from jonggrang-tasks.json sequentially
-```
-
-#### Skill-only: One-shot Execution
-```bash
-$ jonggrang work --skill prd
-# Runs single skill, no task loop
-```
-
-#### Targeted: Specific Task
-```bash
-$ jonggrang work --task task-003
-# Only works on specified task
-```
-
-#### Branch-scoped
-```bash
-$ jonggrang work --branch feat/auth
-# Creates/switches to branch, scopes all work to it
+jonggrang work                          # all pending tasks
+jonggrang work --skill prd              # one-shot skill execution
+jonggrang work --task task-003          # specific task
+jonggrang work --branch feat/auth       # branch-scoped
+jonggrang work --dry-run                # preview prompt only
+jonggrang work --tool claude            # override AI tool
+jonggrang work --mode supervised        # override autonomy
 ```
 
 ---
 
-## Phase 3: Review — Deep Dive
+## Mode 2: Orchestrate — 16-Phase Pipeline
+
+### Overview
+
+```
+jonggrang orchestrate "add payment flow"
+jonggrang orchestrate --resume          # resume from saved MANIFEST
+```
+
+The orchestrate command runs a deterministic 16-phase pipeline. Each phase is executed by a specific specialist agent. State is persisted in `MANIFEST.yaml` so the pipeline can survive session resets.
+
+### Phase Table
+
+| # | Phase | Role | Description | Skipped For |
+|---|-------|------|-------------|-------------|
+| 1 | Setup | Lead | Read context files, load AGENTS.md | — |
+| 2 | Triage | Lead | Classify complexity, plan active phases | — |
+| 3 | Discovery | Lead | Explore codebase, identify affected areas | — |
+| 4 | SkillMap | Lead | Map tasks → skills via gateway | — |
+| 5 | Complexity | Lead | Deep complexity analysis, risk assessment | BUGFIX, SMALL |
+| 6 | Brainstorm | Lead | Generate alternative approaches **(human pause)** | BUGFIX, SMALL |
+| 7 | Architect | Lead | Output architecture_plan_json → ARCHITECTURE_PLAN_COMPLETE | BUGFIX, SMALL |
+| 8 | Implement | Developer | Execute plan, typecheck+lint+test → IMPLEMENTATION_COMPLETE | — |
+| 9 | DesignVerify | Reviewer | Verify design matches architecture plan | BUGFIX, SMALL |
+| 10 | Compliance | Reviewer | AGENTS.md compliance, security patterns | — |
+| 11 | Quality | Reviewer | Code quality, test coverage gaps → REVIEW_COMPLETE | — |
+| 12 | TestPlan | TestLead | Output test_plan_json → TEST_PLAN_COMPLETE | BUGFIX |
+| 13 | Test | Tester | Execute test plan, run all tests | — |
+| 14 | Coverage | Tester | Enforce coverage thresholds | — |
+| 15 | TestQuality | Reviewer | Test quality review → REVIEW_COMPLETE | — |
+| 16 | Complete | Lead | Final summary, update progress.txt, MANIFEST → done | — |
+
+### Phase Skipping by Work Type
+
+```
+BUGFIX  → skip phases [5, 6, 7, 9, 12]    (fast track, no architecture)
+SMALL   → skip phases [5, 6, 7, 9]         (skip architecture, keep test plan)
+MEDIUM  → run all 16 phases
+LARGE   → run all 16 phases
+```
+
+Work type is auto-classified by the Lead agent in phase 2 based on the description and discovered scope.
+
+### MANIFEST.yaml — Persistent State
+
+Located at `.jonggrang/.output/features/{id}/MANIFEST.yaml`, it survives session resets:
+
+```yaml
+feature_id: feat-20260411-abc123
+description: "add payment flow"
+work_type: MEDIUM
+status: in_progress
+current_phase: 8
+active_phases: [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+phases:
+  "1": { status: completed, completed_at: "2026-04-11T10:00:00Z", agent_output: "..." }
+  "2": { status: completed, completed_at: "2026-04-11T10:01:00Z", agent_output: "..." }
+  "8": { status: in_progress, started_at: "2026-04-11T10:05:00Z" }
+agents:
+  lead: { model: claude-sonnet-4-5, started_at: "..." }
+  developer: { model: claude-sonnet-4-5 }
+validation:
+  typecheck: false
+  lint: false
+  tests: false
+context_usage:
+  current_tokens: 45000
+  percentage: 0.23
+```
+
+To resume after a session reset:
+
+```bash
+jonggrang orchestrate --resume
+# Finds the latest in_progress MANIFEST and resumes from current_phase
+```
+
+---
+
+## Five-Role Assembly Line
+
+Each phase is handled by exactly one specialist agent. Agents are stateless — they receive a crafted prompt, do their work, and signal completion.
+
+```
+Phase 1-7, 16 → Lead
+Phase 8       → Developer
+Phase 9-11,15 → Reviewer
+Phase 12      → TestLead
+Phase 13-14   → Tester
+```
+
+### Role Boundaries
+
+| Role | Has Task Tool | Has Edit/Write | Completion Signal |
+|------|:---:|:---:|-------------------|
+| Lead | YES | no | ARCHITECTURE_PLAN_COMPLETE |
+| Developer | no | YES | IMPLEMENTATION_COMPLETE |
+| Reviewer | no | no (read-only) | REVIEW_COMPLETE |
+| TestLead | YES | no | TEST_PLAN_COMPLETE |
+| Tester | no | YES | ALL_TESTS_PASSING |
+
+**Coordinator roles** (Lead, TestLead) can spawn sub-agents via the Task tool, but cannot directly edit files. They plan and delegate.
+
+**Executor roles** (Developer, Tester) have full Edit/Write/Bash access, but cannot spawn sub-agents. They implement.
+
+**Reviewer** is read-only — no edit tools at all. This prevents the reviewer from "just fixing it" instead of raising issues.
+
+### Completion Signal Protocol
+
+Each role must emit its completion signal as the final output line. The orchestration engine waits for this signal before advancing the phase:
+
+```
+# Developer finishes phase 8:
+IMPLEMENTATION_COMPLETE
+
+# Tester finishes phase 13-14:
+ALL_TESTS_PASSING
+```
+
+If the signal is not emitted, the phase is marked as `failed` and the orchestration loop retries (up to 2x by default).
+
+---
+
+## The Hook System — Eight-Layer Defense
+
+Both Claude Code and OpenCode share the same enforcement logic. The implementation differs by platform but the behavior is identical.
+
+### Enforcement Layers
+
+| Layer | Mechanism | Enforces |
+|-------|-----------|----------|
+| 1 | CLAUDE.md / AGENTS.md | Project conventions, role instructions |
+| 2 | Core Skills | Gateway routing, orchestration patterns |
+| 3 | Agent Templates | Role boundaries, completion signals |
+| 4 | UserPromptSubmit | Pre-validates prompt before agent starts |
+| 5 | PreToolUse | agent-first delegation, compaction gate |
+| 6 | PostToolUse | dirty bit tracking per domain |
+| 7 | SubagentStop | Output location enforcement |
+| 8 | Stop | Feedback loop gate, quality gate |
+
+### Per-Platform Hook Mapping
+
+| Universal Event | Claude Code | OpenCode |
+|----------------|-------------|----------|
+| Before file edit | PreToolUse (Edit\|Write) | tool.execute.before |
+| After file edit | PostToolUse (Edit\|Write) | tool.execute.after + file.edited |
+| Before spawning sub-agent | PreToolUse (Task) | tool.execute.before (Task) |
+| Sub-agent finished | SubagentStop | session.updated (completed) |
+| Session ending | Stop | session.idle |
+| Context compacted | — | session.compacted |
+
+Hooks are installed via:
+
+```bash
+jonggrang init        # installs hooks during project init
+```
+
+This writes:
+- `.claude/settings.json` — Claude Code hook registrations pointing to `hooks/claude/*.sh`
+- `.opencode/plugins/jonggrang.js` — OpenCode plugin with identical enforcement
+
+---
+
+## Compaction Gate
+
+The compaction gate prevents agents from exhausting context mid-phase. It is checked **before heavy phases** (3: Discovery, 8: Implement, 13: Test).
+
+### Thresholds
+
+| Level | Token % | Action |
+|-------|---------|--------|
+| WARN | 75% | Log warning, continue |
+| MUST | 80% | Log strong warning, continue |
+| BLOCK | 85% | Halt with exit code 2, tell agent to compact |
+
+Token usage is read from Claude JSONL session transcripts:
+```
+~/.claude/projects/<hashed-path>/<session>.jsonl
+```
+
+The hash replicates Claude Code's naming scheme: project path with `/` replaced by `-`.
+
+```bash
+# Example: /home/user/my-project → -home-user-my-project
+```
+
+Usage is summed across:
+- `cache_read_input_tokens`
+- `cache_creation_input_tokens`
+- `input_tokens`
+
+---
+
+## Feedback Loop — Dirty Bits
+
+The feedback loop tracks which code domains have been modified and whether those modifications have been reviewed and tested.
+
+### Domain Detection
+
+File paths are mapped to domains by pattern:
+```
+src/routes/**, src/controllers/** → backend
+src/components/**, src/pages/**   → frontend
+src/api/**, src/services/**       → api
+src/db/**, migrations/**          → database
+tests/**, *.test.*, *.spec.*      → testing
+```
+
+### State Machine
+
+```
+1. Developer edits src/routes/users.ts
+   → feedback.setDirtyBit("backend") → backend: PENDING
+
+2. Reviewer reviews and passes
+   → feedback.recordPhaseResult("reviewer", "backend", "pass") → backend: REVIEWER_PASSED
+
+3. Tester runs tests and passes
+   → feedback.recordPhaseResult("tester", "backend", "pass") → backend: COMPLETE
+
+4. Exit gate: ALL domains COMPLETE?
+   → YES: allow session exit
+   → NO: block with message showing pending domains
+```
+
+If reviewer OR tester FAILS any domain, **all domains reset to PENDING**. The loop must run again.
+
+### Loop Detection
+
+Jaccard similarity is tracked across output hashes. If the same output appears >90% similar to a previous attempt, the stuck counter increments. After 3 stuck iterations, the **Escalation Advisor** injects a diagnostic hint:
+
+```
+[JONGGRANG ESCALATION] Stuck after 3 attempts. Try:
+1. Check if test environment is properly configured
+2. Verify that fixture data matches expected schema
+3. Consider breaking this task into smaller subtasks
+```
+
+---
+
+## Init Wizard
+
+### Stack Auto-detection
+
+| File Detected | Stack |
+|--------------|-------|
+| `package.json` + `next.config.*` | Next.js |
+| `package.json` + `express` dep | Express |
+| `go.mod` | Go |
+| `requirements.txt` / `pyproject.toml` | Python |
+| `Cargo.toml` | Rust |
+| `tsconfig.json` (no framework) | TypeScript Library |
+
+| File | Test Framework |
+|------|---------------|
+| `vitest.config.*` | Vitest |
+| `jest.config.*` | Jest |
+| `*_test.go` | Go Test |
+| `pytest.ini` / `conftest.py` | Pytest |
+
+### What `jonggrang init` Creates
+
+```
+jonggrang.json          → project config
+AGENTS.md               → project conventions
+jonggrang-tasks.json    → empty task board
+progress.txt            → empty learning log
+skills/core/            → core skills (always loaded)
+skills/library/         → library skills (JIT loaded)
+.claude/settings.json   → Claude Code hooks
+.opencode/plugins/      → OpenCode plugin
+.jonggrang/             → runtime state dir
+  .output/              → feature manifests + agent outputs
+  .ephemeral/           → feedback/compaction state (cleared on restart)
+```
+
+---
+
+## Review — Deep Dive
 
 ### Review Types
 
-#### Full Review (`jonggrang review --full`)
-Comprehensive scan of all changes since last review:
-- Diff analysis (all commits since last `jonggrang review`)
-- Code quality patterns
-- Test coverage delta
-- Dependency audit
-- AGENTS.md compliance
+| Command | Scope |
+|---------|-------|
+| `jonggrang review` | Full scan of all changes since last review |
+| `jonggrang review --task <id>` | Focused review on single task |
+| `jonggrang review --security` | OWASP Top 10, hardcoded secrets, auth gaps |
+| `jonggrang review --performance` | N+1 queries, re-renders, memory leaks |
 
-#### Task Review (`jonggrang review --task <id>`)
-Focused review on single task's changes.
+In orchestrate mode, review is handled by the **Reviewer role** at phases 9, 10, 11, and 15 — no separate CLI call needed.
 
-#### Security Review (`jonggrang review --security`)
-- Dependency vulnerability scan
-- Hardcoded secrets detection
-- SQL injection / XSS patterns
-- Auth/authorization gaps
-- OWASP Top 10 checklist
-
-#### Performance Review (`jonggrang review --performance`)
-- N+1 query detection
-- Unnecessary re-renders (React)
-- Memory leak patterns
-- Bundle size impact
-- Database index suggestions
-
-### Review Output
-
-Reports saved to `jonggrang-log/review-{timestamp}.md`:
+### Review Output Format
 
 ```markdown
-# Jonggrang Review — 2026-04-02T15:30:00Z
+# Jonggrang Review — 2026-04-11T15:30:00Z
 
 ## Summary
-- Tasks reviewed: 5
-- Commits scanned: 8
-- Issues found: 3 (1 high, 2 low)
+- Phases reviewed: 9, 10, 11
+- Issues found: 2 (1 high, 1 low)
 
 ## Issues
 
-### [HIGH] Potential SQL injection in src/routes/search.ts:23
+### [HIGH] SQL injection risk in src/routes/search.ts:23
 Raw user input passed to query without parameterization.
-Recommendation: Use parameterized query or ORM method.
+Fix: Use parameterized query.
 
 ### [LOW] Missing error handling in src/services/email.ts:45
-SMTP send has no try-catch. Could crash on network failure.
-Recommendation: Add try-catch with retry logic.
+SMTP send has no try-catch.
+Fix: Add try-catch with retry logic.
 
-### [LOW] Test coverage gap: src/utils/crypto.ts
-No tests for edge cases (empty input, unicode).
-Recommendation: Add boundary tests.
-
-## Metrics
-- Test coverage: 84% (+6% from last review)
-- New dependencies: 1 (zod@3.22)
-- Bundle size delta: +2.3KB
+## Verdict
+REVIEW_COMPLETE
 ```
-
----
-
-## Team Workflow — Deep Dive
-
-### Daily Flow (Team of 3-5)
-
-```
-Morning:
-  Lead:   $ jonggrang plan "implement payment flow"
-          # Decomposes into 5 atomic tasks
-          $ jonggrang assign task-001 andi
-          $ jonggrang assign task-002 budi
-          # task-003..005 unassigned (self-claim)
-
-  Andi:   $ jonggrang work --task task-001 --mode balanced
-  Budi:   $ jonggrang work --task task-002 --mode balanced
-  Citra:  $ jonggrang work --pick --mode balanced
-          # Auto-claims task-003
-
-Mid-day:
-  All:    $ jonggrang status
-          # View task board, check progress
-
-  Deni:   $ jonggrang work --pick
-          # Claims task-004
-
-  Lead:   $ jonggrang sync
-          # Review completed tasks, merge if clean
-
-End-of-day:
-  Lead:   $ jonggrang review --full
-          # Comprehensive review of all day's work
-          # Update AGENTS.md with new patterns
-```
-
-### Conflict Resolution
-
-```
-Scenario: Andi and Budi both need to modify src/routes/index.ts
-
-Option 1 (preferred): Serialize tasks
-  task-002.blocked_by = ["task-001"]
-  Budi waits until Andi's task completes
-
-Option 2: Split file
-  Andi: src/routes/users.ts (new file)
-  Budi: src/routes/payments.ts (new file)
-  Both: separately register in index.ts (different lines)
-
-Option 3: Lead resolves
-  Lead manually merges changes after both complete
-```
-
-### Branch Strategy (Team)
-
-```
-main
-  └── feat/payment-flow          (feature branch)
-       ├── task-001/user-auth    (task branch, Andi)
-       ├── task-002/payment-api  (task branch, Budi)
-       └── task-003/payment-ui   (task branch, Citra)
-```
-
-Each task branch merges back to feature branch. Feature branch merges to main via PR (with `jonggrang review`).

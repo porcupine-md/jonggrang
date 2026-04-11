@@ -11,6 +11,10 @@ const readline = require('readline');
 const { intro, outro, select, confirm, text, isCancel, cancel, spinner } = require('@clack/prompts');
 
 const lib = require('../lib/jonggrang');
+const orchestration = require('../lib/orchestration');
+const hooksLib = require('../lib/hooks');
+const compaction = require('../lib/compaction');
+const feedback = require('../lib/feedback');
 
 // ============================================================
 // CONFIGURATION
@@ -58,6 +62,8 @@ let WEB_PORT = parseInt(process.env.JONGGRANG_WEB_PORT || '7777', 10);
 let WEB_OPEN = true;
 let WORKTREE_MODE = false;
 let GROUP_TASK_IDS = [];
+let ORCHESTRATE_RESUME = false;
+let ORCHESTRATE_ROLE = '';
 
 // Init options
 let INIT_NAME = '';
@@ -786,18 +792,227 @@ async function cmdInit() {
   logSuccess('Generated progress.txt');
   logSuccess(`Copied ${result.skillCount} skill templates`);
 
+  // ── Install hooks for the selected tool ──────────────────────
+  try {
+    const toolForHooks = INIT_TOOL || 'opencode';
+    const hookResults = hooksLib.installHooksForTool(PROJECT_ROOT, toolForHooks, JONGGRANG_HOME);
+
+    if (hookResults.claude) {
+      logSuccess(`Installed Claude Code hooks → ${path.relative(PROJECT_ROOT, hookResults.claude.path)}`);
+    }
+    if (hookResults.opencode) {
+      logSuccess(`Installed OpenCode plugin → ${path.relative(PROJECT_ROOT, hookResults.opencode.path)}`);
+    }
+  } catch (err) {
+    logWarn(`Hook installation warning: ${err.message}`);
+  }
+
+  // ── Create .jonggrang/ directory structure ────────────────────
+  const jonggrangDirs = [
+    path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features'),
+    path.join(PROJECT_ROOT, '.jonggrang', '.ephemeral'),
+    path.join(PROJECT_ROOT, '.jonggrang', 'locks'),
+  ];
+  for (const dir of jonggrangDirs) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  logSuccess('Created .jonggrang/ workspace directory');
+
   if (!lib.fileExists(path.join(PROJECT_ROOT, '.git'))) {
     // git was already initialized by runInit if needed
   }
+
+  // Update .gitignore to exclude ephemeral files
+  const gitignorePath = path.join(PROJECT_ROOT, '.gitignore');
+  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n`;
+  try {
+    const existing = lib.fileExists(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
+    if (!existing.includes('.jonggrang/.ephemeral')) {
+      fs.appendFileSync(gitignorePath, jonggrangIgnoreBlock);
+    }
+  } catch {}
 
   console.log('');
   logSuccess('Project ready!');
   console.log('');
   console.log('  Next steps:');
   console.log('    1. Edit AGENTS.md with your project conventions');
-  console.log('    2. Run: jonggrang plan "your feature description"');
-  console.log('    3. Run: jonggrang work');
+  console.log('    2. jonggrang plan "your feature"  OR  jonggrang orchestrate "your feature"');
+  console.log('    3. jonggrang work  OR  jonggrang orchestrate --resume');
   console.log('');
+}
+
+// ============================================================
+// ORCHESTRATE COMMAND — 16-Phase Deterministic Workflow
+// ============================================================
+
+async function cmdOrchestrate(descriptionParts) {
+  const description = descriptionParts.join(' ').trim();
+
+  checkDeps();
+
+  // ── Check for resume (must come before empty-description guard) ──
+  if (ORCHESTRATE_RESUME) {
+    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    if (!existing) {
+      logError('No incomplete orchestration found to resume.');
+      process.exit(1);
+    }
+    logInfo(`Resuming orchestration: ${existing.manifest.description}`);
+    logInfo(`Feature ID: ${existing.featureId}`);
+    logInfo(`Current phase: ${existing.manifest.current_phase}`);
+    await runOrchestrationLoop(existing.featureId, existing.manifest, existing.manifestPath);
+    return;
+  }
+
+  if (!description) {
+    logError('Usage: jonggrang orchestrate "feature description"');
+    logError('       jonggrang orchestrate --resume');
+    process.exit(1);
+  }
+
+  // ── Compaction check before starting ─────────────────────────
+  if (!DRY_RUN) {
+    const gate = compaction.checkCompactionGate(PROJECT_ROOT);
+    if (gate.status === 'block') {
+      logError(`COMPACTION GATE: ${gate.message}`);
+      logError('Run /compact before starting a new orchestration.');
+      process.exit(1);
+    }
+    if (gate.status === 'warn' || gate.status === 'must') {
+      logWarn(gate.message);
+    }
+  }
+
+  // ── Classify work type ────────────────────────────────────────
+  const workType = orchestration.classifyWorkType(description);
+  const activePhases = orchestration.getActivePhases(workType);
+
+  logHeader(`Orchestrating: ${description}`);
+  logInfo(`Work type: ${workType}`);
+  logInfo(`Active phases: ${activePhases.join(', ')}`);
+  console.log('');
+
+  // ── Create MANIFEST ───────────────────────────────────────────
+  const featureId = orchestration.generateFeatureId(description);
+  const { manifest, manifestPath } = orchestration.createManifest(
+    PROJECT_ROOT, featureId, description, workType
+  );
+
+  logInfo(`Feature ID: ${featureId}`);
+  logInfo(`MANIFEST: ${manifestPath}`);
+  console.log('');
+
+  // ── Run orchestration loop ────────────────────────────────────
+  await runOrchestrationLoop(featureId, manifest, manifestPath);
+}
+
+async function runOrchestrationLoop(featureId, manifest, manifestPath) {
+  const activeTool = TOOL || lib.readConfig(CONFIG_FILE, '.tool', 'opencode');
+  const activeMode = MODE || lib.readConfig(CONFIG_FILE, '.mode.autonomy', 'autonomous');
+
+  for (const phaseNum of manifest.active_phases) {
+    const phaseState = manifest.phases[phaseNum];
+    if (!phaseState || phaseState.status === 'completed' || phaseState.status === 'skipped') {
+      continue;
+    }
+
+    const phaseDef = orchestration.PHASES[phaseNum];
+    logInfo(`\n── Phase ${phaseNum}: ${phaseDef.name} ──`);
+    logInfo(phaseDef.description);
+
+    // ── Compaction gate before heavy phases ─────────────────────
+    if (orchestration.HEAVY_PHASES.has(phaseNum) && !DRY_RUN) {
+      compaction.refreshCompactionState(PROJECT_ROOT);
+      const gate = compaction.checkCompactionGate(PROJECT_ROOT);
+      if (gate.status === 'block') {
+        logError(`COMPACTION GATE blocked phase ${phaseNum}: ${gate.message}`);
+        logError('Run /compact then resume with: jonggrang orchestrate --resume');
+        orchestration.failPhase(manifestPath, phaseNum, gate.message);
+        process.exit(1);
+      }
+      if (gate.status !== 'ok') logWarn(gate.message);
+    }
+
+    orchestration.startPhase(manifestPath, phaseNum);
+
+    // ── Phase-specific logic ─────────────────────────────────────
+    if (phaseNum === 1) {
+      // Setup — already done (manifest created)
+      logSuccess('Setup complete (MANIFEST created)');
+      orchestration.completePhase(manifestPath, phaseNum, { manifest_path: manifestPath });
+      manifest = orchestration.readManifest(manifestPath);
+      continue;
+    }
+
+    if (phaseNum === 2) {
+      // Triage — already classified
+      logSuccess(`Triage: ${manifest.work_type}, active phases: ${manifest.active_phases.join(', ')}`);
+      orchestration.completePhase(manifestPath, phaseNum, { work_type: manifest.work_type });
+      manifest = orchestration.readManifest(manifestPath);
+      continue;
+    }
+
+    if (phaseNum === 6 && activeMode !== 'autonomous') {
+      // Brainstorming — pause for human input in non-autonomous modes
+      logInfo('\n[BRAINSTORMING PHASE — Human Input Required]');
+      logInfo(`Feature: ${manifest.description}`);
+      logInfo('Review the architecture plan and provide design direction before continuing.');
+      logInfo('Resume with: jonggrang orchestrate --resume');
+      orchestration.failPhase(manifestPath, phaseNum, 'Awaiting human input (brainstorming)');
+      process.exit(0);
+    }
+
+    // ── Build phase prompt ────────────────────────────────────────
+    const phaseContext = orchestration.buildPhaseContext(manifest, phaseNum);
+    const agentsContent = lib.fileExists(paths.agentsFile)
+      ? fs.readFileSync(paths.agentsFile, 'utf8') : '';
+    const progressContent = lib.fileExists(paths.progressFile)
+      ? fs.readFileSync(paths.progressFile, 'utf8').slice(-2000) : '';
+
+    const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    const prompt = [
+      phaseContext,
+      agentsContent ? `\n## Project Conventions (AGENTS.md)\n${agentsContent}` : '',
+      progressContent ? `\n## Recent Learnings (progress.txt)\n${progressContent}` : '',
+      `\n## Output Directory\nWrite all output files to: ${outputDir}/`,
+    ].filter(Boolean).join('\n');
+
+    if (DRY_RUN) {
+      logInfo(`[DRY RUN] Phase ${phaseNum} prompt (${prompt.length} chars)`);
+      orchestration.completePhase(manifestPath, phaseNum, { dry_run: true });
+      manifest = orchestration.readManifest(manifestPath);
+      continue;
+    }
+
+    // ── Run agent ─────────────────────────────────────────────────
+    const exitCode = await lib.runAgent(prompt, activeTool, activeMode, PROJECT_ROOT);
+
+    if (exitCode !== 0) {
+      logWarn(`Phase ${phaseNum} agent exited with code ${exitCode}`);
+      orchestration.failPhase(manifestPath, phaseNum, `Agent exit code: ${exitCode}`);
+    } else {
+      orchestration.completePhase(manifestPath, phaseNum);
+      logSuccess(`Phase ${phaseNum} complete`);
+    }
+
+    manifest = orchestration.readManifest(manifestPath);
+
+    // Check if orchestration was failed/paused externally
+    if (manifest.status === 'failed' || manifest.status === 'paused') {
+      logWarn(`Orchestration ${manifest.status}. Resume with: jonggrang orchestrate --resume`);
+      process.exit(exitCode !== 0 ? 1 : 0);
+    }
+  }
+
+  if (manifest.status === 'completed') {
+    logHeader('Orchestration Complete!');
+    logSuccess(`Feature: ${manifest.description}`);
+    logSuccess(`All ${manifest.active_phases.length} phases completed.`);
+    feedback.clearFeedbackState(PROJECT_ROOT);
+  }
 }
 
 // ============================================================
@@ -1043,6 +1258,8 @@ Commands:
   menu                    Interactive menu launcher
   init                    Setup project (interactive or with flags)
   work                    Start work loop
+  orchestrate <desc>      Full 16-phase deterministic orchestration
+  orchestrate --resume    Resume an incomplete orchestration
   review                  Run code review
   status                  Show task board
   plan <description>      Decompose feature into tasks
@@ -1082,6 +1299,8 @@ Examples:
   jonggrang work
   jonggrang work --tool claude --mode autonomous
   jonggrang work --max-iterations 5
+  jonggrang orchestrate "user authentication with JWT"
+  jonggrang orchestrate --resume
   jonggrang status
   jonggrang review
   jonggrang web
@@ -1125,6 +1344,8 @@ async function main() {
       case '--force':         INIT_FORCE = true; break;
       case '--port':          WEB_PORT = parseInt(rest[++i], 10); break;
       case '--no-open':       WEB_OPEN = false; break;
+      case '--resume':        ORCHESTRATE_RESUME = true; break;
+      case '--role':          ORCHESTRATE_ROLE = rest[++i]; break;
       default:                planArgs.push(rest[i]); break;
     }
     i++;
@@ -1148,6 +1369,9 @@ async function main() {
     case 'plan':
       checkDeps();
       await cmdPlan(planArgs);
+      break;
+    case 'orchestrate':
+      await cmdOrchestrate(planArgs);
       break;
     case 'web':
     case 'dashboard':

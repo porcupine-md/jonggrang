@@ -14,6 +14,7 @@
     "server.js",
     "templates",
     "skills",
+    "hooks",
     "docs",
     "SKILL.md",
     "README.md"
@@ -31,6 +32,7 @@
     "chokidar": "^4.0.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "js-yaml": "^4.1.1",
     "socket.io": "^4.8.1"
   }
 }

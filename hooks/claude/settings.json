@@ -1,0 +1,61 @@
+{
+  "_comment": "Jonggrang Claude Code hook settings. Copied to .claude/settings.json during jonggrang init.",
+  "_note": "JONGGRANG_HOOKS_DIR is replaced with actual path during installation.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/compaction-gate.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/agent-first.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/track-modifications.sh\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/output-enforcement.sh\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/feedback-loop.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/quality-gate.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

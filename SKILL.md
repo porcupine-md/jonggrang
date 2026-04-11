@@ -144,20 +144,50 @@ Available skills:
 | `deploy` | Deployment configs |
 | `prd` | Generating requirements |
 
+## Running Jonggrang
+
+Jonggrang can be invoked in two ways. Use whichever is available:
+
+**Option A — npx (no installation required):**
+```bash
+npx jonggrang <command>
+```
+
+**Option B — global install:**
+```bash
+npm install -g jonggrang
+jonggrang <command>
+```
+
+To check which is available:
+```bash
+npx jonggrang version 2>/dev/null || jonggrang version
+```
+
+You can create a convenience alias in your shell session:
+```bash
+alias jg="npx jonggrang"
+jg status
+```
+
 ## Jonggrang Commands Reference
 
 These are the commands the human user runs to manage the workflow. You don't run these yourself, but understanding them helps you know the system:
 
 ```
-jonggrang init              # Setup project
-jonggrang plan "feature"    # Decompose feature into tasks (writes jonggrang-tasks.json)
-jonggrang work              # Run work loop (spawns you for each task)
-jonggrang status            # Show task board
-jonggrang review            # Code review
-jonggrang menu              # Interactive launcher with guided prompts
-make release                # Version bump + build (defaults to patch)
-make release BUMP=minor     # Minor version bump + build
-make build-binary           # Compile standalone Bun binary (BIN_OUT configurable)
+npx jonggrang init                          # Setup project (hooks, skills, config)
+npx jonggrang plan "feature"               # Decompose feature into tasks
+npx jonggrang work                         # Run work loop (spawns you for each task)
+npx jonggrang work --max-iterations 1      # Run one task only
+npx jonggrang work --task task-003         # Run a specific task
+npx jonggrang work --tool claude           # Override AI tool
+npx jonggrang orchestrate "description"   # Full 16-phase deterministic pipeline
+npx jonggrang orchestrate --resume        # Resume an interrupted orchestration
+npx jonggrang status                       # Show task board
+npx jonggrang review                       # Code review
+make release                               # Version bump + build (defaults to patch)
+make release BUMP=minor                    # Minor version bump + build
+make build-binary                          # Compile standalone binary
 ```
 
 If a task involves preparing a release, run the appropriate `make release*` target so both the root and client packages receive the version bump before rebuilding. Confirm which bump level (patch/minor/major) the user expects. For standalone distributions, compile via `make build-binary` and share the generated artifact under the desired `BIN_OUT` path.
