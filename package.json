@@ -1,6 +1,6 @@
 {
-  "name": "@porcupine/jonggrang",
-  "version": "1.0.0",
+  "name": "jonggrang",
+  "version": "0.1.4",
   "description": "Backend and frontend runner for Jonggrang UI",
   "license": "MIT",
   "main": "server.js",
@@ -33,5 +33,4 @@
     "express": "^4.21.2",
     "socket.io": "^4.8.1"
   }
-
 }

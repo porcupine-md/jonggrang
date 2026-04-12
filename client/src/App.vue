@@ -38,6 +38,15 @@ const showLogPanel = ref(true);
 const planDescription = ref('');
 const newTask = ref({ title: '', description: '', priority: 1 });
 
+// Parallel state
+const executionMode = ref('idle');
+const taskGroups = ref([]);
+const showMergePanel = ref(false);
+
+// Review page state
+const reviewView = ref(null);      // null or { groupId, branch, taskIds, diff, files, feedback }
+const reviewFeedback = ref('');
+
 // ============================================================
 // COMPUTED
 // ============================================================
@@ -46,9 +55,9 @@ const projectName = computed(() => projectConfig.value?.name || 'Jonggrang');
 const columns = computed(() => {
   const cols = [
     { key: 'pending', label: 'TODO', color: 'var(--text-muted)' },
-    { key: 'in_progress', label: 'IN PROGRESS', color: 'var(--blue)', include: ['in_progress', 'waiting'] },
-    { key: 'blocked', label: 'BLOCKED', color: 'var(--red)' },
+    { key: 'in_progress', label: 'IN PROGRESS', color: 'var(--blue)', include: ['in_progress', 'waiting', 'review'] },
     { key: 'completed', label: 'DONE', color: 'var(--green)' },
+    { key: 'blocked', label: 'BLOCKED', color: 'var(--red)' },
   ];
   return cols.map(col => {
     const statuses = col.include || [col.key];
@@ -125,7 +134,29 @@ const graphNodes = computed(() => {
 // SOCKET EVENTS
 // ============================================================
 onMounted(() => {
-  socket.on('jonggrang_status', (data) => { isJonggrangRunning.value = data.isRunning; });
+  socket.on('jonggrang_status', (data) => {
+    isJonggrangRunning.value = data.isRunning;
+    executionMode.value = data.mode || (data.isRunning ? 'sequential' : 'idle');
+  });
+
+  socket.on('group_status', (data) => {
+    const idx = taskGroups.value.findIndex(g => g.id === data.groupId);
+    if (idx >= 0) {
+      taskGroups.value[idx] = { ...taskGroups.value[idx], ...data };
+    } else {
+      taskGroups.value.push(data);
+    }
+  });
+
+  socket.on('parallel_complete', (data) => {
+    taskGroups.value = data.groups;
+    showMergePanel.value = true;
+  });
+
+  socket.on('group_review_complete', (data) => {
+    const g = taskGroups.value.find(g => g.id === data.groupId);
+    if (g) g.reviewDone = data.code === 0;
+  });
 
   socket.on('tasks_update', (data) => {
     if (data && data.tasks) {
@@ -293,7 +324,92 @@ async function startJonggrang(taskId) {
 }
 
 async function stopJonggrang() {
-  await apiPost('/api/jonggrang/stop');
+  if (executionMode.value === 'parallel') {
+    await apiPost('/api/jonggrang/stop-parallel');
+  } else {
+    await apiPost('/api/jonggrang/stop');
+  }
+}
+
+async function startParallel() {
+  logs.value = '';
+  logContentLength.value = 0;
+  if (terminalInstance.value) terminalInstance.value.clear();
+  taskGroups.value = [];
+  showMergePanel.value = false;
+  const tool = projectConfig.value?.tool || 'opencode';
+  const result = await apiPost('/api/jonggrang/start-parallel', { tool });
+  if (result.groups) taskGroups.value = result.groups.map(g => ({ ...g, status: 'running' }));
+}
+
+async function reviewGroup(groupId) {
+  await apiPost(`/api/jonggrang/groups/${groupId}/review`);
+}
+
+async function mergeGroup(groupId) {
+  await apiPost(`/api/jonggrang/groups/${groupId}/merge`);
+}
+
+async function mergeAll() {
+  await apiPost('/api/jonggrang/groups/merge-all');
+  showMergePanel.value = false;
+  taskGroups.value = [];
+}
+
+function groupForTask(taskId) {
+  return taskGroups.value.find(g => g.taskIds && g.taskIds.includes(taskId));
+}
+
+const GROUP_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#ec4899', '#06b6d4', '#84cc16'];
+function groupColor(taskId) {
+  const idx = taskGroups.value.findIndex(g => g.taskIds && g.taskIds.includes(taskId));
+  return idx >= 0 ? GROUP_COLORS[idx % GROUP_COLORS.length] : 'transparent';
+}
+
+async function openReviewPage(groupId) {
+  const group = taskGroups.value.find(g => g.id === groupId);
+  if (!group) return;
+  // Fetch diff from server
+  const res = await fetch(`/api/jonggrang/groups/${groupId}/diff`);
+  const data = await res.json();
+  reviewView.value = {
+    groupId,
+    branch: group.branch,
+    taskIds: group.taskIds || [],
+    diff: data.diff || '',
+    files: data.files || [],
+  };
+  reviewFeedback.value = '';
+}
+
+function closeReviewPage() {
+  reviewView.value = null;
+  reviewFeedback.value = '';
+}
+
+async function mergeFromReview() {
+  if (!reviewView.value) return;
+  await apiPost(`/api/jonggrang/groups/${reviewView.value.groupId}/merge`);
+  closeReviewPage();
+}
+
+async function reviseFromReview() {
+  if (!reviewView.value || !reviewFeedback.value.trim()) return;
+  logs.value = '';
+  logContentLength.value = 0;
+  if (terminalInstance.value) terminalInstance.value.clear();
+  await apiPost(`/api/jonggrang/groups/${reviewView.value.groupId}/revise`, {
+    feedback: reviewFeedback.value,
+  });
+  reviewFeedback.value = '';
+  // Refresh diff after revision
+  setTimeout(() => openReviewPage(reviewView.value.groupId), 2000);
+}
+
+async function cancelFromReview() {
+  if (!reviewView.value) return;
+  await apiPost(`/api/jonggrang/groups/${reviewView.value.groupId}/cancel`);
+  closeReviewPage();
 }
 
 async function startPlan() {
@@ -342,11 +458,24 @@ function renderMarkdown(text) {
   return marked.parse(text, { breaks: true });
 }
 
+function formatDiff(diff) {
+  if (!diff) return '';
+  return diff.split('\n').map(line => {
+    const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (line.startsWith('+') && !line.startsWith('+++')) return `<span class="diff-add">${escaped}</span>`;
+    if (line.startsWith('-') && !line.startsWith('---')) return `<span class="diff-del">${escaped}</span>`;
+    if (line.startsWith('@@')) return `<span class="diff-hunk">${escaped}</span>`;
+    if (line.startsWith('diff ') || line.startsWith('index ')) return `<span class="diff-meta">${escaped}</span>`;
+    return escaped;
+  }).join('\n');
+}
+
 function statusIcon(status) {
   switch (status) {
     case 'completed': return CheckCircle2Icon;
     case 'in_progress': return Loader2Icon;
     case 'waiting': return ClockIcon;
+    case 'review': return EyeIcon;
     case 'blocked': return CircleAlertIcon;
     default: return CircleIcon;
   }
@@ -357,6 +486,7 @@ function statusColor(status) {
     case 'completed': return 'var(--green)';
     case 'in_progress': return 'var(--blue)';
     case 'waiting': return 'var(--yellow)';
+    case 'review': return 'var(--yellow)';
     case 'blocked': return 'var(--red)';
     default: return 'var(--text-muted)';
   }
@@ -410,22 +540,23 @@ function onDrop(e, columnKey) {
         </button>
         <div class="separator"></div>
 
-        <button
-          v-if="!isJonggrangRunning"
-          class="run-btn"
-          @click="startJonggrang()"
-        >
-          <PlayIcon :size="13" />
-          <span>Run</span>
-          <span class="run-branch" v-if="branchName">{{ branchName }}</span>
-        </button>
-        <button
-          v-else
-          class="stop-btn"
-          @click="stopJonggrang"
-        >
+        <template v-if="!isJonggrangRunning">
+          <button class="run-btn" @click="startJonggrang()">
+            <PlayIcon :size="13" />
+            <span>Run</span>
+          </button>
+          <button class="run-btn parallel-btn" @click="startParallel()">
+            <GitBranchIcon :size="13" />
+            <span>Parallel</span>
+          </button>
+        </template>
+        <button v-else class="stop-btn" @click="stopJonggrang">
           <SquareIcon :size="12" />
           <span>Stop</span>
+        </button>
+        <button v-if="taskGroups.length > 0 && !isJonggrangRunning" class="merge-trigger-btn" @click="showMergePanel = !showMergePanel" title="Merge groups">
+          <GitBranchIcon :size="13" />
+          <span>Merge</span>
         </button>
       </div>
 
@@ -445,8 +576,99 @@ function onDrop(e, columnKey) {
       <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
     </div>
 
+    <!-- GROUP STATUS STRIP -->
+    <div class="groups-strip" v-if="taskGroups.length > 0">
+      <div v-for="(group, i) in taskGroups" :key="group.id"
+        class="group-pill" :class="group.status"
+        :style="{ borderColor: GROUP_COLORS[i % GROUP_COLORS.length] }">
+        <span class="group-pill-dot" :style="{ background: GROUP_COLORS[i % GROUP_COLORS.length] }"></span>
+        {{ group.id }}
+        <span class="group-pill-status">{{ group.status }}</span>
+      </div>
+    </div>
+
+    <!-- ==================== REVIEW PAGE ==================== -->
+    <div v-if="reviewView" class="review-page">
+      <div class="review-topbar">
+        <div class="review-topbar-left">
+          <button class="btn btn-ghost btn-sm" @click="closeReviewPage">
+            <XIcon :size="14" /> Back
+          </button>
+          <div class="review-branch-info">
+            <GitBranchIcon :size="14" />
+            <span class="mono">{{ reviewView.branch }}</span>
+          </div>
+          <span class="review-file-count">{{ reviewView.files.length }} files changed</span>
+        </div>
+        <div class="review-topbar-actions">
+          <button class="btn btn-danger btn-sm" @click="cancelFromReview">
+            <XIcon :size="12" /> Cancel Changes
+          </button>
+          <button class="btn btn-primary btn-sm" @click="mergeFromReview">
+            <GitBranchIcon :size="12" /> Merge
+          </button>
+        </div>
+      </div>
+
+      <div class="review-layout">
+        <!-- File list sidebar -->
+        <div class="review-files">
+          <div class="review-files-header">Changed Files</div>
+          <div v-for="f in reviewView.files" :key="f" class="review-file-item">
+            <FileTextIcon :size="12" />
+            <span>{{ f }}</span>
+          </div>
+          <div v-if="!reviewView.files.length" class="review-files-empty">No files</div>
+
+          <!-- Task list -->
+          <div class="review-files-header" style="margin-top: 16px;">Tasks</div>
+          <div v-for="tid in reviewView.taskIds" :key="tid" class="review-file-item">
+            <CheckCircle2Icon :size="12" style="color: var(--green)" />
+            <span>{{ tid }}</span>
+          </div>
+        </div>
+
+        <!-- Diff view -->
+        <div class="review-diff">
+          <pre class="review-diff-content"><code v-html="formatDiff(reviewView.diff)"></code></pre>
+          <div v-if="!reviewView.diff" class="review-diff-empty">No changes to display</div>
+        </div>
+
+        <!-- Feedback panel -->
+        <div class="review-feedback">
+          <div class="review-feedback-header">
+            <SearchIcon :size="13" />
+            <span>Feedback</span>
+          </div>
+          <div class="review-feedback-body">
+            <div class="review-feedback-hint">Give feedback to revise this group's changes. The AI will apply your notes in the worktree.</div>
+            <textarea
+              v-model="reviewFeedback"
+              class="review-feedback-input"
+              placeholder="e.g. rename the function, add error handling, fix the test..."
+              rows="4"
+            ></textarea>
+            <button class="btn btn-primary" @click="reviseFromReview" :disabled="!reviewFeedback.trim() || isJonggrangRunning" style="width:100%">
+              <ZapIcon :size="13" />
+              Send Revision
+            </button>
+          </div>
+
+          <!-- Log output -->
+          <div class="review-feedback-header" style="margin-top: 12px;">
+            <BookOpenIcon :size="13" />
+            <span>Agent Output</span>
+            <div class="log-indicator" :class="{ active: isJonggrangRunning }"></div>
+          </div>
+          <div class="review-log-content">
+            <div ref="logTerminalEl" class="xterm-container"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ==================== MAIN CONTENT ==================== -->
-    <div class="main-layout">
+    <div class="main-layout" v-show="!reviewView">
       <!-- KANBAN VIEW -->
       <div v-if="currentView === 'kanban'" class="kanban-wrapper">
         <div class="kanban">
@@ -476,7 +698,7 @@ function onDrop(e, columnKey) {
                   @dragstart="(e) => onDragStart(e, task)"
                   @click="selectTask(task)"
                 >
-                  <div class="card-indicator" :style="{ background: statusColor(task.status) }"></div>
+                  <div class="card-indicator" :style="{ background: groupForTask(task.id) ? groupColor(task.id) : statusColor(task.status) }"></div>
                   <div class="card-body">
                     <h4 class="card-title">{{ task.title }}</h4>
                     <p class="card-desc" v-if="task.description && task.description !== task.title">{{ task.description }}</p>
@@ -485,10 +707,19 @@ function onDrop(e, columnKey) {
                       <span class="card-skill" v-if="task.skill">{{ task.skill }}</span>
                     </div>
                     <div class="card-actions">
-                      <span class="card-status-tag" :style="{ color: statusColor(task.status), background: task.status === 'completed' ? 'var(--green-muted)' : task.status === 'in_progress' ? 'var(--blue-muted)' : task.status === 'waiting' ? 'var(--yellow-muted)' : task.status === 'blocked' ? 'var(--red-muted)' : 'rgba(255,255,255,0.05)' }">
-                        {{ task.status === 'in_progress' ? 'In Progress' : task.status === 'pending' ? 'Ready' : task.status === 'waiting' ? 'Waiting' : task.status.charAt(0).toUpperCase() + task.status.slice(1) }}
+                      <span class="card-status-tag" :style="{ color: statusColor(task.status), background: task.status === 'completed' ? 'var(--green-muted)' : task.status === 'in_progress' ? 'var(--blue-muted)' : task.status === 'waiting' ? 'var(--yellow-muted)' : task.status === 'review' ? 'var(--yellow-muted)' : task.status === 'blocked' ? 'var(--red-muted)' : 'rgba(255,255,255,0.05)' }">
+                        {{ task.status === 'in_progress' ? 'In Progress' : task.status === 'pending' ? 'Ready' : task.status === 'waiting' ? 'Waiting' : task.status === 'review' ? 'Review' : task.status.charAt(0).toUpperCase() + task.status.slice(1) }}
                       </span>
                       <div class="card-btns">
+                        <button
+                          v-if="task.status === 'review' && groupForTask(task.id)"
+                          class="card-btn review-btn"
+                          @click.stop="openReviewPage(groupForTask(task.id).id)"
+                          title="Review changes"
+                        >
+                          <EyeIcon :size="12" />
+                          Review
+                        </button>
                         <button
                           v-if="task.status === 'pending'"
                           class="card-btn start-btn"
@@ -500,7 +731,7 @@ function onDrop(e, columnKey) {
                           Start
                         </button>
                         <button
-                          v-if="task.status !== 'completed'"
+                          v-if="task.status !== 'completed' && task.status !== 'review'"
                           class="card-btn delete-btn"
                           @click.stop="deleteTask(task.id)"
                           title="Delete task"
@@ -728,6 +959,47 @@ function onDrop(e, columnKey) {
         </div>
       </div>
     </Teleport>
+
+    <!-- ==================== MERGE PANEL ==================== -->
+    <Teleport to="body">
+      <div v-if="showMergePanel" class="modal-overlay" @click.self="showMergePanel = false">
+        <div class="modal modal-wide">
+          <div class="modal-header">
+            <h3>Review & Merge Groups</h3>
+            <button class="modal-close" @click="showMergePanel = false"><XIcon :size="16" /></button>
+          </div>
+          <div class="modal-body">
+            <div v-for="(group, i) in taskGroups" :key="group.id" class="merge-group-row">
+              <div class="merge-group-info">
+                <span class="merge-group-dot" :style="{ background: GROUP_COLORS[i % GROUP_COLORS.length] }"></span>
+                <div>
+                  <strong>{{ group.id }}</strong>
+                  <span class="merge-group-branch" v-if="group.branch">{{ group.branch }}</span>
+                  <span class="merge-group-status" :class="group.status">{{ group.status }}</span>
+                </div>
+              </div>
+              <div class="merge-group-tasks">
+                <span v-for="id in (group.taskIds || [])" :key="id" class="detail-tag">{{ id }}</span>
+              </div>
+              <div class="merge-group-actions">
+                <button class="btn btn-ghost btn-sm" @click="reviewGroup(group.id)" :disabled="group.status === 'merged'">
+                  <EyeIcon :size="12" /> Review
+                </button>
+                <button class="btn btn-primary btn-sm" @click="mergeGroup(group.id)" :disabled="group.status === 'merged'">
+                  <GitBranchIcon :size="12" /> Merge
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="showMergePanel = false">Close</button>
+            <button class="btn btn-primary" @click="mergeAll">
+              <GitBranchIcon :size="14" /> Merge All
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -842,6 +1114,30 @@ function onDrop(e, columnKey) {
 .run-btn:hover {
   background: rgba(16, 185, 129, 0.25);
   border-color: var(--green);
+}
+.parallel-btn {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.parallel-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: var(--blue);
+}
+.merge-trigger-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  background: var(--yellow-muted);
+  color: var(--yellow-text);
+  cursor: pointer;
+}
+.merge-trigger-btn:hover {
+  background: rgba(245, 158, 11, 0.25);
 }
 .run-branch {
   font-size: 11px;
@@ -1609,4 +1905,258 @@ function onDrop(e, columnKey) {
   color: var(--red-text);
 }
 .btn-danger:hover { background: rgba(239, 68, 68, 0.2); }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+.review-btn {
+  background: var(--yellow-muted);
+  color: var(--yellow-text);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+.review-btn:hover { background: rgba(245, 158, 11, 0.25); }
+
+/* ==================== REVIEW PAGE ==================== */
+.review-page {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg-base);
+  display: flex;
+  flex-direction: column;
+}
+.review-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+}
+.review-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.review-branch-info {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.review-file-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 8px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 10px;
+}
+.review-topbar-actions {
+  display: flex;
+  gap: 8px;
+}
+.review-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.review-files {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-subtle);
+  overflow-y: auto;
+  padding: 8px 0;
+  background: var(--bg-surface);
+}
+.review-files-header {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  padding: 8px 12px 4px;
+}
+.review-file-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  cursor: default;
+}
+.review-file-item:hover { background: rgba(255,255,255,0.04); }
+.review-files-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 8px 12px;
+}
+.review-diff {
+  flex: 1;
+  overflow: auto;
+  min-width: 0;
+}
+.review-diff-content {
+  margin: 0;
+  padding: 12px 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre;
+  tab-size: 4;
+}
+.review-diff-content :deep(.diff-add) { color: #4ade80; background: rgba(74, 222, 128, 0.08); display: inline-block; width: 100%; }
+.review-diff-content :deep(.diff-del) { color: #f87171; background: rgba(248, 113, 113, 0.08); display: inline-block; width: 100%; }
+.review-diff-content :deep(.diff-hunk) { color: #60a5fa; font-weight: 600; }
+.review-diff-content :deep(.diff-meta) { color: var(--text-muted); font-weight: 600; }
+.review-diff-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.review-feedback {
+  width: 300px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+}
+.review-feedback-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.review-feedback-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.review-feedback-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.review-feedback-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 8px;
+  resize: vertical;
+}
+.review-feedback-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.review-log-content {
+  flex: 1;
+  min-height: 120px;
+  position: relative;
+  display: flex;
+}
+
+/* ==================== GROUPS STRIP ==================== */
+.groups-strip {
+  display: flex;
+  gap: 6px;
+  padding: 6px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+.group-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid;
+  color: var(--text-secondary);
+}
+.group-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.group-pill-status {
+  font-weight: 400;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+}
+.group-pill.running .group-pill-dot { animation: log-pulse 1.5s ease-in-out infinite; }
+.group-pill.done { opacity: 0.6; }
+.group-pill.merged { opacity: 0.4; }
+
+/* ==================== MERGE PANEL ==================== */
+.merge-group-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.merge-group-row:last-child { border-bottom: none; }
+.merge-group-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 160px;
+}
+.merge-group-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.merge-group-branch {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  display: block;
+}
+.merge-group-status {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-left: 6px;
+}
+.merge-group-status.done { color: var(--green); }
+.merge-group-status.failed { color: var(--red); }
+.merge-group-status.merged { color: var(--text-muted); }
+.merge-group-status.running { color: var(--blue); }
+.merge-group-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  flex: 1;
+}
+.merge-group-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
 </style>

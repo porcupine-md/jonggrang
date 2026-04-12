@@ -41,13 +41,13 @@ You describe what you want
 ## Install
 
 ```bash
-npx @porcupine/jonggrang init
+npx jonggrang init
 ```
 
 Or install globally:
 
 ```bash
-npm install -g @porcupine/jonggrang
+npm install -g jonggrang
 jonggrang init
 ```
 
