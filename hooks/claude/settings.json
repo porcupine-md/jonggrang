@@ -2,10 +2,25 @@
   "_comment": "Jonggrang Claude Code hook settings. Copied to .claude/settings.json during jonggrang init.",
   "_note": "JONGGRANG_HOOKS_DIR is replaced with actual path during installation.",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/session-init.sh\""
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Task",
         "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/task-role-claim.sh\""
+          },
           {
             "type": "command",
             "command": "bash \"JONGGRANG_HOOKS_DIR/compaction-gate.sh\""
@@ -29,6 +44,15 @@
           {
             "type": "command",
             "command": "bash \"JONGGRANG_HOOKS_DIR/track-modifications.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/task-skill-enforcement.sh\""
           }
         ]
       }

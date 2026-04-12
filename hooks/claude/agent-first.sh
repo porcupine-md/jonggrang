@@ -50,10 +50,17 @@ fi
 AGENT_EXISTS=$(jq -r --arg domain "$domain" '.[$domain] // "none"' "$AGENTS_CONFIG" 2>/dev/null || echo "none")
 
 if [[ "$AGENT_EXISTS" != "none" && "$AGENT_EXISTS" != "" ]]; then
-  # Check if we're running AS the specialized agent (prevent self-blocking)
-  CURRENT_ROLE=$(echo "$INPUT" | jq -r '.agent_role // ""')
-  if [[ "$CURRENT_ROLE" == "developer" || "$CURRENT_ROLE" == "tester" ]]; then
-    exit 0
+  # Check if we're running AS a specialized agent (prevent self-blocking).
+  # session-init.sh registers session_id → role in session-roles.json when each session starts.
+  SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // ""')
+  if [[ -n "$SESSION_ID" ]]; then
+    SESSION_ROLES="$PROJECT_ROOT/.jonggrang/.ephemeral/session-roles.json"
+    if [[ -f "$SESSION_ROLES" ]]; then
+      SESSION_ROLE=$(jq -r --arg sid "$SESSION_ID" '.[$sid] // ""' "$SESSION_ROLES" 2>/dev/null || echo "")
+      if [[ "$SESSION_ROLE" == "developer" || "$SESSION_ROLE" == "tester" ]]; then
+        exit 0
+      fi
+    fi
   fi
 
   echo "AGENT-FIRST ENFORCEMENT: Cannot edit $FILE_PATH directly."

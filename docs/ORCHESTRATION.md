@@ -185,8 +185,11 @@ We enforce token hygiene programmatically. Before entering heavy execution phase
 The compaction gate reads session transcripts to calculate usage:
 
 ```bash
-# Session transcript location
+# Session transcript location (Claude Code internal — read-only)
 ~/.claude/projects/<project-hash>/<session-id>.jsonl
+
+# Compaction state cache (refreshed every 5 minutes)
+.jonggrang/.ephemeral/compaction-state.json
 
 # Current context = cache_read + cache_create + input
 # 200K context window → thresholds:
@@ -200,13 +203,13 @@ The compaction gate reads session transcripts to calculate usage:
 To survive session resets and context exhaustion, state is persisted to disk:
 
 1. **The Process Control Block (`MANIFEST.yaml`):**
-   - Located in `.claude/.output/features/{id}/`
+   - Located in `.jonggrang/.output/features/{id}/`
    - Tracks current phase, active agents, and validation status
    - Allows orchestration to be "resumed" across different chat sessions
 
 2. **Distributed File Locking:**
    - When multiple `developer` agents run in parallel
-   - Utilizes lockfile mechanism (`.claude/locks/{agent}.lock`)
+   - Utilizes lockfile mechanism (`.jonggrang/locks/{agent}.lock`)
    - Prevents race conditions on shared source files
 
 ### 4.5 The Five-Role Development Pattern
@@ -296,11 +299,11 @@ While Skills provide guidance, **Hooks provide enforcement**. We utilize lifecyc
 | LAYER 1: CLAUDE.md | Full ruleset loaded at session start. Establishes norms. |
 | LAYER 2: Skills | Procedural workflows invoked on-demand. "How to do X." |
 | LAYER 3: Agent Definitions | Role-specific behavior, mandatory skill lists, output formats. |
-| LAYER 4: UserPromptSubmit Hooks | Inject reminders every prompt. Gateway → library skill pattern. |
-| LAYER 5: PreToolUse Hooks | Block BEFORE action. Agent-first enforcement, compaction gates. |
-| LAYER 6: PostToolUse Hooks | Validate agent work before completion. Output location, skill compliance. |
-| LAYER 7: SubagentStop Hooks | Block premature exit. Quality gates, iteration limits, feedback loops. |
-| LAYER 8: Stop Hooks | Block premature exit. Quality gates, iteration limits, feedback loops. |
+| LAYER 4: UserPromptSubmit Hooks | `session-init.sh` — registers session identity (developer/tester) from pending-roles queue. |
+| LAYER 5: PreToolUse Hooks | `task-role-claim.sh` — queues expected role before agent spawn. `agent-first.sh` + `compaction-gate.sh` — block direct edits and context-exhausted spawns. |
+| LAYER 6: PostToolUse Hooks | `track-modifications.sh` — sets dirty bit. `task-skill-enforcement.sh` — warns on missing output persistence (non-blocking). |
+| LAYER 7: SubagentStop Hooks | `output-enforcement.sh` — blocks premature exit if output files scattered outside `.jonggrang/.output/`. |
+| LAYER 8: Stop Hooks | `feedback-loop.sh` + `quality-gate.sh` — block exit until all domains pass review and testing. |
 
 **Example:** A developer agent writes code without spawning a reviewer:
 
@@ -393,8 +396,10 @@ Claude: Spawns backend-developer with clear task
 
 | Type | Storage | Purpose | Lifespan |
 |------|---------|---------|----------|
-| Ephemeral State | feedback-loop-state.json | Runtime Enforcement (blocking exit, tracking dirty bits) | Cleared on session restart |
-| Persistent State | MANIFEST.yaml | Workflow Coordination (resuming tasks, tracking phases) | Survives session restarts |
+| Ephemeral State | `.jonggrang/.ephemeral/feedback-loop-state.json` | Runtime Enforcement (blocking exit, tracking dirty bits) | Cleared on session restart |
+| Ephemeral State | `.jonggrang/.ephemeral/session-roles.json` | Session identity registry (developer/tester self-identification) | Cleared on session restart |
+| Persistent State | `.jonggrang/.output/features/{id}/MANIFEST.yaml` | Workflow Coordination (resuming tasks, tracking phases) | Survives session restarts |
+| Persistent State | `.jonggrang/locks/{agent}.lock` | Distributed file locking (parallel agent race prevention) | Released on agent completion |
 
 ### 5.5 The Escalation Advisor
 
@@ -415,14 +420,14 @@ Three-layer enforcement for output compliance:
 - Non-blocking feedback to orchestrator
 
 **LAYER 2: SubagentStop – BLOCKING**
-- `output-location-enforcement.sh`
-- Detects untracked .md files outside .claude/.output/
+- `output-enforcement.sh`
+- Detects untracked .md files outside `.jonggrang/.output/`
 - Checks skill compliance in file content
 - Analyzes git state for safe vs manual revert
 - BLOCKS completion if violations found
 
 **LAYER 3: Stop – DEFENSE IN DEPTH**
-- `quality-gate-stop.sh`
+- `quality-gate.sh`
 - Same detection as Layer 2
 - Catches anything that slipped through SubagentStop
 
