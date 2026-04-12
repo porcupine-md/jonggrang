@@ -1,8 +1,12 @@
 ---
+description: Specialized Reviewer — reads and audits code, never modifies files
+mode: subagent
+permission:
+  edit: deny
+  bash: allow
+  webfetch: allow
 role: reviewer
 label: Specialized Reviewer
-tools: [Read, Bash]
-forbidden_tools: [Edit, Write, Task]
 output_format: review_report_json
 completion_signal: REVIEW_COMPLETE
 max_lines: 150

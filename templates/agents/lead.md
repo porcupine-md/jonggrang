@@ -1,8 +1,12 @@
 ---
+description: Specialized Lead — designs and decomposes tasks, never writes source code
+mode: subagent
+permission:
+  edit: deny
+  bash: deny
+  webfetch: allow
 role: lead
 label: Specialized Lead
-tools: [Task, Read, TodoWrite]
-forbidden_tools: [Edit, Write, Bash]
 output_format: architecture_plan_json
 completion_signal: ARCHITECTURE_PLAN_COMPLETE
 max_lines: 150

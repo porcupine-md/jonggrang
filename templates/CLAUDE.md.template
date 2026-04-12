@@ -5,21 +5,21 @@ This project is managed by **Jonggrang**, an AI development workflow orchestrato
 ## Before You Start
 
 Read these files in order:
-1. `SKILL.md` — Full agent protocol (how to execute tasks)
+1. `.claude/SKILL.md` — Full agent protocol (how to execute tasks)
 2. `AGENTS.md` — Project-specific conventions and patterns
-3. `progress.txt` — Learnings from previous sessions
-4. `jonggrang-tasks.json` — Your task assignment
-5. `jonggrang.json` — Project config
+3. `.jonggrang/progress.txt` — Learnings from previous sessions
+4. `.jonggrang/jonggrang-tasks.json` — Your task assignment
+5. `.jonggrang/jonggrang.json` — Project config
 
 ## Quick Protocol
 
 1. Read context files above
-2. Find your task in `jonggrang-tasks.json` (status: `in_progress`)
-3. If task has `"skill"` field, read `skills/<skill>/SKILL.md`
+2. Find your task in `.jonggrang/jonggrang-tasks.json` (status: `in_progress`)
+3. If task has `"skill"` field, read `.claude/skills/<skill>/SKILL.md`
 4. Implement the task following AGENTS.md conventions
 5. Run validation: typecheck, tests, lint
-6. Update `jonggrang-tasks.json` (status: completed, passes: true)
-7. Append learnings to `progress.txt`
+6. Update `.jonggrang/jonggrang-tasks.json` (status: completed, passes: true)
+7. Append learnings to `.jonggrang/progress.txt`
 8. Commit with: `git commit -m "type(scope): description"`
 
 ## Project Info
@@ -35,4 +35,4 @@ Read these files in order:
 - Follow patterns in AGENTS.md
 - One atomic commit per task
 - Do not skip validation
-- Log discoveries in progress.txt
+- Log discoveries in `.jonggrang/progress.txt`

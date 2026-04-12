@@ -9,282 +9,215 @@ import {
   PlayIcon, SquareIcon, LayoutGridIcon, GitBranchIcon,
   PlusIcon, XIcon, CheckCircle2Icon, CircleDotIcon,
   CircleIcon, CircleAlertIcon, PencilIcon, TrashIcon,
-  ChevronDownIcon, SettingsIcon, FileTextIcon,
-  SearchIcon, ZapIcon, EyeIcon, ArrowRightIcon,
-  ClockIcon, Loader2Icon, BookOpenIcon,
+  ChevronDownIcon, FileTextIcon, EyeIcon, ZapIcon,
+  ClockIcon, Loader2Icon, BookOpenIcon, ActivityIcon,
 } from 'lucide-vue-next';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { marked } from 'marked';
 
 const socket = io({ transports: ['websocket'] });
 
-// ============================================================
-// STATE
-// ============================================================
-const isJonggrangRunning = ref(false);
-const logs = ref('');
-const rawTasks = ref([]);
-const featureName = ref('');
-const branchName = ref('');
+// ── STATE ─────────────────────────────────────────────────────
+const isRunning     = ref(false);
+const logs          = ref('');
+const rawTasks      = ref([]);
 const projectConfig = ref(null);
 
-// UI state
-const currentView = ref('kanban'); // 'kanban' | 'graph'
-const selectedTask = ref(null);
+// UI
+const currentView    = ref('kanban'); // 'kanban' | 'graph'
+const selectedTask   = ref(null);
+const showLogPanel   = ref(true);
 const showNewTaskForm = ref(false);
-const showPlanModal = ref(false);
-const showLogPanel = ref(true);
-const planDescription = ref('');
-const newTask = ref({ title: '', description: '', priority: 1 });
+const showPlanModal  = ref(false);
+const showWorkModal  = ref(false);
+const newTask        = ref({ title: '', description: '', priority: 1 });
+const planDesc       = ref('');
+const workDesc       = ref('');
 
-// Parallel state
-const executionMode = ref('idle');
-const taskGroups = ref([]);
-const showMergePanel = ref(false);
+// Pipeline / manifest
+const manifests       = ref([]);
+const activeManifest  = ref(null);
+const compactionState = ref(null);
+let   manifestPollTimer = null;
 
-// Review page state
-const reviewView = ref(null);      // null or { groupId, branch, taskIds, diff, files, feedback }
-const reviewFeedback = ref('');
+// Phase UI definitions
+const PHASES_UI = {
+  1:  { name: 'Setup',        role: null },
+  2:  { name: 'Triage',       role: null },
+  3:  { name: 'Discovery',    role: null },
+  4:  { name: 'Skill Map',    role: null },
+  5:  { name: 'Complexity',   role: 'lead' },
+  6:  { name: 'Brainstorm',   role: 'lead' },
+  7:  { name: 'Architect',    role: 'lead' },
+  8:  { name: 'Implement',    role: 'developer' },
+  9:  { name: 'Design Check', role: 'reviewer' },
+  10: { name: 'Compliance',   role: 'reviewer' },
+  11: { name: 'Quality',      role: 'reviewer' },
+  12: { name: 'Test Plan',    role: 'test-lead' },
+  13: { name: 'Testing',      role: 'tester' },
+  14: { name: 'Coverage',     role: 'tester' },
+  15: { name: 'Test Quality', role: 'reviewer' },
+  16: { name: 'Complete',     role: 'lead' },
+};
+const ROLE_COLORS = {
+  lead: '#8b5cf6', developer: '#3b82f6',
+  reviewer: '#f59e0b', 'test-lead': '#06b6d4', tester: '#10b981',
+};
+const WORK_TYPE_COLORS = {
+  BUGFIX: '#ef4444', SMALL: '#10b981', MEDIUM: '#f59e0b', LARGE: '#8b5cf6',
+};
 
-// ============================================================
-// COMPUTED
-// ============================================================
+// ── COMPUTED ──────────────────────────────────────────────────
 const projectName = computed(() => projectConfig.value?.name || 'Jonggrang');
 
-const columns = computed(() => {
-  const cols = [
-    { key: 'pending', label: 'TODO', color: 'var(--text-muted)' },
-    { key: 'in_progress', label: 'IN PROGRESS', color: 'var(--blue)', include: ['in_progress', 'waiting', 'review'] },
-    { key: 'completed', label: 'DONE', color: 'var(--green)' },
-    { key: 'blocked', label: 'BLOCKED', color: 'var(--red)' },
-  ];
-  return cols.map(col => {
-    const statuses = col.include || [col.key];
-    const tasks = rawTasks.value.filter(t => statuses.includes(t.status));
-    return { ...col, tasks, count: tasks.length };
-  });
+const columns = computed(() => [
+  { key: 'pending',    label: 'TODO',        include: ['pending'] },
+  { key: 'in_progress',label: 'IN PROGRESS', include: ['in_progress', 'waiting', 'review'] },
+  { key: 'completed',  label: 'DONE',        include: ['completed'] },
+  { key: 'blocked',    label: 'BLOCKED',     include: ['blocked'] },
+].map(col => ({
+  ...col,
+  tasks: rawTasks.value.filter(t => col.include.includes(t.status)),
+  count: rawTasks.value.filter(t => col.include.includes(t.status)).length,
+})));
+
+const totalTasks     = computed(() => rawTasks.value.length);
+const completedTasks = computed(() => rawTasks.value.filter(t => t.status === 'completed').length);
+const progressPct    = computed(() =>
+  totalTasks.value === 0 ? 0 : Math.round((completedTasks.value / totalTasks.value) * 100)
+);
+
+const ctxPct = computed(() =>
+  compactionState.value?.ratio != null ? Math.round(compactionState.value.ratio * 100) : null
+);
+
+// Work type preview (live as user types)
+const workType = computed(() => {
+  const d = workDesc.value.trim().toLowerCase();
+  if (!d) return null;
+  const isBugfix = /\b(fix|bug|broken|crash|typo|hotfix|regression)\b/.test(d) ||
+    /\berror\b(?!\s*(message|handling|response|code|log|output|format))/.test(d);
+  if (isBugfix) return 'BUGFIX';
+  const isLarge = /\b(subsystem|architecture|refactor|migrate|overhaul|redesign|platform|infrastructure|framework)\b/.test(d) ||
+    /\b(authentication|authorization|auth system|checkout|billing|subscription)\b/.test(d) ||
+    /\bpayment\b.{0,40}\b(flow|system|integration|gateway|processor|webhook)\b/.test(d) ||
+    (d.match(/,/g) || []).length >= 3;
+  if (isLarge) return 'LARGE';
+  const isMedium = /\b(implement|build|create|develop|setup|integrate)\b.{0,80}\b(with|including|plus)\b/.test(d) ||
+    /\b(module|service|flow|handler|integration|pipeline|workflow)\b/.test(d);
+  if (isMedium) return 'MEDIUM';
+  return 'SMALL';
 });
 
-const totalTasks = computed(() => rawTasks.value.length);
-const completedTasks = computed(() => rawTasks.value.filter(t => t.status === 'completed').length);
-const progressPercent = computed(() => totalTasks.value === 0 ? 0 : Math.round((completedTasks.value / totalTasks.value) * 100));
+// Active pipeline (most recent running or last completed)
+const pipelineManifest = computed(() => activeManifest.value?.manifest ?? null);
+const pipelineRunning  = computed(() =>
+  ['running', 'in_progress'].includes(pipelineManifest.value?.status)
+);
 
-// ============================================================
-// GRAPH VIEW
-// ============================================================
+// Phase grid rows (4-per-row)
+const phaseRows = computed(() => {
+  const m = pipelineManifest.value;
+  if (!m) return [];
+  const nums = Object.keys(PHASES_UI).map(Number);
+  const rows = [];
+  for (let i = 0; i < nums.length; i += 4) {
+    rows.push(nums.slice(i, i + 4).map(n => {
+      const active   = m.active_phases?.includes(n);
+      const status   = m.phases?.[n]?.status || 'pending';
+      const isCurrent = m.current_phase === n;
+      return { n, ...PHASES_UI[n], active, status, isCurrent };
+    }));
+  }
+  return rows;
+});
+
+const qualityGates = computed(() => {
+  const v = pipelineManifest.value?.validation || {};
+  return [
+    { label: 'Review',   ok: v.review_passed },
+    { label: 'Tests',    ok: v.tests_passed },
+    { label: 'Coverage', ok: v.coverage_met },
+  ];
+});
+
+// ── GRAPH ─────────────────────────────────────────────────────
 const graphNodes = computed(() => {
   const tasks = rawTasks.value;
   const nodes = [];
   const edges = [];
   const levelMap = new Map();
   const nodeLevels = new Map();
-
   const roots = tasks.filter(t => !t.blocked_by || t.blocked_by.length === 0);
-
-  function assignLevel(taskId, level) {
-    const current = nodeLevels.get(taskId);
-    if (current === undefined || current < level) {
-      nodeLevels.set(taskId, level);
-      const children = tasks.filter(t => t.blocked_by && t.blocked_by.includes(taskId));
-      children.forEach(c => assignLevel(c.id, level + 1));
+  function assignLevel(id, lvl) {
+    if ((nodeLevels.get(id) ?? -1) < lvl) {
+      nodeLevels.set(id, lvl);
+      tasks.filter(t => t.blocked_by?.includes(id)).forEach(c => assignLevel(c.id, lvl + 1));
     }
   }
   roots.forEach(r => assignLevel(r.id, 0));
-
-  // Vertical layout: y = level (row), x = staggered per row
   tasks.forEach(task => {
-    const level = nodeLevels.get(task.id) ?? 0;
-    const sameLevelNodes = levelMap.get(level) || [];
-    const col = sameLevelNodes.length;
-    // Stagger: odd rows offset right, multiple nodes spread horizontally
-    const baseX = col * 260;
-    const offset = (level % 2 === 1) ? 100 : 0;
-    const x = baseX + offset + 60;
-    const y = level * 140 + 60;
-    levelMap.set(level, [...sameLevelNodes, task]);
-
-    nodes.push({
-      id: task.id,
-      position: { x, y },
-      data: { ...task },
-      type: 'taskNode',
-    });
-
-    if (task.blocked_by) {
-      task.blocked_by.forEach(blocker => {
-        edges.push({
-          id: `e-${blocker}-${task.id}`,
-          source: blocker,
-          target: task.id,
-          animated: task.status === 'in_progress',
-          style: {
-            stroke: task.status === 'completed' ? 'var(--green)' : 'rgba(255,255,255,0.12)',
-            strokeWidth: 2,
-          },
-        });
+    const lvl  = nodeLevels.get(task.id) ?? 0;
+    const col  = (levelMap.get(lvl) || []).length;
+    const x    = col * 260 + (lvl % 2 === 1 ? 100 : 0) + 60;
+    const y    = lvl * 140 + 60;
+    levelMap.set(lvl, [...(levelMap.get(lvl) || []), task]);
+    nodes.push({ id: task.id, position: { x, y }, data: { ...task }, type: 'taskNode' });
+    (task.blocked_by || []).forEach(blocker => {
+      edges.push({
+        id: `e-${blocker}-${task.id}`,
+        source: blocker, target: task.id,
+        animated: task.status === 'in_progress',
+        style: { stroke: task.status === 'completed' ? 'var(--green)' : 'rgba(255,255,255,0.12)', strokeWidth: 2 },
       });
-    }
+    });
   });
-
   return { nodes, edges };
 });
 
-// ============================================================
-// SOCKET EVENTS
-// ============================================================
-onMounted(() => {
-  socket.on('jonggrang_status', (data) => {
-    isJonggrangRunning.value = data.isRunning;
-    executionMode.value = data.mode || (data.isRunning ? 'sequential' : 'idle');
-  });
-
-  socket.on('group_status', (data) => {
-    const idx = taskGroups.value.findIndex(g => g.id === data.groupId);
-    if (idx >= 0) {
-      taskGroups.value[idx] = { ...taskGroups.value[idx], ...data };
-    } else {
-      taskGroups.value.push(data);
-    }
-  });
-
-  socket.on('parallel_complete', (data) => {
-    taskGroups.value = data.groups;
-    showMergePanel.value = true;
-  });
-
-  socket.on('group_review_complete', (data) => {
-    const g = taskGroups.value.find(g => g.id === data.groupId);
-    if (g) g.reviewDone = data.code === 0;
-  });
-
-  socket.on('tasks_update', (data) => {
-    if (data && data.tasks) {
-      rawTasks.value = data.tasks;
-      featureName.value = data.feature || '';
-      branchName.value = data.branch || '';
-    }
-  });
-
-  socket.on('config_update', (data) => {
-    if (data) projectConfig.value = data;
-  });
-
-  socket.on('progress_update', () => {
-    // progress.txt updates are tracked via file watcher; do not overwrite live logs
-  });
-
-socket.on('log', (data) => {
-  logs.value += data;
-});
-});
-
-const sidebarTerminalEl = ref(null);
-const logTerminalEl = ref(null);
-const activeTerminalEl = computed(() => sidebarTerminalEl.value || logTerminalEl.value);
+// ── TERMINAL ──────────────────────────────────────────────────
+const logContainerRef  = ref(null);
 const terminalInstance = shallowRef(null);
-const fitAddon = shallowRef(null);
+const fitAddon         = shallowRef(null);
 const logContentLength = ref(0);
-let resizeHandler = null;
 let resizeObserver = null;
 
 function renderFullLog() {
-  if (!terminalInstance.value) return;
-  terminalInstance.value.clear();
+  const term = terminalInstance.value;
+  if (!term) return;
+  term.clear();
   if (logs.value) {
-    terminalInstance.value.write(logs.value.replace(/\r?\n/g, '\r\n'));
+    term.write(logs.value.replace(/\r?\n/g, '\r\n'));
     logContentLength.value = logs.value.length;
-    terminalInstance.value.scrollToBottom();
-  } else {
-    logContentLength.value = 0;
+    term.scrollToBottom();
   }
 }
 
-function attachTerminal(container) {
-  if (!terminalInstance.value || !container) return;
+function attachTerminal(el) {
   const term = terminalInstance.value;
-
-  if (term.element) {
-    container.innerHTML = '';
-    container.appendChild(term.element);
-  } else {
-    container.innerHTML = '';
-    term.open(container);
-  }
-
-  // Delay fit until layout has settled so xterm measures the correct width
+  if (!term || !el) return;
+  el.innerHTML = '';
+  if (term.element) el.appendChild(term.element);
+  else term.open(el);
   requestAnimationFrame(() => {
     fitAddon.value?.fit();
-    logContentLength.value = 0;
     renderFullLog();
   });
-
   resizeObserver?.disconnect();
-  resizeObserver = new ResizeObserver(() => {
-    requestAnimationFrame(() => fitAddon.value?.fit());
-  });
-  resizeObserver.observe(container);
+  resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => fitAddon.value?.fit()));
+  resizeObserver.observe(el);
 }
 
-onMounted(() => {
-  const term = new Terminal({
-    convertEol: true,
-    scrollback: 5000,
-    fontSize: 12,
-    fontFamily: 'JetBrains Mono, Fira Code, monospace',
-    theme: {
-      background: '#05060a',
-      foreground: '#f4f4f5',
-      cursor: '#38bdf8',
-      cursorAccent: '#05060a',
-      selectionBackground: 'rgba(56,189,248,0.25)',
-    },
-  });
-  const fit = new FitAddon();
-  term.loadAddon(fit);
-  terminalInstance.value = term;
-  fitAddon.value = fit;
-
-  resizeHandler = () => {
-    if (!activeTerminalEl.value) return;
-    requestAnimationFrame(() => fitAddon.value?.fit());
-  };
-  window.addEventListener('resize', resizeHandler);
-
-  nextTick(() => {
-    if (activeTerminalEl.value) {
-      attachTerminal(activeTerminalEl.value);
-    }
-  });
-});
-
-watch(activeTerminalEl, (container) => {
-  if (!container || !terminalInstance.value) return;
-  nextTick(() => attachTerminal(container));
+watch(logContainerRef, el => {
+  if (el && terminalInstance.value) nextTick(() => attachTerminal(el));
 }, { flush: 'post' });
 
 watch(logs, (newVal) => {
-  if (!terminalInstance.value) return;
   const term = terminalInstance.value;
-  const activeContainer = activeTerminalEl.value;
-  if (!activeContainer) return;
-
-  // Re-attach terminal if it's not mounted in the active container
-  if (!term.element || !activeContainer.contains(term.element)) {
-    attachTerminal(activeContainer);
-    return;
-  }
-
-  if (!newVal) {
-    renderFullLog();
-    return;
-  }
-
-  if (newVal.length < logContentLength.value) {
-    renderFullLog();
-    return;
-  }
-
+  const el   = logContainerRef.value;
+  if (!term || !el) return;
+  if (!term.element || !el.contains(term.element)) { attachTerminal(el); return; }
+  if (!newVal || newVal.length < logContentLength.value) { renderFullLog(); return; }
   const diff = newVal.slice(logContentLength.value);
   if (diff) {
     term.write(diff.replace(/\r?\n/g, '\r\n'));
@@ -293,20 +226,75 @@ watch(logs, (newVal) => {
   }
 }, { flush: 'post' });
 
-onBeforeUnmount(() => {
-  if (resizeHandler) {
-    window.removeEventListener('resize', resizeHandler);
-  }
-  resizeObserver?.disconnect();
-  terminalInstance.value?.dispose();
-  terminalInstance.value = null;
-  fitAddon.value = null;
+// ── SOCKET ────────────────────────────────────────────────────
+onMounted(() => {
+  socket.on('jonggrang_status', d => { isRunning.value = d.isRunning; });
+  socket.on('tasks_update', d => {
+    if (d?.tasks) rawTasks.value = d.tasks;
+  });
+  socket.on('config_update', d => { if (d) projectConfig.value = d; });
+  socket.on('log', d => {
+    logs.value += typeof d === 'string' ? d : (d?.data || '');
+  });
+  socket.on('orchestration_complete', ({ featureId }) => {
+    stopManifestPoll();
+    if (activeManifest.value?.featureId === featureId) fetchManifest(featureId);
+    fetchManifests();
+  });
+  // Real-time manifest updates from server-side chokidar watcher
+  socket.on('manifests_update', (list) => {
+    manifests.value = list;
+    // Always follow the running manifest; fall back to current active; then most recent
+    const running = list.find(m => m.status === 'running' || m.status === 'in_progress');
+    const active  = activeManifest.value?.featureId;
+    const target  = running || (active ? list.find(m => m.featureId === active) : null) || list[0];
+    if (target) {
+      activeManifest.value = {
+        featureId: target.featureId,
+        manifest: {
+          description:   target.description,
+          work_type:     target.workType,
+          status:        target.status,
+          current_phase: target.currentPhase,
+          active_phases: target.activePhases,
+          phases:        target.phases,
+          validation:    target.validation,
+        },
+      };
+    }
+  });
 });
 
-// ============================================================
-// ACTIONS
-// ============================================================
-async function apiPost(url, body = {}) {
+// ── LIFECYCLE ─────────────────────────────────────────────────
+onMounted(() => {
+  const term = new Terminal({
+    convertEol: true, scrollback: 5000, fontSize: 12,
+    fontFamily: 'JetBrains Mono, Fira Code, monospace',
+    theme: {
+      background: '#05060a', foreground: '#f4f4f5',
+      cursor: '#38bdf8', cursorAccent: '#05060a',
+      selectionBackground: 'rgba(56,189,248,0.25)',
+    },
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  terminalInstance.value = term;
+  fitAddon.value = fit;
+  window.addEventListener('resize', () => requestAnimationFrame(() => fitAddon.value?.fit()));
+  nextTick(() => { if (logContainerRef.value) attachTerminal(logContainerRef.value); });
+  fetchManifests();
+  fetchCompaction();
+  setInterval(fetchCompaction, 10000);
+});
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  terminalInstance.value?.dispose();
+  stopManifestPoll();
+});
+
+// ── ACTIONS ───────────────────────────────────────────────────
+async function api(url, body) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -315,134 +303,66 @@ async function apiPost(url, body = {}) {
   return res.json();
 }
 
-async function startJonggrang(taskId) {
+function clearLogs() {
   logs.value = '';
   logContentLength.value = 0;
-  if (terminalInstance.value) terminalInstance.value.clear();
-  const tool = projectConfig.value?.tool || 'opencode';
-  await apiPost('/api/jonggrang/start', { taskId, tool });
+  terminalInstance.value?.clear();
 }
 
-async function stopJonggrang() {
-  if (executionMode.value === 'parallel') {
-    await apiPost('/api/jonggrang/stop-parallel');
+async function runWork() {
+  if (!workDesc.value.trim()) return;
+  clearLogs();
+  showWorkModal.value = false;
+  const tool = projectConfig.value?.tool || 'opencode';
+  const res = await api('/api/jonggrang/start', { tool, description: workDesc.value.trim() });
+  if (res.featureId) {
+    await fetchManifest(res.featureId);
+    startManifestPoll(res.featureId);
   } else {
-    await apiPost('/api/jonggrang/stop');
+    // Poll for manifest that will be created once planning completes
+    startManifestPoll(null);
   }
+  workDesc.value = '';
+  fetchManifests();
 }
 
-async function startParallel() {
-  logs.value = '';
-  logContentLength.value = 0;
-  if (terminalInstance.value) terminalInstance.value.clear();
-  taskGroups.value = [];
-  showMergePanel.value = false;
-  const tool = projectConfig.value?.tool || 'opencode';
-  const result = await apiPost('/api/jonggrang/start-parallel', { tool });
-  if (result.groups) taskGroups.value = result.groups.map(g => ({ ...g, status: 'running' }));
-}
-
-async function reviewGroup(groupId) {
-  await apiPost(`/api/jonggrang/groups/${groupId}/review`);
-}
-
-async function mergeGroup(groupId) {
-  await apiPost(`/api/jonggrang/groups/${groupId}/merge`);
-}
-
-async function mergeAll() {
-  await apiPost('/api/jonggrang/groups/merge-all');
-  showMergePanel.value = false;
-  taskGroups.value = [];
-}
-
-function groupForTask(taskId) {
-  return taskGroups.value.find(g => g.taskIds && g.taskIds.includes(taskId));
-}
-
-const GROUP_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#ec4899', '#06b6d4', '#84cc16'];
-function groupColor(taskId) {
-  const idx = taskGroups.value.findIndex(g => g.taskIds && g.taskIds.includes(taskId));
-  return idx >= 0 ? GROUP_COLORS[idx % GROUP_COLORS.length] : 'transparent';
-}
-
-async function openReviewPage(groupId) {
-  const group = taskGroups.value.find(g => g.id === groupId);
-  if (!group) return;
-  // Fetch diff from server
-  const res = await fetch(`/api/jonggrang/groups/${groupId}/diff`);
-  const data = await res.json();
-  reviewView.value = {
-    groupId,
-    branch: group.branch,
-    taskIds: group.taskIds || [],
-    diff: data.diff || '',
-    files: data.files || [],
-  };
-  reviewFeedback.value = '';
-}
-
-function closeReviewPage() {
-  reviewView.value = null;
-  reviewFeedback.value = '';
-}
-
-async function mergeFromReview() {
-  if (!reviewView.value) return;
-  await apiPost(`/api/jonggrang/groups/${reviewView.value.groupId}/merge`);
-  closeReviewPage();
-}
-
-async function reviseFromReview() {
-  if (!reviewView.value || !reviewFeedback.value.trim()) return;
-  logs.value = '';
-  logContentLength.value = 0;
-  if (terminalInstance.value) terminalInstance.value.clear();
-  await apiPost(`/api/jonggrang/groups/${reviewView.value.groupId}/revise`, {
-    feedback: reviewFeedback.value,
-  });
-  reviewFeedback.value = '';
-  // Refresh diff after revision
-  setTimeout(() => openReviewPage(reviewView.value.groupId), 2000);
-}
-
-async function cancelFromReview() {
-  if (!reviewView.value) return;
-  await apiPost(`/api/jonggrang/groups/${reviewView.value.groupId}/cancel`);
-  closeReviewPage();
-}
-
-async function startPlan() {
-  if (!planDescription.value.trim()) return;
-  logs.value = '';
-  logContentLength.value = 0;
-  if (terminalInstance.value) terminalInstance.value.clear();
-  await apiPost('/api/jonggrang/plan', { description: planDescription.value });
+async function runPlan() {
+  if (!planDesc.value.trim()) return;
+  clearLogs();
+  await api('/api/jonggrang/plan', { description: planDesc.value });
   showPlanModal.value = false;
-  planDescription.value = '';
+  planDesc.value = '';
+}
+
+async function stopWork() {
+  await api('/api/jonggrang/stop');
+}
+
+async function startTask(taskId) {
+  clearLogs();
+  const tool = projectConfig.value?.tool || 'opencode';
+  await api('/api/jonggrang/start', { taskId, tool });
 }
 
 async function startReview() {
-  logs.value = '';
-  logContentLength.value = 0;
-  if (terminalInstance.value) terminalInstance.value.clear();
-  await apiPost('/api/jonggrang/review');
+  clearLogs();
+  await api('/api/jonggrang/review');
 }
 
 async function addTask() {
   if (!newTask.value.title.trim()) return;
-  await apiPost('/api/jonggrang/tasks', newTask.value);
+  await api('/api/jonggrang/tasks', newTask.value);
   newTask.value = { title: '', description: '', priority: 1 };
   showNewTaskForm.value = false;
 }
 
-async function deleteTask(taskId) {
-  await fetch(`/api/jonggrang/tasks/${taskId}`, { method: 'DELETE' });
-  if (selectedTask.value?.id === taskId) selectedTask.value = null;
+async function deleteTask(id) {
+  await fetch(`/api/jonggrang/tasks/${id}`, { method: 'DELETE' });
+  if (selectedTask.value?.id === id) selectedTask.value = null;
 }
 
-async function updateStatus(taskId, status) {
-  await fetch(`/api/jonggrang/tasks/${taskId}`, {
+async function updateStatus(id, status) {
+  await fetch(`/api/jonggrang/tasks/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status }),
@@ -453,1710 +373,782 @@ function selectTask(task) {
   selectedTask.value = selectedTask.value?.id === task.id ? null : task;
 }
 
-function renderMarkdown(text) {
-  if (!text) return '';
-  return marked.parse(text, { breaks: true });
+// ── MANIFEST / PIPELINE ───────────────────────────────────────
+async function fetchManifests() {
+  try {
+    const r = await fetch('/api/jonggrang/manifests');
+    manifests.value = await r.json();
+    // Auto-select most recent
+    if (!activeManifest.value && manifests.value.length > 0) {
+      await fetchManifest(manifests.value[0].featureId);
+      if (['running', 'in_progress'].includes(activeManifest.value?.manifest?.status)) {
+        startManifestPoll(manifests.value[0].featureId);
+      }
+    }
+  } catch {}
 }
 
-function formatDiff(diff) {
-  if (!diff) return '';
-  return diff.split('\n').map(line => {
-    const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    if (line.startsWith('+') && !line.startsWith('+++')) return `<span class="diff-add">${escaped}</span>`;
-    if (line.startsWith('-') && !line.startsWith('---')) return `<span class="diff-del">${escaped}</span>`;
-    if (line.startsWith('@@')) return `<span class="diff-hunk">${escaped}</span>`;
-    if (line.startsWith('diff ') || line.startsWith('index ')) return `<span class="diff-meta">${escaped}</span>`;
-    return escaped;
-  }).join('\n');
+async function fetchManifest(fid) {
+  try {
+    const r = await fetch(`/api/jonggrang/manifests/${fid}`);
+    const d = await r.json();
+    if (d.manifest) activeManifest.value = d;
+  } catch {}
 }
 
-function statusIcon(status) {
-  switch (status) {
-    case 'completed': return CheckCircle2Icon;
-    case 'in_progress': return Loader2Icon;
-    case 'waiting': return ClockIcon;
-    case 'review': return EyeIcon;
-    case 'blocked': return CircleAlertIcon;
-    default: return CircleIcon;
+async function fetchCompaction() {
+  try {
+    const r = await fetch('/api/jonggrang/compaction');
+    compactionState.value = await r.json();
+  } catch {}
+}
+
+function startManifestPoll(fid) {
+  stopManifestPoll();
+  if (fid) {
+    manifestPollTimer = setInterval(() => fetchManifest(fid), 2000);
+  } else {
+    // Poll all manifests until one appears (then socket events take over)
+    manifestPollTimer = setInterval(async () => {
+      await fetchManifests();
+      if (activeManifest.value) stopManifestPoll();
+    }, 2000);
   }
 }
-
-function statusColor(status) {
-  switch (status) {
-    case 'completed': return 'var(--green)';
-    case 'in_progress': return 'var(--blue)';
-    case 'waiting': return 'var(--yellow)';
-    case 'review': return 'var(--yellow)';
-    case 'blocked': return 'var(--red)';
-    default: return 'var(--text-muted)';
-  }
+function stopManifestPoll() {
+  if (manifestPollTimer) { clearInterval(manifestPollTimer); manifestPollTimer = null; }
 }
 
-// Drag and drop
+async function resumePipeline() {
+  clearLogs();
+  const fid = activeManifest.value?.featureId;
+  const res = await api('/api/jonggrang/orchestrate/resume', fid ? { featureId: fid } : {});
+  if (res.featureId) { await fetchManifest(res.featureId); startManifestPoll(res.featureId); }
+}
+
+// ── HELPERS ───────────────────────────────────────────────────
+function statusColor(s) {
+  return { completed: 'var(--green)', in_progress: 'var(--blue)', waiting: 'var(--yellow)',
+    review: 'var(--yellow)', blocked: 'var(--red)' }[s] || 'var(--text-muted)';
+}
+function statusLabel(s) {
+  return { pending: 'Ready', in_progress: 'In Progress', waiting: 'Waiting',
+    review: 'Review', completed: 'Done', blocked: 'Blocked' }[s] || s;
+}
+function statusIcon(s) {
+  return { completed: CheckCircle2Icon, in_progress: Loader2Icon, waiting: ClockIcon,
+    review: EyeIcon, blocked: CircleAlertIcon }[s] || CircleIcon;
+}
+
+function phaseIcon(p) {
+  if (!p.active) return '–';
+  if (p.status === 'completed') return '✓';
+  if (p.status === 'running')   return '⟳';
+  if (p.status === 'failed')    return '✗';
+  if (p.status === 'skipped')   return '–';
+  return '·';
+}
+function phaseClass(p) {
+  if (!p.active) return 'ph-skip';
+  if (p.status === 'skipped') return 'ph-skip';
+  return { completed: 'ph-done', running: 'ph-run', failed: 'ph-fail' }[p.status] || 'ph-wait';
+}
+
+// Drag & drop
 let draggedTask = null;
-function onDragStart(e, task) {
-  draggedTask = task;
-  e.dataTransfer.effectAllowed = 'move';
-}
-function onDragOver(e) {
+function onDragStart(e, task) { draggedTask = task; e.dataTransfer.effectAllowed = 'move'; }
+function onDragOver(e)        { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+function onDrop(e, key)       {
   e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-}
-function onDrop(e, columnKey) {
-  e.preventDefault();
-  if (draggedTask && draggedTask.status !== columnKey) {
-    updateStatus(draggedTask.id, columnKey);
-  }
+  if (draggedTask && draggedTask.status !== key) updateStatus(draggedTask.id, key);
   draggedTask = null;
 }
 </script>
 
 <template>
   <div class="app">
-    <!-- ==================== TOP BAR ==================== -->
+
+    <!-- ══════════════ TOP BAR ══════════════ -->
     <header class="topbar">
       <div class="topbar-left">
-        <div class="project-selector">
-          <span class="project-name">{{ projectName }}</span>
-          <ChevronDownIcon :size="14" class="icon-muted" />
-        </div>
+        <span class="project-name">{{ projectName }}</span>
+        <ChevronDownIcon :size="13" class="icon-muted" />
       </div>
 
       <div class="topbar-center">
-        <div class="view-tabs">
-          <button :class="['tab', { active: currentView === 'kanban' }]" @click="currentView = 'kanban'">
-            <LayoutGridIcon :size="15" />
-          </button>
-          <button :class="['tab', { active: currentView === 'graph' }]" @click="currentView = 'graph'">
-            <GitBranchIcon :size="15" />
-          </button>
-        </div>
-        <div class="separator"></div>
+        <button :class="['tab', { active: currentView === 'kanban' }]" @click="currentView = 'kanban'" title="Task Board">
+          <LayoutGridIcon :size="15" />
+        </button>
+        <button :class="['tab', { active: currentView === 'graph' }]" @click="currentView = 'graph'" title="Dependency Graph">
+          <GitBranchIcon :size="15" />
+        </button>
+
+        <div class="sep"></div>
+
         <button class="topbar-btn" @click="showPlanModal = true" title="Plan feature">
           <FileTextIcon :size="15" />
         </button>
         <button class="topbar-btn" @click="startReview" title="Run review">
           <EyeIcon :size="15" />
         </button>
-        <div class="separator"></div>
 
-        <template v-if="!isJonggrangRunning">
-          <button class="run-btn" @click="startJonggrang()">
-            <PlayIcon :size="13" />
-            <span>Run</span>
-          </button>
-          <button class="run-btn parallel-btn" @click="startParallel()">
-            <GitBranchIcon :size="13" />
-            <span>Parallel</span>
-          </button>
-        </template>
-        <button v-else class="stop-btn" @click="stopJonggrang">
-          <SquareIcon :size="12" />
-          <span>Stop</span>
+        <div class="sep"></div>
+
+        <button v-if="!isRunning" class="run-btn" @click="showWorkModal = true">
+          <PlayIcon :size="13" /><span>Work</span>
         </button>
-        <button v-if="taskGroups.length > 0 && !isJonggrangRunning" class="merge-trigger-btn" @click="showMergePanel = !showMergePanel" title="Merge groups">
-          <GitBranchIcon :size="13" />
-          <span>Merge</span>
+        <button v-else class="stop-btn" @click="stopWork">
+          <SquareIcon :size="12" /><span>Stop</span>
         </button>
       </div>
 
       <div class="topbar-right">
-        <button class="topbar-btn" @click="showLogPanel = !showLogPanel" :class="{ active: showLogPanel }" title="Toggle logs">
+        <div v-if="ctxPct !== null" class="ctx-badge"
+          :class="{ warn: ctxPct >= 75, danger: ctxPct >= 85 }"
+          :title="`Context usage: ${ctxPct}%`">
+          <ActivityIcon :size="12" />{{ ctxPct }}%
+        </div>
+        <div class="status-dot" :class="{ active: isRunning }"></div>
+        <span class="status-text">{{ isRunning ? 'Running' : 'Idle' }}</span>
+        <button class="topbar-btn" @click="showLogPanel = !showLogPanel" title="Toggle logs">
           <BookOpenIcon :size="15" />
         </button>
-        <div class="status-badge" :class="{ running: isJonggrangRunning }">
-          <ZapIcon :size="13" />
-          <span>{{ isJonggrangRunning ? 'Running' : 'Idle' }}</span>
-        </div>
       </div>
     </header>
 
-    <!-- ==================== PROGRESS BAR ==================== -->
-    <div class="progress-strip" v-if="totalTasks > 0">
-      <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+    <!-- progress strip -->
+    <div v-if="totalTasks > 0" class="progress-strip">
+      <div class="progress-fill" :style="{ width: progressPct + '%' }"></div>
     </div>
 
-    <!-- GROUP STATUS STRIP -->
-    <div class="groups-strip" v-if="taskGroups.length > 0">
-      <div v-for="(group, i) in taskGroups" :key="group.id"
-        class="group-pill" :class="group.status"
-        :style="{ borderColor: GROUP_COLORS[i % GROUP_COLORS.length] }">
-        <span class="group-pill-dot" :style="{ background: GROUP_COLORS[i % GROUP_COLORS.length] }"></span>
-        {{ group.id }}
-        <span class="group-pill-status">{{ group.status }}</span>
-      </div>
-    </div>
+    <!-- ══════════════ MAIN LAYOUT ══════════════ -->
+    <div class="main-layout">
 
-    <!-- ==================== REVIEW PAGE ==================== -->
-    <div v-if="reviewView" class="review-page">
-      <div class="review-topbar">
-        <div class="review-topbar-left">
-          <button class="btn btn-ghost btn-sm" @click="closeReviewPage">
-            <XIcon :size="14" /> Back
-          </button>
-          <div class="review-branch-info">
-            <GitBranchIcon :size="14" />
-            <span class="mono">{{ reviewView.branch }}</span>
-          </div>
-          <span class="review-file-count">{{ reviewView.files.length }} files changed</span>
-        </div>
-        <div class="review-topbar-actions">
-          <button class="btn btn-danger btn-sm" @click="cancelFromReview">
-            <XIcon :size="12" /> Cancel Changes
-          </button>
-          <button class="btn btn-primary btn-sm" @click="mergeFromReview">
-            <GitBranchIcon :size="12" /> Merge
-          </button>
-        </div>
-      </div>
+      <!-- ── CONTENT (kanban / graph) ── -->
+      <div class="content-area">
 
-      <div class="review-layout">
-        <!-- File list sidebar -->
-        <div class="review-files">
-          <div class="review-files-header">Changed Files</div>
-          <div v-for="f in reviewView.files" :key="f" class="review-file-item">
-            <FileTextIcon :size="12" />
-            <span>{{ f }}</span>
-          </div>
-          <div v-if="!reviewView.files.length" class="review-files-empty">No files</div>
-
-          <!-- Task list -->
-          <div class="review-files-header" style="margin-top: 16px;">Tasks</div>
-          <div v-for="tid in reviewView.taskIds" :key="tid" class="review-file-item">
-            <CheckCircle2Icon :size="12" style="color: var(--green)" />
-            <span>{{ tid }}</span>
-          </div>
-        </div>
-
-        <!-- Diff view -->
-        <div class="review-diff">
-          <pre class="review-diff-content"><code v-html="formatDiff(reviewView.diff)"></code></pre>
-          <div v-if="!reviewView.diff" class="review-diff-empty">No changes to display</div>
-        </div>
-
-        <!-- Feedback panel -->
-        <div class="review-feedback">
-          <div class="review-feedback-header">
-            <SearchIcon :size="13" />
-            <span>Feedback</span>
-          </div>
-          <div class="review-feedback-body">
-            <div class="review-feedback-hint">Give feedback to revise this group's changes. The AI will apply your notes in the worktree.</div>
-            <textarea
-              v-model="reviewFeedback"
-              class="review-feedback-input"
-              placeholder="e.g. rename the function, add error handling, fix the test..."
-              rows="4"
-            ></textarea>
-            <button class="btn btn-primary" @click="reviseFromReview" :disabled="!reviewFeedback.trim() || isJonggrangRunning" style="width:100%">
-              <ZapIcon :size="13" />
-              Send Revision
-            </button>
-          </div>
-
-          <!-- Log output -->
-          <div class="review-feedback-header" style="margin-top: 12px;">
-            <BookOpenIcon :size="13" />
-            <span>Agent Output</span>
-            <div class="log-indicator" :class="{ active: isJonggrangRunning }"></div>
-          </div>
-          <div class="review-log-content">
-            <div ref="logTerminalEl" class="xterm-container"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ==================== MAIN CONTENT ==================== -->
-    <div class="main-layout" v-show="!reviewView">
-      <!-- KANBAN VIEW -->
-      <div v-if="currentView === 'kanban'" class="kanban-wrapper">
-        <div class="kanban">
-          <div
-            v-for="col in columns"
-            :key="col.key"
-            class="kanban-column"
-            @dragover="onDragOver"
-            @drop="(e) => onDrop(e, col.key)"
-          >
-            <!-- Column Header -->
+        <!-- KANBAN -->
+        <div v-if="currentView === 'kanban'" class="kanban">
+          <div v-for="col in columns" :key="col.key" class="kanban-col"
+            @dragover="onDragOver" @drop="e => onDrop(e, col.key)">
             <div class="col-header">
-              <div class="col-title">
-                <span class="col-label">{{ col.label }}</span>
-                <span class="col-count" :style="{ background: col.count > 0 ? statusColor(col.key) : 'var(--bg-card)', color: col.count > 0 ? 'var(--bg-base)' : 'var(--text-muted)' }">{{ col.count }}</span>
-              </div>
+              <span class="col-label">{{ col.label }}</span>
+              <span class="col-count" v-if="col.count > 0">{{ col.count }}</span>
             </div>
-
-            <!-- Cards -->
-            <div class="col-scroll-area">
-              <div class="col-cards">
-                <div
-                  v-for="task in col.tasks"
-                  :key="task.id"
-                  :class="['task-card', { selected: selectedTask?.id === task.id, 'is-running': task.status === 'in_progress' && isJonggrangRunning }]"
-                  draggable="true"
-                  @dragstart="(e) => onDragStart(e, task)"
-                  @click="selectTask(task)"
-                >
-                  <div class="card-indicator" :style="{ background: groupForTask(task.id) ? groupColor(task.id) : statusColor(task.status) }"></div>
-                  <div class="card-body">
-                    <h4 class="card-title">{{ task.title }}</h4>
-                    <p class="card-desc" v-if="task.description && task.description !== task.title">{{ task.description }}</p>
-                    <div class="card-meta">
-                      <span class="card-id">{{ task.id }}</span>
-                      <span class="card-skill" v-if="task.skill">{{ task.skill }}</span>
-                    </div>
+            <div class="col-body">
+              <div v-for="task in col.tasks" :key="task.id"
+                :class="['task-card', { selected: selectedTask?.id === task.id, running: task.status === 'in_progress' && isRunning }]"
+                draggable="true"
+                @dragstart="e => onDragStart(e, task)"
+                @click="selectTask(task)">
+                <div class="card-bar" :style="{ background: statusColor(task.status) }"></div>
+                <div class="card-body">
+                  <div class="card-title">{{ task.title }}</div>
+                  <div class="card-desc" v-if="task.description && task.description !== task.title">{{ task.description }}</div>
+                  <div class="card-footer">
+                    <span class="card-id">{{ task.id }}</span>
+                    <span class="card-status" :style="{ color: statusColor(task.status) }">{{ statusLabel(task.status) }}</span>
                     <div class="card-actions">
-                      <span class="card-status-tag" :style="{ color: statusColor(task.status), background: task.status === 'completed' ? 'var(--green-muted)' : task.status === 'in_progress' ? 'var(--blue-muted)' : task.status === 'waiting' ? 'var(--yellow-muted)' : task.status === 'review' ? 'var(--yellow-muted)' : task.status === 'blocked' ? 'var(--red-muted)' : 'rgba(255,255,255,0.05)' }">
-                        {{ task.status === 'in_progress' ? 'In Progress' : task.status === 'pending' ? 'Ready' : task.status === 'waiting' ? 'Waiting' : task.status === 'review' ? 'Review' : task.status.charAt(0).toUpperCase() + task.status.slice(1) }}
-                      </span>
-                      <div class="card-btns">
-                        <button
-                          v-if="task.status === 'review' && groupForTask(task.id)"
-                          class="card-btn review-btn"
-                          @click.stop="openReviewPage(groupForTask(task.id).id)"
-                          title="Review changes"
-                        >
-                          <EyeIcon :size="12" />
-                          Review
-                        </button>
-                        <button
-                          v-if="task.status === 'pending'"
-                          class="card-btn start-btn"
-                          @click.stop="startJonggrang(task.id)"
-                          :disabled="isJonggrangRunning"
-                          title="Start this task"
-                        >
-                          <PlayIcon :size="12" />
-                          Start
-                        </button>
-                        <button
-                          v-if="task.status !== 'completed' && task.status !== 'review'"
-                          class="card-btn delete-btn"
-                          @click.stop="deleteTask(task.id)"
-                          title="Delete task"
-                        >
-                          <XIcon :size="12" />
-                        </button>
-                      </div>
+                      <button v-if="task.status === 'pending'" class="card-btn"
+                        @click.stop="startTask(task.id)" :disabled="isRunning">
+                        <PlayIcon :size="11" />
+                      </button>
+                      <button class="card-btn danger" @click.stop="deleteTask(task.id)">
+                        <XIcon :size="11" />
+                      </button>
                     </div>
                   </div>
                 </div>
+              </div>
 
-                <!-- Add task button (only in TODO column) -->
-                <button
-                  v-if="col.key === 'pending'"
-                  class="add-task-btn"
-                  @click="showNewTaskForm = !showNewTaskForm"
-                >
-                  <PlusIcon :size="15" />
-                  <span>New task</span>
-                </button>
+              <button v-if="col.key === 'pending'" class="add-btn" @click="showNewTaskForm = true">
+                <PlusIcon :size="14" />New task
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- GRAPH -->
+        <div v-else-if="currentView === 'graph'" class="graph-wrap">
+          <VueFlow :nodes="graphNodes.nodes" :edges="graphNodes.edges"
+            :default-viewport="{ zoom: 0.85, x: 0, y: 0 }" fit-view-on-init>
+            <Background :gap="24" :size="1" pattern-color="rgba(255,255,255,0.03)" />
+            <Controls position="bottom-left" />
+            <MiniMap position="bottom-right" />
+            <template #node-taskNode="{ data }">
+              <div :class="['gnode', `gnode--${data.status}`]" @click="selectTask(data)">
+                <div class="gnode-id">{{ data.id }}</div>
+                <div class="gnode-title">{{ data.title }}</div>
+                <div class="gnode-status" :style="{ color: statusColor(data.status) }">{{ statusLabel(data.status) }}</div>
+              </div>
+            </template>
+          </VueFlow>
+        </div>
+
+      </div><!-- /content-area -->
+
+      <!-- ── SIDE PANEL ── -->
+      <div v-if="showLogPanel" class="side-panel">
+
+        <!-- Pipeline loading state — work started but manifest not yet created -->
+        <div v-if="isRunning && !pipelineManifest" class="pipeline-section pipeline-loading">
+          <div class="pipeline-header">
+            <div class="pipeline-title">
+              <span class="pipeline-name">Planning...</span>
+            </div>
+            <div class="pipeline-status">
+              <span class="ps-dot running"></span>
+              <span class="ps-text">Running</span>
+            </div>
+          </div>
+          <div class="phase-grid">
+            <div v-for="row in Object.keys(PHASES_UI).map(Number).reduce((rows, n, i) => { if (i % 4 === 0) rows.push([]); rows[rows.length-1].push(n); return rows; }, [])" :key="row[0]" class="phase-row">
+              <div v-for="n in row" :key="n" class="phase-cell ph-wait">
+                <span class="phase-icon">·</span>
+                <span class="phase-num">{{ n }}</span>
+                <span class="phase-name">{{ PHASES_UI[n].name }}</span>
+                <span v-if="PHASES_UI[n].role" class="phase-role" :style="{ color: ROLE_COLORS[PHASES_UI[n].role] }">{{ PHASES_UI[n].role }}</span>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- New Task Form (inline at bottom of TODO) -->
-        <Teleport to="body">
-          <div v-if="showNewTaskForm" class="modal-overlay" @click.self="showNewTaskForm = false">
-            <div class="modal">
-              <div class="modal-header">
-                <h3>New Task</h3>
-                <button class="modal-close" @click="showNewTaskForm = false"><XIcon :size="16" /></button>
-              </div>
-              <div class="modal-body">
-                <div class="form-field">
-                  <label>Title</label>
-                  <input v-model="newTask.title" placeholder="Task title" autofocus @keydown.enter="addTask" />
-                </div>
-                <div class="form-field">
-                  <label>Description</label>
-                  <textarea v-model="newTask.description" placeholder="Detailed description..." rows="3"></textarea>
-                </div>
-                <div class="form-field">
-                  <label>Priority</label>
-                  <input v-model.number="newTask.priority" type="number" min="1" />
-                </div>
-              </div>
-              <div class="modal-footer">
-                <button class="btn btn-ghost" @click="showNewTaskForm = false">Cancel</button>
-                <button class="btn btn-primary" @click="addTask">Create Task</button>
+        <!-- Pipeline section (when manifest exists) -->
+        <div v-if="pipelineManifest" class="pipeline-section">
+          <div class="pipeline-header">
+            <div class="pipeline-title">
+              <span class="pipeline-name">{{ pipelineManifest.description || 'Pipeline' }}</span>
+              <span class="wt-badge" :style="{ color: WORK_TYPE_COLORS[pipelineManifest.work_type], background: WORK_TYPE_COLORS[pipelineManifest.work_type] + '18' }">
+                {{ pipelineManifest.work_type }}
+              </span>
+            </div>
+            <div class="pipeline-status">
+              <span :class="['ps-dot', pipelineManifest.status]"></span>
+              <span class="ps-text">
+                {{ pipelineManifest.status === 'failed' ? 'Failed' : pipelineManifest.status === 'completed' ? 'Complete' : `Phase ${pipelineManifest.current_phase}` }}
+              </span>
+              <button v-if="pipelineManifest.status === 'failed'" class="resume-btn" @click="resumePipeline">↺ Resume</button>
+            </div>
+          </div>
+
+          <!-- Phase grid 4-per-row -->
+          <div class="phase-grid">
+            <div v-for="row in phaseRows" :key="row[0].n" class="phase-row">
+              <div v-for="p in row" :key="p.n" :class="['phase-cell', phaseClass(p)]" :title="`${p.n}. ${p.name}`">
+                <span class="phase-icon">{{ phaseIcon(p) }}</span>
+                <span class="phase-num">{{ p.n }}</span>
+                <span class="phase-name">{{ p.name }}</span>
+                <span v-if="p.role" class="phase-role" :style="{ color: ROLE_COLORS[p.role] }">{{ p.role }}</span>
               </div>
             </div>
           </div>
-        </Teleport>
+
+          <!-- Quality gates -->
+          <div class="gates-row">
+            <span v-for="g in qualityGates" :key="g.label" :class="['gate', { ok: g.ok }]">
+              {{ g.ok ? '✓' : '·' }} {{ g.label }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Logs terminal -->
+        <div class="logs-section">
+          <div class="logs-header">
+            <span>LOGS</span>
+            <div class="log-dot" :class="{ active: isRunning }"></div>
+          </div>
+          <!-- terminal-wrap: no Vue children — xterm owns this DOM entirely -->
+          <div ref="logContainerRef" class="terminal-wrap"></div>
+          <div v-if="!logs" class="log-empty">WAITING FOR OUTPUT...</div>
+        </div>
+
+      </div><!-- /side-panel -->
+
+      <!-- Task detail sidebar -->
+      <div v-if="selectedTask && currentView === 'kanban'" class="detail-panel">
+        <div class="detail-header">
+          <span class="detail-id">{{ selectedTask.id }}</span>
+          <button class="icon-btn" @click="selectedTask = null"><XIcon :size="15" /></button>
+        </div>
+        <div class="detail-body">
+          <div class="detail-title">{{ selectedTask.title }}</div>
+          <div class="detail-desc" v-if="selectedTask.description">{{ selectedTask.description }}</div>
+          <div class="detail-meta">
+            <span class="detail-status" :style="{ color: statusColor(selectedTask.status) }">
+              {{ statusLabel(selectedTask.status) }}
+            </span>
+            <span v-if="selectedTask.skill" class="detail-skill">{{ selectedTask.skill }}</span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <button v-if="selectedTask.status === 'pending'" class="btn-primary" @click="startTask(selectedTask.id)" :disabled="isRunning">
+            <PlayIcon :size="13" /> Start
+          </button>
+          <button class="btn-danger" @click="deleteTask(selectedTask.id)">
+            <TrashIcon :size="13" /> Delete
+          </button>
+        </div>
       </div>
 
-      <!-- GRAPH VIEW -->
-      <div v-else class="graph-wrapper">
-        <VueFlow
-          :nodes="graphNodes.nodes"
-          :edges="graphNodes.edges"
-          :default-viewport="{ zoom: 0.85, x: 0, y: 0 }"
-          fit-view-on-init
-        >
-          <Background :gap="24" :size="1" pattern-color="rgba(255,255,255,0.03)" />
-          <Controls position="bottom-left" />
-          <MiniMap position="bottom-right" />
+    </div><!-- /main-layout -->
 
-          <template #node-taskNode="{ data }">
-            <div :class="['graph-node', `graph-node--${data.status}`]" @click="selectTask(data)">
-              <div class="graph-node-header">
-                <component :is="statusIcon(data.status)" :size="14" :style="{ color: statusColor(data.status) }" />
-                <span class="graph-node-id">{{ data.id }}</span>
-              </div>
-              <div class="graph-node-title">{{ data.title }}</div>
-              <div class="graph-node-status" :style="{ color: statusColor(data.status) }">
-                {{ data.status.replace('_', ' ') }}
-              </div>
-            </div>
-          </template>
-        </VueFlow>
-      </div>
+    <!-- ══════════════ MODALS ══════════════ -->
 
-      <!-- ==================== SIDE PANELS ==================== -->
-      <aside v-if="selectedTask || showLogPanel" class="right-sidebar">
-        <section v-if="selectedTask" class="detail-panel">
-          <div class="detail-status-bar" :style="{ background: statusColor(selectedTask.status) }"></div>
-          <div class="detail-header">
-            <div class="detail-status-badge" :style="{ color: statusColor(selectedTask.status) }">
-              <component :is="statusIcon(selectedTask.status)" :size="14" />
-              {{ selectedTask.status.replace('_', ' ').toUpperCase() }}
-            </div>
-            <button class="modal-close" @click="selectedTask = null"><XIcon :size="16" /></button>
-          </div>
-
-          <div class="detail-scroll">
-            <h2 class="detail-title">{{ selectedTask.title }}</h2>
-            <div class="detail-desc markdown-body" v-html="renderMarkdown(selectedTask.description)"></div>
-
-            <div class="detail-fields">
-              <div class="detail-field" v-if="selectedTask.skill">
-                <div class="detail-field-label"><ZapIcon :size="12" /> Skill</div>
-                <div class="detail-field-value">{{ selectedTask.skill }}</div>
-              </div>
-              <div class="detail-field" v-if="branchName">
-                <div class="detail-field-label"><GitBranchIcon :size="12" /> Branch</div>
-                <div class="detail-field-value mono">{{ branchName }}</div>
-              </div>
-              <div class="detail-field" v-if="selectedTask.files && selectedTask.files.length">
-                <div class="detail-field-label"><FileTextIcon :size="12" /> Files</div>
-                <ul class="detail-file-list">
-                  <li v-for="f in selectedTask.files" :key="f">{{ f }}</li>
-                </ul>
-              </div>
-              <div class="detail-field" v-if="selectedTask.blocked_by && selectedTask.blocked_by.length">
-                <div class="detail-field-label"><ClockIcon :size="12" /> Blocked by</div>
-                <div class="detail-tags">
-                  <span class="detail-tag" v-for="b in selectedTask.blocked_by" :key="b">{{ b }}</span>
-                </div>
-              </div>
-              <div class="detail-field" v-if="selectedTask.notes && selectedTask.notes.length">
-                <div class="detail-field-label"><SearchIcon :size="12" /> Notes</div>
-                <ul class="detail-notes-list">
-                  <li v-for="(n, i) in selectedTask.notes" :key="i">{{ n }}</li>
-                </ul>
-              </div>
-              <div class="detail-field" v-if="selectedTask.completed_at">
-                <div class="detail-field-label"><CheckCircle2Icon :size="12" /> Completed</div>
-                <div class="detail-field-value">{{ new Date(selectedTask.completed_at).toLocaleString() }}</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="detail-output">
-            <div class="detail-output-header">
-              <BookOpenIcon :size="13" />
-              <span>Agent Output</span>
-              <div class="log-indicator" :class="{ active: isJonggrangRunning }"></div>
-            </div>
-            <div class="detail-output-content">
-              <div ref="sidebarTerminalEl" class="xterm-container"></div>
-              <div v-if="!logs" class="xterm-empty">Waiting for output...</div>
-            </div>
-          </div>
-
-          <div class="detail-actions">
-            <button
-              v-if="selectedTask.status === 'pending'"
-              class="btn btn-primary"
-              @click="startJonggrang(selectedTask.id)"
-              :disabled="isJonggrangRunning"
-            >
-              <PlayIcon :size="14" />
-              Start Task
-            </button>
-            <button
-              v-if="selectedTask.status === 'pending'"
-              class="btn btn-ghost"
-              @click="updateStatus(selectedTask.id, 'completed')"
-            >
-              <CheckCircle2Icon :size="14" />
-              Mark Done
-            </button>
-            <button
-              v-if="selectedTask.status === 'blocked'"
-              class="btn btn-ghost"
-              @click="updateStatus(selectedTask.id, 'pending')"
-            >
-              Unblock
-            </button>
-            <button
-              v-if="selectedTask.status !== 'completed'"
-              class="btn btn-danger"
-              @click="deleteTask(selectedTask.id); selectedTask = null"
-            >
-              <TrashIcon :size="14" />
-              Delete
-            </button>
-          </div>
-        </section>
-
-        <section v-else class="log-panel">
-          <div class="log-header">
-            <h3>
-              <BookOpenIcon :size="14" />
-              Logs
-            </h3>
-            <div class="log-indicator" :class="{ active: isJonggrangRunning }"></div>
-          </div>
-          <div class="log-content">
-            <div ref="logTerminalEl" class="xterm-container"></div>
-            <div v-if="!logs" class="xterm-empty">Waiting for output...</div>
-          </div>
-        </section>
-      </aside>
-    </div>
-
-    <!-- ==================== PLAN MODAL ==================== -->
+    <!-- Work modal -->
     <Teleport to="body">
-      <div v-if="showPlanModal" class="modal-overlay" @click.self="showPlanModal = false">
-        <div class="modal modal-wide">
-          <div class="modal-header">
-            <h3>Plan Feature</h3>
-            <button class="modal-close" @click="showPlanModal = false"><XIcon :size="16" /></button>
+      <div v-if="showWorkModal" class="overlay" @click.self="showWorkModal = false">
+        <div class="modal">
+          <div class="modal-head">
+            <span>Run Work</span>
+            <span v-if="workType" class="wt-badge" :style="{ color: WORK_TYPE_COLORS[workType], background: WORK_TYPE_COLORS[workType] + '18' }">
+              {{ workType }}
+            </span>
+            <button class="icon-btn" @click="showWorkModal = false"><XIcon :size="15" /></button>
           </div>
           <div class="modal-body">
-            <div class="form-field">
-              <label>Feature Description</label>
-              <textarea
-                v-model="planDescription"
-                placeholder="Describe the feature you want to build..."
-                rows="5"
-                autofocus
-              ></textarea>
+            <textarea v-model="workDesc" class="modal-textarea" rows="3"
+              placeholder="Describe the feature... (e.g. add /ping endpoint)"
+              autofocus @keydown.ctrl.enter="runWork"></textarea>
+            <div class="modal-hint" v-if="workType">
+              {{ workType === 'SMALL' || workType === 'BUGFIX' ? 'Work loop only — no quality gates' : workType === 'MEDIUM' ? 'Work loop + reviewer quality pass' : 'Work loop + full quality gates (reviewer, tests, coverage)' }}
             </div>
-            <p class="form-hint">Jonggrang will decompose this into atomic tasks using AI.</p>
           </div>
-          <div class="modal-footer">
-            <button class="btn btn-ghost" @click="showPlanModal = false">Cancel</button>
-            <button class="btn btn-primary" @click="startPlan" :disabled="!planDescription.trim()">
-              <ZapIcon :size="14" />
-              Generate Plan
+          <div class="modal-foot">
+            <button class="btn-ghost" @click="showWorkModal = false">Cancel</button>
+            <button class="btn-primary" @click="runWork" :disabled="!workDesc.trim()">
+              <PlayIcon :size="13" /> Run
             </button>
           </div>
         </div>
       </div>
     </Teleport>
 
-    <!-- ==================== MERGE PANEL ==================== -->
+    <!-- Plan modal -->
     <Teleport to="body">
-      <div v-if="showMergePanel" class="modal-overlay" @click.self="showMergePanel = false">
-        <div class="modal modal-wide">
-          <div class="modal-header">
-            <h3>Review & Merge Groups</h3>
-            <button class="modal-close" @click="showMergePanel = false"><XIcon :size="16" /></button>
+      <div v-if="showPlanModal" class="overlay" @click.self="showPlanModal = false">
+        <div class="modal">
+          <div class="modal-head">
+            <span>Plan Feature</span>
+            <button class="icon-btn" @click="showPlanModal = false"><XIcon :size="15" /></button>
           </div>
           <div class="modal-body">
-            <div v-for="(group, i) in taskGroups" :key="group.id" class="merge-group-row">
-              <div class="merge-group-info">
-                <span class="merge-group-dot" :style="{ background: GROUP_COLORS[i % GROUP_COLORS.length] }"></span>
-                <div>
-                  <strong>{{ group.id }}</strong>
-                  <span class="merge-group-branch" v-if="group.branch">{{ group.branch }}</span>
-                  <span class="merge-group-status" :class="group.status">{{ group.status }}</span>
-                </div>
-              </div>
-              <div class="merge-group-tasks">
-                <span v-for="id in (group.taskIds || [])" :key="id" class="detail-tag">{{ id }}</span>
-              </div>
-              <div class="merge-group-actions">
-                <button class="btn btn-ghost btn-sm" @click="reviewGroup(group.id)" :disabled="group.status === 'merged'">
-                  <EyeIcon :size="12" /> Review
-                </button>
-                <button class="btn btn-primary btn-sm" @click="mergeGroup(group.id)" :disabled="group.status === 'merged'">
-                  <GitBranchIcon :size="12" /> Merge
-                </button>
-              </div>
-            </div>
+            <textarea v-model="planDesc" class="modal-textarea" rows="3"
+              placeholder="Describe the feature to plan..."
+              autofocus @keydown.ctrl.enter="runPlan"></textarea>
           </div>
-          <div class="modal-footer">
-            <button class="btn btn-ghost" @click="showMergePanel = false">Close</button>
-            <button class="btn btn-primary" @click="mergeAll">
-              <GitBranchIcon :size="14" /> Merge All
+          <div class="modal-foot">
+            <button class="btn-ghost" @click="showPlanModal = false">Cancel</button>
+            <button class="btn-primary" @click="runPlan" :disabled="!planDesc.trim()">
+              <FileTextIcon :size="13" /> Plan
             </button>
           </div>
         </div>
       </div>
     </Teleport>
-  </div>
+
+    <!-- New task modal -->
+    <Teleport to="body">
+      <div v-if="showNewTaskForm" class="overlay" @click.self="showNewTaskForm = false">
+        <div class="modal">
+          <div class="modal-head">
+            <span>New Task</span>
+            <button class="icon-btn" @click="showNewTaskForm = false"><XIcon :size="15" /></button>
+          </div>
+          <div class="modal-body">
+            <div class="field">
+              <label>Title</label>
+              <input v-model="newTask.title" placeholder="Task title" autofocus @keydown.enter="addTask" />
+            </div>
+            <div class="field">
+              <label>Description</label>
+              <textarea v-model="newTask.description" placeholder="Optional details..." rows="3"></textarea>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-ghost" @click="showNewTaskForm = false">Cancel</button>
+            <button class="btn-primary" @click="addTask" :disabled="!newTask.title.trim()">Create Task</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+  </div><!-- /app -->
 </template>
 
-<style scoped>
-/* ==================== TOP BAR ==================== */
+<style>
+@import '@vue-flow/core/dist/style.css';
+@import '@vue-flow/core/dist/theme-default.css';
+@import '@xterm/xterm/css/xterm.css';
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-base:       #05060a;
+  --bg-card:       #0d0e14;
+  --bg-card-hover: #12131a;
+  --bg-elevated:   #16171f;
+  --bg-modal:      #1a1b24;
+  --border-subtle: rgba(255,255,255,0.06);
+  --border-default:rgba(255,255,255,0.12);
+  --text-primary:  #f4f4f5;
+  --text-secondary:#9ca3af;
+  --text-muted:    #4b5563;
+  --accent:        #38bdf8;
+  --green:         #10b981;
+  --green-muted:   rgba(16,185,129,0.12);
+  --blue:          #3b82f6;
+  --blue-muted:    rgba(59,130,246,0.12);
+  --yellow:        #f59e0b;
+  --yellow-muted:  rgba(245,158,11,0.12);
+  --red:           #ef4444;
+  --red-muted:     rgba(239,68,68,0.12);
+  --purple:        #8b5cf6;
+  --font-mono:     'JetBrains Mono', 'Fira Code', monospace;
+  --radius:        8px;
+  --topbar-h:      40px;
+}
+
+html, body, #app { height: 100%; overflow: hidden; }
+body { background: var(--bg-base); color: var(--text-primary); font-family: system-ui, -apple-system, sans-serif; font-size: 13px; }
+
+/* ── TOPBAR ── */
+.app { display: flex; flex-direction: column; height: 100vh; }
+
 .topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 46px;
-  padding: 0 14px;
-  background: var(--bg-surface);
+  height: var(--topbar-h); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 12px; gap: 8px;
+  background: var(--bg-card);
   border-bottom: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-  -webkit-app-region: drag;
-  user-select: none;
 }
+.topbar-left { display: flex; align-items: center; gap: 5px; }
+.project-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+.icon-muted   { color: var(--text-muted); }
+.topbar-center { display: flex; align-items: center; gap: 4px; }
+.topbar-right  { display: flex; align-items: center; gap: 8px; }
 
-.topbar-left, .topbar-right, .topbar-center {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.topbar-left { min-width: 180px; }
-.topbar-right { min-width: 180px; justify-content: flex-end; }
-
-.project-selector {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-}
-.project-selector:hover { background: rgba(255,255,255,0.05); }
-.project-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.icon-muted { color: var(--text-muted); }
-
-.view-tabs {
-  display: flex;
-  background: var(--bg-base);
-  border-radius: var(--radius-sm);
-  padding: 2px;
-}
 .tab {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 28px;
-  border: none;
-  background: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: 3px;
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 26px; border-radius: 5px;
+  border: none; background: transparent; color: var(--text-muted); cursor: pointer;
   transition: all 0.15s;
 }
-.tab:hover { color: var(--text-secondary); }
-.tab.active {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-}
+.tab:hover  { background: var(--bg-elevated); color: var(--text-secondary); }
+.tab.active { background: var(--bg-elevated); color: var(--text-primary); }
 
-.separator {
-  width: 1px;
-  height: 20px;
-  background: var(--border-default);
-}
+.sep { width: 1px; height: 18px; background: var(--border-subtle); margin: 0 4px; }
 
 .topbar-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 28px;
-  border: none;
-  background: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 26px; border-radius: 5px;
+  border: none; background: transparent; color: var(--text-muted); cursor: pointer;
   transition: all 0.15s;
 }
-.topbar-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
-.topbar-btn.active { color: var(--accent); }
+.topbar-btn:hover { background: var(--bg-elevated); color: var(--text-secondary); }
 
 .run-btn, .stop-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 12px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
-  -webkit-app-region: no-drag;
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 12px; height: 26px; border-radius: 5px;
+  font-size: 12px; font-weight: 600; cursor: pointer; border: none;
 }
+.run-btn  { background: var(--green); color: #000; }
+.run-btn:hover { background: #0ea271; }
+.stop-btn { background: var(--red-muted); color: var(--red); border: 1px solid var(--red-muted); }
+.stop-btn:hover { background: rgba(239,68,68,0.2); }
 
-.run-btn {
-  background: var(--green-muted);
-  color: var(--green-text);
-  border-color: rgba(16, 185, 129, 0.3);
-}
-.run-btn:hover {
-  background: rgba(16, 185, 129, 0.25);
-  border-color: var(--green);
-}
-.parallel-btn {
-  border-color: var(--blue);
-  color: var(--blue);
-}
-.parallel-btn:hover {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: var(--blue);
-}
-.merge-trigger-btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  background: var(--yellow-muted);
-  color: var(--yellow-text);
-  cursor: pointer;
-}
-.merge-trigger-btn:hover {
-  background: rgba(245, 158, 11, 0.25);
-}
-.run-branch {
-  font-size: 11px;
-  font-family: var(--font-mono);
-  opacity: 0.7;
-  padding-left: 4px;
-  border-left: 1px solid rgba(16, 185, 129, 0.3);
-  margin-left: 2px;
-  padding-left: 6px;
-}
-
-.stop-btn {
-  background: var(--red-muted);
-  color: var(--red-text);
-  border-color: rgba(239, 68, 68, 0.3);
-}
-.stop-btn:hover {
-  background: rgba(239, 68, 68, 0.25);
-  border-color: var(--red);
-}
-
-.status-badge {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--text-muted);
-  padding: 4px 10px;
-  border-radius: 99px;
+.ctx-badge {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  padding: 2px 7px; border-radius: 4px;
   background: rgba(255,255,255,0.04);
-}
-.status-badge.running {
-  color: var(--green-text);
-  background: var(--green-muted);
-  animation: pulse-glow 2s ease-in-out infinite;
-}
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
-  50% { box-shadow: 0 0 8px 2px rgba(16, 185, 129, 0.15); }
-}
-
-/* ==================== PROGRESS STRIP ==================== */
-.progress-strip {
-  height: 2px;
-  background: var(--bg-base);
-  flex-shrink: 0;
-}
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--green));
-  transition: width 0.5s ease;
-}
-
-/* ==================== MAIN LAYOUT ==================== */
-.main-layout {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-  min-height: 0;
-}
-
-/* ==================== KANBAN ==================== */
-.kanban-wrapper {
-  flex: 1;
-  overflow-x: auto;
-  overflow-y: hidden;
-  min-height: 0;
-  -webkit-overflow-scrolling: touch;
-}
-
-.kanban {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-  padding: 0;
-  gap: 0;
-  align-items: stretch;
-}
-
-.kanban-column {
-  min-width: 300px;
-  max-width: 340px;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--border-subtle);
-  background: var(--bg-base);
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-.kanban-column:last-child { border-right: none; }
-
-.col-header {
-  padding: 16px 16px 12px;
-  flex-shrink: 0;
-}
-.col-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.col-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.col-count {
-  font-size: 11px;
-  font-weight: 700;
-  min-width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  padding: 0 5px;
-}
-
-.col-scroll-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-.col-cards {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overscroll-behavior: contain;
-  padding: 0 10px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-/* ==================== TASK CARD ==================== */
-.task-card {
-  display: flex;
-  flex-shrink: 0;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: all 0.15s;
-  overflow: hidden;
-}
-.task-card:hover {
-  background: var(--bg-card-hover);
-  border-color: var(--border-default);
-  box-shadow: var(--shadow-card);
-}
-.task-card.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), var(--shadow-card);
-}
-.task-card.is-running {
-  border-color: rgba(59, 130, 246, 0.4);
-  animation: running-pulse 2s ease-in-out infinite;
-}
-@keyframes running-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
-  50% { box-shadow: 0 0 12px 2px rgba(59, 130, 246, 0.1); }
-}
-
-.card-indicator {
-  width: 3px;
-  flex-shrink: 0;
-}
-.card-body {
-  flex: 1;
-  padding: 12px 14px;
-  min-width: 0;
-}
-.card-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  line-height: 1.35;
-  margin-bottom: 4px;
-}
-.card-desc {
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.45;
-  margin-bottom: 8px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.card-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.card-id {
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-}
-.card-skill {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: var(--purple-muted);
-  color: var(--purple);
-  font-weight: 500;
-}
-
-.card-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.card-status-tag {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-.card-btns {
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-.task-card:hover .card-btns { opacity: 1; }
-
-.card-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border: 1px solid var(--border-default);
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.card-btn:hover { color: var(--text-primary); background: var(--bg-card-hover); }
-.start-btn {
-  color: var(--green-text);
-  border-color: rgba(16, 185, 129, 0.3);
-  background: var(--green-muted);
-}
-.start-btn:hover { border-color: var(--green); }
-.start-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.delete-btn:hover { color: var(--red-text); border-color: rgba(239, 68, 68, 0.4); }
-
-.add-task-btn {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border: 1px dashed var(--border-default);
-  background: none;
-  color: var(--text-muted);
-  border-radius: var(--radius-md);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.15s;
-  width: 100%;
-  justify-content: center;
-}
-.add-task-btn:hover {
-  color: var(--text-secondary);
-  border-color: var(--border-strong);
-  background: rgba(255,255,255,0.02);
-}
-
-/* ==================== GRAPH VIEW ==================== */
-.graph-wrapper {
-  flex: 1;
-  background: radial-gradient(circle at 50% 50%, rgba(30, 33, 40, 0.3) 0%, var(--bg-base) 100%);
-}
-
-.graph-node {
-  background: var(--bg-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  padding: 12px 16px;
-  min-width: 200px;
-  max-width: 240px;
-  cursor: pointer;
-  box-shadow: var(--shadow-card);
-  transition: all 0.15s;
-}
-.graph-node:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-elevated);
-  border-color: var(--border-strong);
-}
-.graph-node--completed { border-color: rgba(16, 185, 129, 0.3); }
-.graph-node--in_progress { border-color: rgba(59, 130, 246, 0.4); }
-.graph-node--waiting { border-color: rgba(245, 158, 11, 0.4); }
-.graph-node--blocked { border-color: rgba(239, 68, 68, 0.3); }
-
-.graph-node-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-.graph-node-id {
-  font-size: 10px;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-}
-.graph-node-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  line-height: 1.3;
-  margin-bottom: 6px;
-}
-.graph-node-status {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-/* ==================== SIDE BAR ==================== */
-.right-sidebar {
-  width: 380px;
-  min-width: 320px;
-  max-width: 44vw;
-  flex-shrink: 0;
-  border-left: 1px solid var(--border-subtle);
-  background: var(--bg-surface);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.detail-panel {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.detail-status-bar { height: 3px; }
-.detail-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px 0;
-  flex-shrink: 0;
-}
-.detail-status-badge {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.detail-scroll {
-  overflow-y: auto;
-  flex-shrink: 1;
-  min-height: 0;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.1) transparent;
-}
-
-.detail-title {
-  font-size: 16px;
-  font-weight: 600;
-  padding: 10px 16px 6px;
-  color: var(--text-primary);
-  line-height: 1.35;
-}
-.detail-desc {
-  padding: 0 16px 12px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.7;
-  word-break: break-word;
-}
-.detail-desc.markdown-body :deep(p) {
-  margin: 0 0 8px;
-}
-.detail-desc.markdown-body :deep(ul),
-.detail-desc.markdown-body :deep(ol) {
-  margin: 4px 0 8px;
-  padding-left: 18px;
-}
-.detail-desc.markdown-body :deep(li) {
-  margin-bottom: 3px;
-}
-.detail-desc.markdown-body :deep(code) {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  background: rgba(255,255,255,0.06);
-  padding: 1px 5px;
-  border-radius: 3px;
-  color: var(--text-primary);
-}
-.detail-desc.markdown-body :deep(pre) {
-  background: rgba(255,255,255,0.04);
-  padding: 8px 10px;
-  border-radius: 4px;
-  overflow-x: auto;
-  margin: 6px 0;
-}
-.detail-desc.markdown-body :deep(pre code) {
-  background: none;
-  padding: 0;
-}
-.detail-desc.markdown-body :deep(strong) {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-.detail-desc.markdown-body :deep(h1),
-.detail-desc.markdown-body :deep(h2),
-.detail-desc.markdown-body :deep(h3) {
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 600;
-  margin: 8px 0 4px;
-}
-.detail-desc.markdown-body :deep(blockquote) {
-  border-left: 2px solid rgba(56, 189, 248, 0.3);
-  padding-left: 10px;
-  margin: 6px 0;
-  color: var(--text-muted);
-}
-.detail-fields {
-  border-top: 1px solid var(--border-subtle);
-  padding: 10px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.detail-field-label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  margin-bottom: 4px;
-}
-.detail-field-value {
-  color: var(--text-primary);
-  font-size: 12px;
-  word-break: break-word;
-}
-.detail-file-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.detail-file-list li {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-primary);
-  padding: 3px 8px;
-  background: rgba(255,255,255,0.04);
-  border-radius: 4px;
-  border: 1px solid var(--border-subtle);
-  word-break: break-all;
-}
-.detail-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.detail-tag {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-primary);
-  padding: 2px 8px;
-  background: rgba(255,255,255,0.04);
-  border-radius: 4px;
-  border: 1px solid var(--border-subtle);
-}
-.detail-notes-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.detail-notes-list li {
-  font-size: 11px;
-  color: var(--text-secondary);
-  padding: 6px 8px;
-  background: rgba(255,255,255,0.03);
-  border-radius: 4px;
-  border-left: 2px solid var(--border-subtle);
-  line-height: 1.5;
-  word-break: break-word;
-}
-.mono { font-family: var(--font-mono); font-size: 12px; }
-
-.detail-output {
-  border-top: 1px solid var(--border-subtle);
-  flex: 1;
-  min-height: 160px;
-  display: flex;
-  flex-direction: column;
-}
-.detail-output-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-size: 11px;
-  font-weight: 600;
-}
-.detail-output-header .log-indicator {
-  margin-left: auto;
-}
-.detail-output-content {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  padding: 0;
-  display: flex;
-}
-
-.detail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-/* ==================== LOG PANEL ==================== */
-.log-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.log-header {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-}
-.log-header h3 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.log-indicator {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-muted);
-}
-.log-indicator.active {
-  background: var(--green);
-  box-shadow: 0 0 6px var(--green);
-  animation: log-pulse 1.5s ease-in-out infinite;
-}
-@keyframes log-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-.log-content {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  padding: 0;
-  display: flex;
-}
-
-.xterm-container {
-  width: 100%;
-  height: 100%;
-  padding: 4px;
-  box-sizing: border-box;
-  background: rgba(5, 6, 10, 0.85);
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  overflow: hidden;
-}
-
-:deep(.xterm) {
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-:deep(.xterm .xterm-viewport) {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(56, 189, 248, 0.35) transparent;
-}
-
-:deep(.xterm-viewport::-webkit-scrollbar) {
-  width: 6px;
-  height: 6px;
-}
-
-:deep(.xterm-viewport::-webkit-scrollbar-thumb) {
-  background: linear-gradient(180deg, rgba(56, 189, 248, 0.55), rgba(14, 165, 233, 0.35));
-  border-radius: 3px;
-}
-
-.xterm-empty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  color: var(--text-muted);
-  pointer-events: none;
-  text-transform: uppercase;
-  letter-spacing: 0.2px;
-}
-
-@keyframes fade-in { from { opacity: 0; } }
-@keyframes slide-up { from { transform: translateY(12px); opacity: 0; } }
-
-/* ==================== MODALS ==================== */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--bg-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-  animation: fade-in 0.15s ease;
-}
-.modal {
-  width: 440px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-modal);
-  animation: slide-up 0.2s ease;
-}
-.modal-wide { width: 560px; }
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.modal-header h3 {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.modal-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-}
-.modal-close:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
-.modal-body { padding: 16px 20px; }
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 20px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-/* ==================== FORMS ==================== */
-.form-field {
-  margin-bottom: 14px;
-}
-.form-field label {
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-.form-field input, .form-field textarea {
-  width: 100%;
-  padding: 9px 12px;
-  font-size: 13px;
-  font-family: var(--font-sans);
-  color: var(--text-primary);
-  background: var(--bg-base);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  outline: none;
-  transition: border-color 0.15s;
-  resize: vertical;
-}
-.form-field input:focus, .form-field textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-muted);
-}
-.form-hint {
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.5;
-}
-
-/* ==================== BUTTONS ==================== */
-.btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: all 0.15s;
-  border: none;
-}
-.btn-primary {
-  background: var(--accent);
-  color: white;
-}
-.btn-primary:hover { background: var(--accent-hover); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-ghost {
-  background: rgba(255,255,255,0.05);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-default);
-}
-.btn-ghost:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
-.btn-danger {
-  background: var(--red-muted);
-  color: var(--red-text);
-}
-.btn-danger:hover { background: rgba(239, 68, 68, 0.2); }
-.btn-sm { padding: 4px 10px; font-size: 11px; }
-.review-btn {
-  background: var(--yellow-muted);
-  color: var(--yellow-text);
-  border: 1px solid rgba(245, 158, 11, 0.3);
-}
-.review-btn:hover { background: rgba(245, 158, 11, 0.25); }
-
-/* ==================== REVIEW PAGE ==================== */
-.review-page {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  background: var(--bg-base);
-  display: flex;
-  flex-direction: column;
-}
-.review-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-surface);
-  flex-shrink: 0;
-}
-.review-topbar-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.review-branch-info {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.review-file-count {
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 2px 8px;
-  background: rgba(255,255,255,0.05);
-  border-radius: 10px;
-}
-.review-topbar-actions {
-  display: flex;
-  gap: 8px;
-}
-.review-layout {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-.review-files {
-  width: 220px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--border-subtle);
-  overflow-y: auto;
-  padding: 8px 0;
-  background: var(--bg-surface);
-}
-.review-files-header {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted);
-  padding: 8px 12px 4px;
-}
-.review-file-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
   cursor: default;
 }
-.review-file-item:hover { background: rgba(255,255,255,0.04); }
-.review-files-empty {
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 8px 12px;
+.ctx-badge.warn   { color: var(--yellow); }
+.ctx-badge.danger { color: var(--red); }
+
+.status-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-muted);
 }
-.review-diff {
-  flex: 1;
-  overflow: auto;
-  min-width: 0;
+.status-dot.active { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.status-text { font-size: 12px; color: var(--text-muted); }
+
+/* ── PROGRESS STRIP ── */
+.progress-strip { height: 2px; background: var(--border-subtle); flex-shrink: 0; }
+.progress-fill  { height: 100%; background: var(--green); transition: width 0.4s; }
+
+/* ── MAIN LAYOUT ── */
+.main-layout {
+  flex: 1; display: flex; overflow: hidden;
 }
-.review-diff-content {
-  margin: 0;
-  padding: 12px 16px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  white-space: pre;
-  tab-size: 4;
+
+/* ── KANBAN ── */
+.content-area { flex: 1; overflow: hidden; display: flex; }
+
+.kanban {
+  display: flex; flex: 1; gap: 0; overflow-x: auto; overflow-y: hidden;
 }
-.review-diff-content :deep(.diff-add) { color: #4ade80; background: rgba(74, 222, 128, 0.08); display: inline-block; width: 100%; }
-.review-diff-content :deep(.diff-del) { color: #f87171; background: rgba(248, 113, 113, 0.08); display: inline-block; width: 100%; }
-.review-diff-content :deep(.diff-hunk) { color: #60a5fa; font-weight: 600; }
-.review-diff-content :deep(.diff-meta) { color: var(--text-muted); font-weight: 600; }
-.review-diff-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: var(--text-muted);
-  font-size: 13px;
+
+.kanban-col {
+  flex: 1; min-width: 200px; max-width: 320px;
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--border-subtle);
 }
-.review-feedback {
-  width: 300px;
+.kanban-col:last-child { border-right: none; flex: 1; max-width: none; }
+
+.col-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+}
+.col-label { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: var(--text-muted); text-transform: uppercase; }
+.col-count {
+  font-size: 11px; font-weight: 700; min-width: 18px; height: 18px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px; background: var(--bg-elevated); color: var(--text-secondary); padding: 0 4px;
+}
+
+.col-body {
+  flex: 1; overflow-y: auto; padding: 10px 10px 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.col-body::-webkit-scrollbar { width: 4px; }
+.col-body::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 2px; }
+
+.task-card {
+  display: flex; background: var(--bg-card);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius);
+  cursor: pointer; transition: all 0.12s; overflow: hidden;
+  flex-shrink: 0;
+}
+.task-card:hover     { background: var(--bg-card-hover); border-color: var(--border-default); }
+.task-card.selected  { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.task-card.running   { border-color: rgba(59,130,246,0.4); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{box-shadow:none} 50%{box-shadow:0 0 12px 2px rgba(59,130,246,0.1)} }
+
+.card-bar  { width: 3px; flex-shrink: 0; }
+.card-body { flex: 1; padding: 10px 12px; min-width: 0; }
+.card-title { font-size: 13px; font-weight: 600; line-height: 1.35; margin-bottom: 3px; color: var(--text-primary); }
+.card-desc  {
+  font-size: 12px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 6px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.card-footer { display: flex; align-items: center; gap: 8px; }
+.card-id     { font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); flex: 1; }
+.card-status { font-size: 11px; font-weight: 600; }
+.card-actions { display: flex; gap: 3px; opacity: 0; transition: opacity 0.15s; }
+.task-card:hover .card-actions { opacity: 1; }
+
+.card-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 4px; border: none;
+  background: var(--bg-elevated); color: var(--text-muted); cursor: pointer; transition: all 0.12s;
+}
+.card-btn:hover { background: var(--bg-modal); color: var(--text-secondary); }
+.card-btn.danger:hover { color: var(--red); }
+.card-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.add-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px; margin: 2px 0 10px;
+  border: 1px dashed var(--border-subtle); border-radius: var(--radius);
+  background: transparent; color: var(--text-muted); font-size: 12px;
+  cursor: pointer; transition: all 0.12s; width: 100%;
+}
+.add-btn:hover { border-color: var(--border-default); color: var(--text-secondary); }
+
+/* ── GRAPH ── */
+.graph-wrap { flex: 1; overflow: hidden; }
+
+.gnode {
+  padding: 12px 16px; background: var(--bg-card);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius);
+  min-width: 180px; cursor: pointer;
+}
+.gnode:hover { border-color: var(--border-default); }
+.gnode--completed { border-color: rgba(16,185,129,0.3); }
+.gnode--in_progress { border-color: rgba(59,130,246,0.4); animation: pulse 2s infinite; }
+.gnode--blocked { border-color: rgba(239,68,68,0.3); }
+.gnode-id     { font-size: 10px; font-family: var(--font-mono); color: var(--text-muted); margin-bottom: 4px; }
+.gnode-title  { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.gnode-status { font-size: 11px; font-weight: 600; text-transform: capitalize; }
+
+/* ── SIDE PANEL ── */
+.side-panel {
+  width: 320px; flex-shrink: 0;
+  display: flex; flex-direction: column;
   border-left: 1px solid var(--border-subtle);
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-surface);
+  overflow: hidden;
 }
-.review-feedback-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--text-muted);
+
+/* Pipeline section */
+.pipeline-section {
+  flex-shrink: 0;
   border-bottom: 1px solid var(--border-subtle);
+  padding: 10px;
 }
-.review-feedback-body {
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+
+.pipeline-header { margin-bottom: 8px; }
+.pipeline-title  { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.pipeline-name   { font-size: 12px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.pipeline-status { display: flex; align-items: center; gap: 6px; }
+
+.wt-badge {
+  font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px;
+  flex-shrink: 0;
 }
-.review-feedback-hint {
-  font-size: 11px;
-  color: var(--text-muted);
-  line-height: 1.5;
+
+.ps-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted);
 }
-.review-feedback-input {
-  width: 100%;
-  box-sizing: border-box;
+.ps-dot.running, .ps-dot.in_progress { background: var(--green); animation: blink 1s infinite; }
+.ps-dot.failed   { background: var(--red); }
+.ps-dot.completed { background: var(--green); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.ps-text    { font-size: 11px; color: var(--text-secondary); }
+.resume-btn { font-size: 11px; color: var(--yellow); background: none; border: none; cursor: pointer; padding: 0; }
+.resume-btn:hover { text-decoration: underline; }
+
+/* Phase grid */
+.phase-grid { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.phase-row  { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+
+.phase-cell {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 4px 2px; border-radius: 4px;
+  background: var(--bg-elevated); border: 1px solid transparent;
+  min-width: 0; text-align: center;
+}
+.phase-cell.ph-done { background: rgba(16,185,129,0.08); border-color: rgba(16,185,129,0.2); }
+.phase-cell.ph-run  { background: rgba(56,189,248,0.08); border-color: rgba(56,189,248,0.3); animation: blink 1s infinite; }
+.phase-cell.ph-fail { background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.2); }
+.phase-cell.ph-skip { opacity: 0.3; }
+.phase-cell.ph-wait { opacity: 0.6; }
+
+.phase-icon { font-size: 11px; line-height: 1; margin-bottom: 1px; }
+.phase-cell.ph-done .phase-icon { color: var(--green); }
+.phase-cell.ph-run  .phase-icon { color: var(--accent); }
+.phase-cell.ph-fail .phase-icon { color: var(--red); }
+.phase-num  { font-size: 9px; color: var(--text-muted); font-family: var(--font-mono); }
+.phase-name { font-size: 9px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; max-width: 100%; text-overflow: ellipsis; }
+.phase-role { font-size: 8px; font-weight: 600; margin-top: 1px; }
+
+/* Quality gates */
+.gates-row  { display: flex; gap: 8px; }
+.gate { font-size: 11px; color: var(--text-muted); }
+.gate.ok { color: var(--green); }
+
+/* Logs section */
+.logs-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+.logs-header  {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; flex-shrink: 0;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--text-muted); text-transform: uppercase;
+}
+.log-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.log-dot.active { background: var(--green); animation: blink 1s infinite; }
+
+.terminal-wrap {
+  flex: 1; overflow: hidden; padding: 4px;
+  position: relative; min-height: 0;
+}
+.terminal-wrap .xterm { height: 100%; }
+.terminal-wrap .xterm-screen { height: 100% !important; }
+.terminal-wrap .xterm-viewport { border-radius: 4px; }
+.log-empty {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+/* ── DETAIL PANEL ── */
+.detail-panel {
+  width: 260px; flex-shrink: 0;
+  border-left: 1px solid var(--border-subtle);
+  display: flex; flex-direction: column;
   background: var(--bg-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-family: var(--font-mono);
-  padding: 8px;
-  resize: vertical;
 }
-.review-feedback-input:focus {
-  outline: none;
-  border-color: var(--accent);
+.detail-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0;
 }
-.review-log-content {
-  flex: 1;
-  min-height: 120px;
-  position: relative;
-  display: flex;
-}
+.detail-id { font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); }
+.detail-body { flex: 1; padding: 14px 12px; overflow-y: auto; }
+.detail-title { font-size: 14px; font-weight: 600; color: var(--text-primary); line-height: 1.4; margin-bottom: 8px; }
+.detail-desc  { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 10px; }
+.detail-meta  { display: flex; gap: 8px; align-items: center; }
+.detail-status { font-size: 11px; font-weight: 600; }
+.detail-skill  { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: rgba(139,92,246,0.12); color: var(--purple); }
+.detail-actions { display: flex; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border-subtle); flex-shrink: 0; }
 
-/* ==================== GROUPS STRIP ==================== */
-.groups-strip {
-  display: flex;
-  gap: 6px;
-  padding: 6px 16px;
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-subtle);
-  flex-wrap: wrap;
+/* ── BUTTONS ── */
+.btn-primary, .btn-ghost, .btn-danger {
+  display: flex; align-items: center; gap: 5px;
+  padding: 6px 14px; border-radius: 6px;
+  font-size: 12px; font-weight: 600; cursor: pointer; border: none;
+  transition: all 0.15s;
 }
-.group-pill {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid;
-  color: var(--text-secondary);
-}
-.group-pill-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-.group-pill-status {
-  font-weight: 400;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  font-size: 10px;
-  letter-spacing: 0.3px;
-}
-.group-pill.running .group-pill-dot { animation: log-pulse 1.5s ease-in-out infinite; }
-.group-pill.done { opacity: 0.6; }
-.group-pill.merged { opacity: 0.4; }
+.btn-primary { background: var(--green); color: #000; }
+.btn-primary:hover { background: #0ea271; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-ghost   { background: var(--bg-elevated); color: var(--text-secondary); }
+.btn-ghost:hover { background: var(--bg-modal); }
+.btn-danger  { background: var(--red-muted); color: var(--red); }
+.btn-danger:hover { background: rgba(239,68,68,0.2); }
 
-/* ==================== MERGE PANEL ==================== */
-.merge-group-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border-subtle);
+.icon-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 5px;
+  border: none; background: transparent; color: var(--text-muted); cursor: pointer;
 }
-.merge-group-row:last-child { border-bottom: none; }
-.merge-group-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 160px;
+.icon-btn:hover { background: var(--bg-elevated); color: var(--text-secondary); }
+
+/* ── MODALS ── */
+.overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
 }
-.merge-group-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
+.modal {
+  background: var(--bg-modal); border: 1px solid var(--border-default);
+  border-radius: 10px; width: 440px; max-width: 90vw;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.5);
 }
-.merge-group-branch {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-muted);
-  display: block;
+.modal-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px; border-bottom: 1px solid var(--border-subtle);
+  font-weight: 600; font-size: 14px;
 }
-.merge-group-status {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  margin-left: 6px;
+.modal-head > span:first-child { flex: 1; }
+.modal-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.modal-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 16px; border-top: 1px solid var(--border-subtle);
 }
-.merge-group-status.done { color: var(--green); }
-.merge-group-status.failed { color: var(--red); }
-.merge-group-status.merged { color: var(--text-muted); }
-.merge-group-status.running { color: var(--blue); }
-.merge-group-tasks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-  flex: 1;
+.modal-textarea {
+  width: 100%; resize: vertical; background: var(--bg-elevated);
+  border: 1px solid var(--border-default); border-radius: 6px;
+  color: var(--text-primary); font-size: 13px; padding: 10px 12px;
+  font-family: inherit; outline: none; transition: border-color 0.15s;
 }
-.merge-group-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
+.modal-textarea:focus { border-color: var(--accent); }
+.modal-hint { font-size: 11px; color: var(--text-muted); }
+
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.field input, .field textarea {
+  background: var(--bg-elevated); border: 1px solid var(--border-default);
+  border-radius: 6px; color: var(--text-primary); font-size: 13px; padding: 8px 10px;
+  font-family: inherit; outline: none; width: 100%; resize: vertical;
 }
+.field input:focus, .field textarea:focus { border-color: var(--accent); }
+
+/* Vue Flow overrides */
+.vue-flow { background: var(--bg-base) !important; }
+.vue-flow__controls { background: var(--bg-card) !important; border: 1px solid var(--border-subtle) !important; }
+.vue-flow__controls button { background: transparent !important; color: var(--text-muted) !important; border: none !important; }
+.vue-flow__controls button:hover { background: var(--bg-elevated) !important; color: var(--text-primary) !important; }
+.vue-flow__minimap { background: var(--bg-card) !important; border: 1px solid var(--border-subtle) !important; }
 </style>

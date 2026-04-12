@@ -1,8 +1,12 @@
 ---
+description: Specialized Tester — writes and runs tests, never spawns sub-agents
+mode: subagent
+permission:
+  edit: allow
+  bash: allow
+  webfetch: allow
 role: tester
 label: Specialized Tester
-tools: [Edit, Write, Bash, Read]
-forbidden_tools: [Task]
 output_format: test_results_json
 completion_signal: ALL_TESTS_PASSING
 max_lines: 150

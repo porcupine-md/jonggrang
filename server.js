@@ -103,6 +103,36 @@ chokidar.watch(paths.tasksFile, { ignoreInitial: true }).on('all', () => readTas
 chokidar.watch(paths.progressFile, { ignoreInitial: true }).on('all', () => readProgress());
 chokidar.watch(paths.configFile, { ignoreInitial: true }).on('all', () => readConfigFile());
 
+// Watch manifests directory for real-time phase grid updates.
+// Watch the .jonggrang dir (which exists or will be created) so chokidar
+// can detect when the nested features/ subdirectory appears.
+const jonggrangDir = path.join(PROJECT_ROOT, '.jonggrang');
+fs.mkdirSync(jonggrangDir, { recursive: true });
+function emitManifestsUpdate() {
+    try {
+        const manifests = orchestration.listManifests(PROJECT_ROOT);
+        io.emit('manifests_update', manifests.map(({ featureId, manifest }) => ({
+            featureId,
+            description: manifest.description,
+            workType: manifest.work_type,
+            status: manifest.status,
+            currentPhase: manifest.current_phase,
+            activePhases: manifest.active_phases,
+            phases: manifest.phases,
+            validation: manifest.validation,
+            progress: {
+                completed: manifest.active_phases.filter(n => manifest.phases[n]?.status === 'completed').length,
+                total: manifest.active_phases.length,
+            },
+            createdAt: manifest.created_at,
+            updatedAt: manifest.updated_at,
+        })));
+    } catch (err) { /* ignore */ }
+}
+chokidar.watch(jonggrangDir, { ignoreInitial: true, depth: 4 })
+    .on('add', emitManifestsUpdate)
+    .on('change', emitManifestsUpdate);
+
 io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
     socket.emit('tasks_update', latestTasks);
@@ -120,7 +150,8 @@ function spawnJonggrang(args, env = {}, cwd = PROJECT_ROOT) {
     const nodeCli = path.join(__dirname, 'bin', 'jonggrang.js');
     return spawn('node', [nodeCli, ...args], {
         cwd,
-        env: { ...process.env, JONGGRANG_HOME, JONGGRANG_PROJECT_ROOT: PROJECT_ROOT, ...env }
+        env: { ...process.env, JONGGRANG_HOME, JONGGRANG_PROJECT_ROOT: PROJECT_ROOT, ...env },
+        stdio: ['pipe', 'pipe', 'pipe'],
     });
 }
 
@@ -238,8 +269,9 @@ app.post('/api/jonggrang/start', (req, res) => {
         return res.status(400).json({ error: 'Jonggrang is already running' });
     }
 
-    const { taskId, mode, tool } = req.body || {};
+    const { taskId, mode, tool, description } = req.body || {};
     const args = ['work'];
+    if (description) args.push(description);   // one-shot: plan + execute
     if (taskId) args.push('--task', taskId);
     if (mode) args.push('--mode', mode);
     if (tool) args.push('--tool', tool);
@@ -356,8 +388,9 @@ app.post('/api/jonggrang/start-parallel', (req, res) => {
 
         // Copy untracked files to worktree
         lib.copyToWorktree(PROJECT_ROOT, wt.worktreePath, [
-            'jonggrang-tasks.json', 'AGENTS.md', 'progress.txt', 'jonggrang.json',
-            'CLAUDE.md', 'SKILL.md', 'skills',
+            '.jonggrang',           // jonggrang.json, jonggrang-tasks.json, progress.txt
+            'AGENTS.md', 'CLAUDE.md', 'opencode.json',
+            '.claude', '.opencode',
         ]);
 
         const child = spawnJonggrang(
@@ -490,9 +523,9 @@ app.post('/api/jonggrang/groups/:id/revise', (req, res) => {
 
     child.stdout.on('data', (d) => {
         const line = d.toString();
-        try { JSON.parse(line); } catch { io.emit('log', `[revise:${req.params.id}] ${line}`); }
+        io.emit('log', { stream: 'stdout', data: line });
     });
-    child.stderr.on('data', (d) => io.emit('log', `[revise:${req.params.id}] ${d.toString()}`));
+    child.stderr.on('data', (d) => io.emit('log', { stream: 'stderr', data: d.toString() }));
     child.on('close', (code) => {
         isJonggrangRunning = false;
         io.emit('jonggrang_status', { isRunning: false, mode: 'idle' });

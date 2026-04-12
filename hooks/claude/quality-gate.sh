@@ -19,7 +19,10 @@ VIOLATIONS=()
 
 # ─── Check 1: Untracked markdown files outside .jonggrang/.output/ ────────────
 # Agents should write reports to .jonggrang/.output/, not scatter them
-UNTRACKED_MD=$(git -C "$PROJECT_ROOT" ls-files --others --exclude-standard 2>/dev/null | grep '\.md$' | grep -v '\.jonggrang/' | grep -v 'AGENTS\.md' | grep -v 'progress\.txt' | head -10 || true)
+UNTRACKED_MD=$(git -C "$PROJECT_ROOT" ls-files --others --exclude-standard 2>/dev/null | grep '\.md$' \
+  | grep -v '\.jonggrang/' | grep -v '\.claude/' | grep -v '\.opencode/' \
+  | grep -v 'AGENTS\.md' | grep -v 'CLAUDE\.md' | grep -v 'SKILL\.md' | grep -v 'progress\.txt' \
+  | head -10 || true)
 
 if [[ -n "$UNTRACKED_MD" ]]; then
   while IFS= read -r file; do
@@ -38,28 +41,6 @@ if [[ -f "$FEEDBACK_STATE" ]]; then
   fi
 fi
 
-# ─── Check 3: MANIFEST phase sanity ──────────────────────────────────────────
-MANIFEST_FILE=$(find "$PROJECT_ROOT/.jonggrang/.output/features" -name "MANIFEST.yaml" 2>/dev/null | head -1 || true)
-if [[ -n "$MANIFEST_FILE" ]]; then
-  PHASE_STATUS=$(python3 -c "
-import sys, yaml
-try:
-    m = yaml.safe_load(open('$MANIFEST_FILE'))
-    current = m.get('current_phase')
-    if current:
-        ps = m.get('phases', {}).get(str(current), {}).get('status', 'unknown')
-        print(ps)
-    else:
-        print('none')
-except Exception as e:
-    print('unknown')
-" 2>/dev/null || echo "unknown")
-
-  # If current phase is still 'running' and agent is trying to stop, warn
-  if [[ "$PHASE_STATUS" == "running" ]]; then
-    VIOLATIONS+=("MANIFEST shows current phase is still 'running' — did you complete it?")
-  fi
-fi
 
 # ─── Report ──────────────────────────────────────────────────────────────────
 if [[ ${#VIOLATIONS[@]} -eq 0 ]]; then
