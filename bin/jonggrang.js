@@ -725,12 +725,11 @@ async function cmdInit() {
 
     if (!INIT_TOOL) {
       const toolAnswer = await select({
-        message: 'AI agent tool',
-        initialValue: 'both',
+        message: 'Primary AI agent tool (both Claude Code + OpenCode will be set up)',
+        initialValue: 'claude',
         options: [
-          { value: 'both',      label: 'Both        — Claude Code + OpenCode' },
-          { value: 'claude',    label: 'Claude Code only' },
-          { value: 'opencode',  label: 'OpenCode only' },
+          { value: 'claude',    label: 'Claude Code — primary tool' },
+          { value: 'opencode',  label: 'OpenCode    — primary tool' },
         ],
       });
       if (isCancel(toolAnswer)) { cancel('Cancelled.'); return; }
@@ -754,7 +753,7 @@ async function cmdInit() {
   } else {
     const rl = createRL();
     if (!INIT_NAME)     INIT_NAME     = await ask(rl, 'Project name:',  path.basename(PROJECT_ROOT));
-    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'AI tool:',        'both', 'both|claude|opencode');
+    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'claude', 'claude|opencode');
     if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:',  'autonomous', 'supervised|balanced|autonomous');
     rl.close();
   }
@@ -774,32 +773,22 @@ async function cmdInit() {
     ci: INIT_CI,
   }, JONGGRANG_HOME, PROJECT_ROOT);
 
-  const toolForLog = INIT_TOOL || 'both';
-
-  logSuccess('Generated jonggrang.json');
-  if (toolForLog === 'opencode' || toolForLog === 'both') {
-    logSuccess('Generated opencode.json');
-  }
+  logSuccess('Generated .jonggrang/jonggrang.json');
+  logSuccess('Generated opencode.json');
   logSuccess('Generated AGENTS.md');
+  logSuccess('Generated CLAUDE.md');
+  logSuccess('Installed .claude/agents/ (lead, developer, reviewer, test-lead, tester)');
+  logSuccess('Installed .claude/SKILL.md');
+  logSuccess('Installed .opencode/agents/ (lead, developer, reviewer, test-lead, tester)');
+  logSuccess('Installed .opencode/SKILL.md');
 
-  if (toolForLog === 'claude' || toolForLog === 'both') {
-    logSuccess('Generated CLAUDE.md');
-    logSuccess('Installed .claude/agents/ (lead, developer, reviewer, test-lead, tester)');
-    logSuccess('Installed .claude/SKILL.md');
-  }
-  if (toolForLog === 'opencode' || toolForLog === 'both') {
-    logSuccess('Installed .opencode/agents/ (lead, developer, reviewer, test-lead, tester)');
-    logSuccess('Installed .opencode/SKILL.md');
-  }
-
-  logSuccess('Generated jonggrang-tasks.json');
-  logSuccess('Generated progress.txt');
+  logSuccess('Generated .jonggrang/jonggrang-tasks.json');
+  logSuccess('Generated .jonggrang/progress.txt');
   logSuccess(`Copied ${result.skillCount} skill templates`);
 
   // ── Install hooks for the selected tool ──────────────────────
   try {
-    const toolForHooks = INIT_TOOL || 'opencode';
-    const hookResults = hooksLib.installHooksForTool(PROJECT_ROOT, toolForHooks, JONGGRANG_HOME);
+    const hookResults = hooksLib.installHooksForTool(PROJECT_ROOT, 'both', JONGGRANG_HOME);
 
     if (hookResults.claude) {
       logSuccess(`Installed Claude Code hooks → ${path.relative(PROJECT_ROOT, hookResults.claude.path)}`);
@@ -1282,7 +1271,7 @@ Work type auto-detection:
 
 Init flags (bypass wizard):
   --name <name>           Project name
-  --tool <tool>           both | claude | opencode (default: both)
+  --tool <tool>           claude | opencode (default: claude) — both tools always set up
   --autonomy <mode>       supervised | balanced | autonomous
   --force                 Overwrite existing jonggrang.json
   (stack, type, testing, ci are auto-detected from the project)

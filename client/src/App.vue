@@ -672,12 +672,49 @@ function onDrop(e, key)       {
         </div>
         <div class="detail-body">
           <div class="detail-title">{{ selectedTask.title }}</div>
-          <div class="detail-desc" v-if="selectedTask.description">{{ selectedTask.description }}</div>
+          <div class="detail-desc" v-if="selectedTask.description && selectedTask.description !== selectedTask.title">{{ selectedTask.description }}</div>
+
           <div class="detail-meta">
             <span class="detail-status" :style="{ color: statusColor(selectedTask.status) }">
               {{ statusLabel(selectedTask.status) }}
             </span>
+            <span v-if="selectedTask.role" class="detail-tag role-tag">{{ selectedTask.role }}</span>
             <span v-if="selectedTask.skill" class="detail-skill">{{ selectedTask.skill }}</span>
+            <span v-if="selectedTask.priority != null" class="detail-tag">P{{ selectedTask.priority }}</span>
+          </div>
+
+          <!-- Timing -->
+          <div v-if="selectedTask.started_at || selectedTask.completed_at" class="detail-section">
+            <div class="detail-section-label">TIMING</div>
+            <div v-if="selectedTask.started_at" class="detail-kv">
+              <span class="detail-k">Started</span>
+              <span class="detail-v">{{ new Date(selectedTask.started_at).toLocaleTimeString() }}</span>
+            </div>
+            <div v-if="selectedTask.completed_at" class="detail-kv">
+              <span class="detail-k">Completed</span>
+              <span class="detail-v">{{ new Date(selectedTask.completed_at).toLocaleTimeString() }}</span>
+            </div>
+          </div>
+
+          <!-- File ownership -->
+          <div v-if="selectedTask.files && selectedTask.files.length > 0" class="detail-section">
+            <div class="detail-section-label">FILES</div>
+            <div v-for="f in selectedTask.files" :key="f" class="detail-file">{{ f }}</div>
+          </div>
+
+          <!-- Dependencies -->
+          <div v-if="selectedTask.blocked_by && selectedTask.blocked_by.length > 0" class="detail-section">
+            <div class="detail-section-label">DEPENDS ON</div>
+            <div v-for="dep in selectedTask.blocked_by" :key="dep" class="detail-dep">
+              <span class="dep-dot" :style="{ background: statusColor(rawTasks.find(t=>t.id===dep)?.status || 'pending') }"></span>
+              {{ dep }}
+            </div>
+          </div>
+
+          <!-- Error log -->
+          <div v-if="selectedTask.error_log && selectedTask.error_log.length > 0" class="detail-section">
+            <div class="detail-section-label">ERRORS</div>
+            <div v-for="(e, i) in selectedTask.error_log" :key="i" class="detail-error">{{ e }}</div>
           </div>
         </div>
         <div class="detail-actions">
@@ -1078,9 +1115,34 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: syst
 .detail-body { flex: 1; padding: 14px 12px; overflow-y: auto; }
 .detail-title { font-size: 14px; font-weight: 600; color: var(--text-primary); line-height: 1.4; margin-bottom: 8px; }
 .detail-desc  { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 10px; }
-.detail-meta  { display: flex; gap: 8px; align-items: center; }
+.detail-meta  { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
 .detail-status { font-size: 11px; font-weight: 600; }
 .detail-skill  { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: rgba(139,92,246,0.12); color: var(--purple); }
+.detail-tag    { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: var(--bg-elevated); color: var(--text-muted); }
+.role-tag      { background: rgba(56,189,248,0.1); color: var(--accent); }
+
+.detail-section { margin-bottom: 12px; }
+.detail-section-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.07em;
+  color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px;
+}
+.detail-file {
+  font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary);
+  padding: 2px 0; word-break: break-all;
+}
+.detail-dep {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary); padding: 2px 0;
+}
+.dep-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.detail-kv { display: flex; gap: 6px; font-size: 11px; padding: 2px 0; }
+.detail-k  { color: var(--text-muted); min-width: 60px; }
+.detail-v  { color: var(--text-secondary); font-family: var(--font-mono); }
+.detail-error {
+  font-size: 11px; color: var(--red); font-family: var(--font-mono);
+  padding: 3px 6px; background: var(--red-muted); border-radius: 3px; margin-bottom: 3px;
+  word-break: break-all;
+}
 .detail-actions { display: flex; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border-subtle); flex-shrink: 0; }
 
 /* ── BUTTONS ── */
