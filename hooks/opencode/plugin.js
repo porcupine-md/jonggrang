@@ -40,6 +40,83 @@ function createPlugin(projectRoot) {
     return {
 
       // ────────────────────────────────────────────────────────────────
+      // LAYER 0: session.created — Inject CLAUDE.md + Session Role Init
+      // Equivalent to Claude Code's auto-loading of CLAUDE.md at session start.
+      // OpenCode natively loads AGENTS.md (project knowledge), but misses the
+      // jonggrang operational protocol that lives in CLAUDE.md. This handler
+      // bridges the gap so both tools have the same starting context.
+      // ────────────────────────────────────────────────────────────────
+      'session.created': async (input) => {
+        // ── Inject CLAUDE.md content ──────────────────────────────────
+        const claudeMdPath = path.join(projectRoot, 'CLAUDE.md');
+        if (fs.existsSync(claudeMdPath) && context?.session?.addContext) {
+          try {
+            const content = fs.readFileSync(claudeMdPath, 'utf8');
+            await context.session.addContext({
+              type: 'text',
+              title: 'CLAUDE.md — Jonggrang Operational Protocol',
+              content,
+            });
+          } catch (e) {
+            console.error('[jonggrang] session.created: could not inject CLAUDE.md:', e.message);
+          }
+        }
+
+        // ── Session Role Registration (mirrors session-init.sh) ───────
+        // Claim a pending role from the queue so agent-first enforcement
+        // can identify developer/tester sessions (same mechanism as Claude Code).
+        const sessionId = input?.session?.id || input?.id || '';
+        if (!sessionId) return;
+
+        const sessionRolesPath = path.join(projectRoot, '.jonggrang', '.ephemeral', 'session-roles.json');
+        let sessionRoles = {};
+        try {
+          if (fs.existsSync(sessionRolesPath)) {
+            sessionRoles = JSON.parse(fs.readFileSync(sessionRolesPath, 'utf8'));
+          }
+        } catch {}
+
+        if (sessionRoles[sessionId]) return; // already registered
+
+        // Detect role from session prompt if available
+        const prompt = (input?.prompt || input?.session?.prompt || '').toLowerCase();
+        let role = '';
+        if (/you are a specialized tester|specialized tester/.test(prompt))         role = 'tester';
+        else if (/you are a specialized reviewer|specialized reviewer/.test(prompt)) role = 'reviewer';
+        else if (/you are a test lead|test lead/.test(prompt))                       role = 'test-lead';
+        else if (/you are a specialized lead|specialized lead/.test(prompt))         role = 'lead';
+        else if (/you are a specialized developer|specialized developer/.test(prompt)) role = 'developer';
+
+        // Fallback: claim oldest pending role from queue
+        if (!role) {
+          const pendingDir = path.join(projectRoot, '.jonggrang', '.ephemeral', 'pending-roles');
+          if (fs.existsSync(pendingDir)) {
+            const files = fs.readdirSync(pendingDir)
+              .filter(f => f.endsWith('.json'))
+              .sort();
+            if (files.length > 0) {
+              const oldest = path.join(pendingDir, files[0]);
+              try {
+                const data = JSON.parse(fs.readFileSync(oldest, 'utf8'));
+                role = data.role || '';
+                fs.unlinkSync(oldest);
+              } catch {}
+            }
+          }
+        }
+
+        if (!role) return;
+
+        try {
+          fs.mkdirSync(path.dirname(sessionRolesPath), { recursive: true });
+          sessionRoles[sessionId] = role;
+          fs.writeFileSync(sessionRolesPath, JSON.stringify(sessionRoles, null, 2));
+        } catch (e) {
+          console.error('[jonggrang] session-role registration failed:', e.message);
+        }
+      },
+
+      // ────────────────────────────────────────────────────────────────
       // LAYER 1: tool.execute.before — Agent-First + Compaction Gate
       // ────────────────────────────────────────────────────────────────
       'tool.execute.before': async (input) => {
@@ -75,9 +152,20 @@ function createPlugin(projectRoot) {
           try { registry = JSON.parse(fs.readFileSync(agentsRegistry, 'utf8')); } catch {}
 
           if (registry[domain]) {
-            // Check if we ARE the specialized agent
-            const currentRole = context?.agent?.role || input?.agent_role || '';
-            if (currentRole !== 'developer' && currentRole !== 'tester') {
+            // Check if we ARE the specialized agent (prevent self-blocking).
+            // Read session-roles.json — populated by session.created handler.
+            const sessionId = input?.session_id || input?.session?.id || '';
+            let sessionRole = '';
+            if (sessionId) {
+              const sessionRolesPath = path.join(projectRoot, '.jonggrang', '.ephemeral', 'session-roles.json');
+              try {
+                if (fs.existsSync(sessionRolesPath)) {
+                  const roles = JSON.parse(fs.readFileSync(sessionRolesPath, 'utf8'));
+                  sessionRole = roles[sessionId] || '';
+                }
+              } catch {}
+            }
+            if (sessionRole !== 'developer' && sessionRole !== 'tester') {
               throw new Error(
                 `AGENT-FIRST ENFORCEMENT: Cannot edit ${filePath} directly.\n` +
                 `A '${domain}' specialist is registered. Spawn '${domain}-developer' agent instead.`
