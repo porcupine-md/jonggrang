@@ -1,6 +1,6 @@
 ---
 name: jonggrang
-description: Deterministic AI development workflow orchestrator. Manages task boards (jonggrang-tasks.json), runs 16-phase pipelines (BUGFIX/SMALL/MEDIUM/LARGE), installs lifecycle hooks for Claude Code and OpenCode, and coordinates five specialist roles (Lead/Developer/Reviewer/TestLead/Tester). Use when planning features, executing multi-step development workflows, or orchestrating AI coding agents. Run via npx jonggrang.
+description: Deterministic AI development workflow orchestrator. Manages task boards (.jonggrang/jonggrang-tasks.json), runs 16-phase pipelines (BUGFIX/SMALL/MEDIUM/LARGE), installs lifecycle hooks for Claude Code and OpenCode, and coordinates five specialist roles (Lead/Developer/Reviewer/TestLead/Tester). Use when planning features, executing multi-step development workflows, or orchestrating AI coding agents. Run via npx jonggrang.
 metadata: {"clawdbot":{"emoji":"🎭","os":["darwin","linux","win32"],"requires":{"runtime":"node","install":"npx jonggrang"}}}
 ---
 
@@ -31,12 +31,12 @@ npx jonggrang version
 Jonggrang runs in two modes. Know which one you are in:
 
 ### Mode 1 — Work Loop
-You are a single agent executing tasks from `jonggrang-tasks.json` one at a time. Each invocation is stateless — a fresh context window per task.
+You are a single agent executing tasks from `.jonggrang/jonggrang-tasks.json` one at a time. Each invocation is stateless — a fresh context window per task.
 
 ### Mode 2 — Orchestrate (16-Phase Pipeline)
 You are a **specialist agent** assigned to a specific phase and role. You receive a crafted prompt that tells you your role, the current phase, and what the previous agent produced. You must emit a completion signal at the end of your output.
 
-Check `jonggrang-tasks.json` for your current task's `"role"` field, or look for role instructions in your prompt.
+Check `.jonggrang/jonggrang-tasks.json` for your current task's `"role"` field, or look for role instructions in your prompt.
 
 ---
 
@@ -45,9 +45,9 @@ Check `jonggrang-tasks.json` for your current task's `"role"` field, or look for
 | File | Purpose | Action |
 |------|---------|--------|
 | `AGENTS.md` | Project conventions, patterns, gotchas | **Read first. Follow all conventions.** |
-| `progress.txt` | Learnings from previous iterations | **Read. Avoid repeating mistakes.** |
-| `jonggrang-tasks.json` | Task board with current state | **Read. Find your assigned task.** |
-| `jonggrang.json` | Project config (stack, testing, tool) | **Read. Know your test command and stack.** |
+| `.jonggrang/progress.txt` | Learnings from previous iterations | **Read. Avoid repeating mistakes.** |
+| `.jonggrang/jonggrang-tasks.json` | Task board with current state | **Read. Find your assigned task.** |
+| `.jonggrang/jonggrang.json` | Project config (stack, testing, tool) | **Read. Know your test command and stack.** |
 | `skills/core/<name>/SKILL.md` | Core skill for your task type | **Read if task has `"skill"` field.** |
 | `.jonggrang/.output/features/<id>/MANIFEST.yaml` | Orchestration phase state | **Read in orchestrate mode.** |
 
@@ -130,7 +130,7 @@ Read each returned skill file before proceeding.
 npm run typecheck    # or: tsc --noEmit, go vet, mypy, etc.
 
 # Tests
-npm test             # or: the command in jonggrang.json -> testing.command
+npm test             # or: the command in .jonggrang/jonggrang.json -> testing.command
 
 # Lint (if configured)
 npm run lint
@@ -140,7 +140,7 @@ If validation fails: read the error, fix it, re-run. If stuck after 2 attempts, 
 
 ### Step 6: Update State
 
-**Update `jonggrang-tasks.json`** — mark task completed:
+**Update `.jonggrang/jonggrang-tasks.json`** — mark task completed:
 ```json
 {
   "status": "completed",
@@ -149,7 +149,7 @@ If validation fails: read the error, fix it, re-run. If stuck after 2 attempts, 
 }
 ```
 
-**Append to `progress.txt`** — log learnings:
+**Append to `.jonggrang/progress.txt`** — log learnings:
 ```
 ## task-XXX: Task Title
 - What was implemented
@@ -237,23 +237,23 @@ Key fields: `work_type`, `current_phase`, `phases` (per-phase status and output)
 - Keep changes minimal and focused on the task
 - Write tests when the task requires them
 - Run validation before committing
-- Log learnings in `progress.txt`
+- Log learnings in `.jonggrang/progress.txt`
 - Emit your completion signal as the final output line (orchestrate mode)
 
 ### DO NOT
 - Modify files not related to your task
 - Add dependencies without clear justification
-- Change `AGENTS.md` directly — propose changes in `progress.txt` instead
+- Change `AGENTS.md` directly — propose changes in `.jonggrang/progress.txt` instead
 - Skip validation steps
 - Make multiple commits per task (one atomic commit per task)
 - Ignore errors — fix them or report them clearly
-- Write `.md` files outside `.jonggrang/`, `AGENTS.md`, `progress.txt`, `README.md`, `CHANGELOG.md`, or `docs/`
+- Write `.md` files outside `.jonggrang/`, `AGENTS.md`, `.jonggrang/progress.txt`, `README.md`, `CHANGELOG.md`, or `docs/`
 
 ---
 
 ## File Ownership
 
-Each task in `jonggrang-tasks.json` has a `"files"` array listing the files it owns. **Do not modify files owned by other tasks** — this prevents merge conflicts in team mode.
+Each task in `.jonggrang/jonggrang-tasks.json` has a `"files"` array listing the files it owns. **Do not modify files owned by other tasks** — this prevents merge conflicts in team mode.
 
 ---
 
@@ -290,7 +290,7 @@ npx jonggrang help                               # All commands and flags
 
 ## Example: Completing a Work Loop Task
 
-Given this task in `jonggrang-tasks.json`:
+Given this task in `.jonggrang/jonggrang-tasks.json`:
 
 ```json
 {
@@ -305,7 +305,7 @@ Given this task in `jonggrang-tasks.json`:
 
 Execution:
 
-1. Read `AGENTS.md`, `progress.txt`, `jonggrang-tasks.json`, `jonggrang.json`
+1. Read `AGENTS.md`, `.jonggrang/progress.txt`, `.jonggrang/jonggrang-tasks.json`, `.jonggrang/jonggrang.json`
 2. Read `skills/core/scaffold-api/SKILL.md`
 3. Run Gateway to resolve library skills for this task type
 4. Read existing code (`src/app.ts`, other routes) to understand patterns
@@ -313,7 +313,7 @@ Execution:
 6. Create `src/routes/todos.ts` with CRUD handlers
 7. Register routes in `src/app.ts`
 8. Run `npm run typecheck && npm test`
-9. Update `jonggrang-tasks.json` (status: completed, passes: true)
-10. Append learnings to `progress.txt`
-11. `git add src/routes/todos.ts src/types/todo.ts src/app.ts jonggrang-tasks.json progress.txt`
+9. Update `.jonggrang/jonggrang-tasks.json` (status: completed, passes: true)
+10. Append learnings to `.jonggrang/progress.txt`
+11. `git add src/routes/todos.ts src/types/todo.ts src/app.ts .jonggrang/jonggrang-tasks.json .jonggrang/progress.txt`
 12. `git commit -m "feat(todos): add CRUD endpoints with in-memory storage"`

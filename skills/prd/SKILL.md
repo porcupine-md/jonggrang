@@ -43,7 +43,7 @@ This PRD will be used as input for the Jonggrang development workflow, where eac
 
 5. Ask the user whether the PRD is acceptable or needs revision
 
-6. After approval, convert to `jonggrang-tasks.json` format:
+6. After approval, convert to `.jonggrang/jonggrang-tasks.json` format:
 
 ## Script
 
@@ -59,7 +59,7 @@ mkdir -p tasks
 - [ ] Each user story has acceptance criteria
 - [ ] Each story is sufficiently atomic (completable in 1 iteration)
 - [ ] Priorities assigned to all stories
-- [ ] jonggrang-tasks.json updated with new tasks
+- [ ] .jonggrang/jonggrang-tasks.json updated with new tasks
 
 ## Examples
 

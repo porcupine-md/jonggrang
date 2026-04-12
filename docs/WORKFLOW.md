@@ -15,11 +15,11 @@ Each iteration is **stateless** — a fresh context window. This prevents accumu
 Agent reads these files at start of every iteration:
 
 ```
-AGENTS.md              --> Project conventions, gotchas, patterns
-progress.txt           --> Learnings from previous iterations
-jonggrang-tasks.json   --> Current task state
-git log --oneline -20  --> Recent changes for context
-jonggrang.json         --> Project config
+AGENTS.md                        --> Project conventions, gotchas, patterns
+.jonggrang/progress.txt          --> Learnings from previous iterations
+.jonggrang/jonggrang-tasks.json  --> Current task state
+git log --oneline -20            --> Recent changes for context
+.jonggrang/jonggrang.json        --> Project config
 ```
 
 Total context budget: ~30% of window for context, ~70% for work.
@@ -49,7 +49,7 @@ Claude Code or OpenCode executes the plan:
 
 #### Step 5: Validate
 
-Run hooks from `jonggrang.json`:
+Run hooks from `.jonggrang/jonggrang.json`:
 ```bash
 npm run typecheck
 npm run lint
@@ -73,9 +73,9 @@ Skill: scaffold-api
 #### Step 7: Update State
 
 ```
-jonggrang-tasks.json  --> task.status = "completed"
-progress.txt          --> append session learnings
-AGENTS.md             --> propose update if new pattern found (human approval required)
+.jonggrang/jonggrang-tasks.json  --> task.status = "completed"
+.jonggrang/progress.txt          --> append session learnings
+AGENTS.md                        --> propose update if new pattern found (human approval required)
 ```
 
 #### Step 8: Loop Decision
@@ -131,7 +131,7 @@ The orchestrate command runs a deterministic 16-phase pipeline. Each phase is ex
 | 13 | Test | Tester | Execute test plan, run all tests | — |
 | 14 | Coverage | Tester | Enforce coverage thresholds | — |
 | 15 | TestQuality | Reviewer | Test quality review → REVIEW_COMPLETE | — |
-| 16 | Complete | Lead | Final summary, update progress.txt, MANIFEST → done | — |
+| 16 | Complete | Lead | Final summary, update `.jonggrang/progress.txt`, MANIFEST → done | — |
 
 ### Phase Skipping by Work Type
 
@@ -364,17 +364,17 @@ Jaccard similarity is tracked across output hashes. If the same output appears >
 ### What `jonggrang init` Creates
 
 ```
-jonggrang.json          → project config
-AGENTS.md               → project conventions
-jonggrang-tasks.json    → empty task board
-progress.txt            → empty learning log
-skills/core/            → core skills (always loaded)
-skills/library/         → library skills (JIT loaded)
-.claude/settings.json   → Claude Code hooks
-.opencode/plugins/      → OpenCode plugin
-.jonggrang/             → runtime state dir
-  .output/              → feature manifests + agent outputs
-  .ephemeral/           → feedback/compaction state (cleared on restart)
+AGENTS.md                    → project conventions
+skills/core/                 → core skills (always loaded)
+skills/library/              → library skills (JIT loaded)
+.claude/settings.json        → Claude Code hooks
+.opencode/plugins/           → OpenCode plugin
+.jonggrang/                  → runtime state + config dir
+  jonggrang.json             → project config
+  jonggrang-tasks.json       → task board state
+  progress.txt               → append-only learning log
+  .output/                   → feature manifests + agent outputs
+  .ephemeral/                → feedback/compaction state (cleared on restart)
 ```
 
 ---

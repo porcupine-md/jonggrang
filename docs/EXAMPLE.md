@@ -56,10 +56,10 @@ jonggrang init \
 Expected output:
 
 ```
-[jonggrang] Generated jonggrang.json
+[jonggrang] Generated .jonggrang/jonggrang.json
 [jonggrang] Generated AGENTS.md
-[jonggrang] Generated jonggrang-tasks.json
-[jonggrang] Generated progress.txt
+[jonggrang] Generated .jonggrang/jonggrang-tasks.json
+[jonggrang] Generated .jonggrang/progress.txt
 [jonggrang] Copied skills (core + library)
 [jonggrang] Installed Claude Code hooks → .claude/settings.json
 [jonggrang] Installed OpenCode plugin  → .opencode/plugins/jonggrang.js
@@ -167,10 +167,7 @@ npx vitest run
 ```
 .
 ├── AGENTS.md
-├── jonggrang.json
-├── jonggrang-tasks.json
 ├── package.json
-├── progress.txt
 ├── src/
 │   ├── app.ts
 │   ├── index.ts
@@ -179,7 +176,11 @@ npx vitest run
 ├── tests/
 │   ├── health.test.ts
 │   └── todos.test.ts
-└── tsconfig.json
+├── tsconfig.json
+└── .jonggrang/
+    ├── jonggrang.json
+    ├── jonggrang-tasks.json
+    └── progress.txt
 ```
 
 ---
@@ -195,7 +196,7 @@ cd /path/to/existing-project
 jonggrang version
 ```
 
-The project must already have `jonggrang.json`. If not, run `jonggrang init` first.
+The project must already have `.jonggrang/jonggrang.json`. If not, run `jonggrang init` first.
 
 ### Step 1: Run Orchestrate
 
@@ -216,7 +217,7 @@ Expected output (first few phases):
 [jonggrang] MANIFEST: .jonggrang/.output/features/feat-20260411-d4e5f6/MANIFEST.yaml
 
 [jonggrang] Phase 1/16: Setup (Lead)
-  ✓ Read AGENTS.md, progress.txt, git log
+  ✓ Read AGENTS.md, .jonggrang/progress.txt, git log
   ✓ Context loaded
 
 [jonggrang] Phase 2/16: Triage (Lead)
@@ -238,7 +239,7 @@ To skip this pause:
 
 ```bash
 jonggrang orchestrate "..." --autonomy autonomous
-# or set in jonggrang.json: orchestration.pause_for_brainstorm = false
+# or set in .jonggrang/jonggrang.json: orchestration.pause_for_brainstorm = false
 ```
 
 Continuing:
@@ -283,7 +284,7 @@ Continuing:
   ✓ REVIEW_COMPLETE
 
 [jonggrang] Phase 16/16: Complete (Lead)
-  ✓ progress.txt updated
+  ✓ .jonggrang/progress.txt updated
   ✓ MANIFEST status: completed
 
 [jonggrang] Orchestration complete! Feature: feat-20260411-d4e5f6

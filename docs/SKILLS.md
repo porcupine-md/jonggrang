@@ -154,11 +154,11 @@ Input/output examples for reference.
 
 | Variable | Source | Example |
 |----------|--------|---------|
-| `{{project_name}}` | jonggrang.json | my-awesome-app |
-| `{{project_type}}` | jonggrang.json | web-app |
-| `{{stack}}` | jonggrang.json | nextjs-typescript |
-| `{{test_framework}}` | jonggrang.json | vitest |
-| `{{test_command}}` | jonggrang.json | npm run test |
+| `{{project_name}}` | .jonggrang/jonggrang.json | my-awesome-app |
+| `{{project_type}}` | .jonggrang/jonggrang.json | web-app |
+| `{{stack}}` | .jonggrang/jonggrang.json | nextjs-typescript |
+| `{{test_framework}}` | .jonggrang/jonggrang.json | vitest |
+| `{{test_command}}` | .jonggrang/jonggrang.json | npm run test |
 | `{{input.<name>}}` | User input at invocation | varies |
 
 ---
@@ -363,7 +363,7 @@ After creating a library skill, add it to the relevant domain gateway so the rou
 3. Gateway scans ROUTING_TABLE for keyword matches
 4. Gateway returns {domain, skill_paths, instruction}
 5. Agent reads skill files from skill_paths
-6. Agent interpolates {{variables}} from jonggrang.json
+6. Agent interpolates {{variables}} from .jonggrang/jonggrang.json
 7. Agent follows Instructions section (creates/modifies files)
 8. Agent runs Script section if present
 9. Agent verifies Validation checklist

@@ -37,7 +37,7 @@ Inspired by the Ralph Loop pattern, Agent Orchestra (Addy Osmani), the collapsed
 
 4. **Verification > Generation** — The bottleneck is no longer writing code, but verifying it. Every layer is designed to catch errors early: reviewer agents, tester agents, quality gate hooks.
 
-5. **Stateless Execution, Persistent Memory** — Each iteration starts with a clean context window. Memory persists via MANIFEST.yaml, git history, progress.txt, and AGENTS.md.
+5. **Stateless Execution, Persistent Memory** — Each iteration starts with a clean context window. Memory persists via MANIFEST.yaml, git history, `.jonggrang/progress.txt`, and AGENTS.md.
 
 6. **Right-sized Tasks** — Every task must fit in a single context window. Atomic, testable, committable.
 
@@ -75,10 +75,7 @@ Inspired by the Ralph Loop pattern, Agent Orchestra (Addy Osmani), the collapsed
 
 ```
 project-root/
-├── jonggrang.json              # Project config
 ├── AGENTS.md                   # Human-curated knowledge
-├── progress.txt                # Append-only agent learnings
-├── jonggrang-tasks.json        # Task board state
 ├── skills/
 │   ├── core/                   # Tier 1: always loaded
 │   │   ├── gateway-backend/
@@ -101,6 +98,9 @@ project-root/
 │       ├── test-lead.md
 │       └── tester.md
 ├── .jonggrang/
+│   ├── jonggrang.json          # Project config
+│   ├── jonggrang-tasks.json    # Task board state
+│   ├── progress.txt            # Append-only agent learnings
 │   ├── .output/
 │   │   └── features/{id}/
 │   │       ├── MANIFEST.yaml   # Phase state (persistent)
@@ -128,14 +128,14 @@ Simple stateless loop. Each iteration gets a fresh context window.
 jonggrang plan "feature"
     |
     v
-Decompose into atomic tasks (jonggrang-tasks.json)
+Decompose into atomic tasks (.jonggrang/jonggrang-tasks.json)
     |
     v
 jonggrang work
     |
     v
 For each task:
-  1. Load AGENTS.md + progress.txt + task state
+  1. Load AGENTS.md + .jonggrang/progress.txt + task state
   2. Pick highest-priority unblocked task
   3. Implement via AI agent
   4. Validate (typecheck, lint, tests)
@@ -509,8 +509,8 @@ When an agent is stuck in a loop (blocked exit >3 times), an out-of-band LLM ana
 | Channel | Type | Who Writes | Purpose |
 |---------|------|-----------|---------|
 | `AGENTS.md` | Curated | Human (reviewed) | Conventions, gotchas, patterns |
-| `progress.txt` | Append-only | Agent | Per-task learnings, surprises |
-| `jonggrang-tasks.json` | Structured | Agent + Human | Task state and history |
+| `.jonggrang/progress.txt` | Append-only | Agent | Per-task learnings, surprises |
+| `.jonggrang/jonggrang-tasks.json` | Structured | Agent + Human | Task state and history |
 | `.jonggrang/.output/` | Structured JSON | Agent | Phase outputs, architecture plans |
 | `MANIFEST.yaml` | YAML | Orchestrator | Phase state, resume point |
 | Git history | Immutable | Agent | Code changes with context |
@@ -521,7 +521,7 @@ Human-curated project knowledge. Research shows human-written AGENTS.md improves
 
 **Agent proposes, human curates.**
 
-### progress.txt
+### .jonggrang/progress.txt
 
 Append-only log written after each task:
 
@@ -618,7 +618,7 @@ See [CONFIG.md](./CONFIG.md) for a complete reference.
 | **Orchestration** | Single loop | Task loop | 16-phase state machine |
 | **Roles** | None | None | Lead / Dev / Reviewer / TestLead / Tester |
 | **Skill system** | PRD prompt | 9 flat skills | Two-tier: Core (BIOS) + Library (JIT) |
-| **State** | progress.txt | tasks + progress | MANIFEST.yaml + dual ephemeral/persistent |
+| **State** | progress.txt | tasks + progress | MANIFEST.yaml + `.jonggrang/` + dual ephemeral/persistent |
 | **Enforcement** | None | Pre-commit hooks | 8-layer deterministic hooks (Claude + OpenCode) |
 | **Feedback loop** | None | None | Dirty bits + domain-level review/test gates |
 | **Context mgmt** | None | None | Compaction gates (75/80/85%) |

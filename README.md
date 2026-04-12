@@ -26,7 +26,7 @@ You describe what you want
         v
   jonggrang work  -->  For each task:
         |            1. Fresh context (no accumulated confusion)
-        |            2. Read AGENTS.md + progress.txt (project knowledge)
+        |            2. Read AGENTS.md + .jonggrang/progress.txt (project knowledge)
         |            3. Pick highest priority unblocked task
         |            4. Implement via AI agent (opencode/claude)
         |            5. Validate (typecheck, tests, lint)
@@ -131,10 +131,10 @@ jonggrang init --name my-app --type api --tool claude --autonomy autonomous --fo
 ### `jonggrang init`
 
 Interactive wizard that sets up your project. Generates:
-- `jonggrang.json` — project configuration
+- `.jonggrang/jonggrang.json` — project configuration
 - `AGENTS.md` — project knowledge for AI agents (human-curated)
-- `jonggrang-tasks.json` — task board
-- `progress.txt` — append-only learnings log
+- `.jonggrang/jonggrang-tasks.json` — task board
+- `.jonggrang/progress.txt` — append-only learnings log
 - `skills/` — prompt templates filtered by your project type
 - `.claude/settings.json` — Claude Code enforcement hooks (if `--tool claude`)
 - `.opencode/plugins/jonggrang.js` — OpenCode enforcement plugin (if `--tool opencode`)
@@ -486,14 +486,14 @@ After `jonggrang init`, your project will have:
 
 ```
 your-project/
-├── jonggrang.json           # Project config
-├── jonggrang-tasks.json     # Task board state
 ├── AGENTS.md                # Project knowledge (edit this!)
-├── progress.txt             # Auto-generated learnings
 ├── skills/
 │   ├── core/                # Tier 1 — always loaded
 │   └── library/             # Tier 2 — JIT via gateway
 ├── .jonggrang/
+│   ├── jonggrang.json       # Project config
+│   ├── jonggrang-tasks.json # Task board state
+│   ├── progress.txt         # Auto-generated learnings
 │   ├── .output/             # Agent outputs + MANIFEST.yaml
 │   ├── .ephemeral/          # Runtime state (feedback loop, compaction)
 │   └── locks/               # File ownership locks
@@ -508,7 +508,7 @@ your-project/
 
 The most important file for output quality. Tells AI agents about your project's conventions, patterns, and gotchas. **Human-curated** — research shows human-written AGENTS.md improves agent success ~4%.
 
-### progress.txt
+### .jonggrang/progress.txt
 
 Append-only log written by the agent after each task. Captures learnings and prevents repeating mistakes across sessions.
 
@@ -516,7 +516,7 @@ Append-only log written by the agent after each task. Captures learnings and pre
 
 ## Configuration
 
-See `jonggrang.json` after init:
+See `.jonggrang/jonggrang.json` after init:
 
 ```jsonc
 {
