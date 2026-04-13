@@ -247,7 +247,15 @@ function createPlugin(projectRoot) {
           const { execSync } = require('child_process');
           const untracked = execSync('git ls-files --others --exclude-standard', {
             cwd: projectRoot, encoding: 'utf8',
-          }).split('\n').filter(f => f.endsWith('.md') && !f.startsWith('.jonggrang/') && f !== 'AGENTS.md' && f !== 'README.md');
+          }).split('\n').filter(f =>
+            f.endsWith('.md') &&
+            !f.startsWith('.jonggrang/') &&
+            !f.startsWith('.claude/') &&
+            !f.startsWith('.opencode/') &&
+            !f.startsWith('docs/') &&
+            f !== 'AGENTS.md' && f !== 'CLAUDE.md' && f !== 'README.md' &&
+            f !== 'CHANGELOG.md' && f !== 'CONTRIBUTING.md' && f !== 'SKILL.md'
+          );
 
           for (const f of untracked) {
             if (f) violations.push(`Untracked .md outside .jonggrang/.output/: ${f}`);
@@ -282,11 +290,16 @@ function createPlugin(projectRoot) {
 
           const allowedPatterns = [
             /^\.jonggrang\//,
+            /^\.claude\//,
+            /^\.opencode\//,
+            /^docs\//,
             /^AGENTS\.md$/,
+            /^CLAUDE\.md$/,
+            /^SKILL\.md$/,
             /^progress\.txt$/,
             /^README\.md$/,
             /^CHANGELOG\.md$/,
-            /^docs\//,
+            /^CONTRIBUTING\.md$/,
           ];
 
           for (const file of untracked) {
