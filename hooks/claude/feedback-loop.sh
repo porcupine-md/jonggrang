@@ -15,6 +15,16 @@ if [[ -z "$PROJECT_ROOT" ]]; then
   exit 0
 fi
 
+# Resolve jonggrang lib — works in user projects (.jonggrang/lib/) and source repo (lib/)
+_JONGGRANG_BASE="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)"
+if [[ -z "${JONGGRANG_LIB:-}" ]]; then
+  if [[ -d "${_JONGGRANG_BASE}/.jonggrang/lib" ]]; then
+    JONGGRANG_LIB="${_JONGGRANG_BASE}/.jonggrang/lib"
+  else
+    JONGGRANG_LIB="${_JONGGRANG_BASE}/lib"
+  fi
+fi
+
 FEEDBACK_STATE="$PROJECT_ROOT/.jonggrang/.ephemeral/feedback-loop-state.json"
 
 # If no feedback state, allow exit (loop not active)
@@ -32,7 +42,7 @@ fi
 # Run exit gate check via node
 GATE_RESULT=$(node -e "
   try {
-    const fb = require('$(dirname "$0")/../../lib/feedback.js');
+    const fb = require('${JONGGRANG_LIB}/feedback.js');
     const result = fb.checkExitGate('$PROJECT_ROOT');
     console.log(JSON.stringify(result));
   } catch(e) {
@@ -52,7 +62,7 @@ fi
 if [[ "$STUCK" -gt 3 ]]; then
   echo "=== ESCALATION ADVISOR TRIGGERED ==="
   echo "Agent has been stuck for $STUCK consecutive exits."
-  echo "Hint: Review the feedback-loop-state.json and check if the reviewer/tester agents"
+  echo "Hint: Review feedback-loop-state.json and check if reviewer/tester agents"
   echo "have been spawned for all modified domains."
   echo ""
 fi

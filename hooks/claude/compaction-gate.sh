@@ -21,6 +21,16 @@ if [[ -z "$PROJECT_ROOT" ]]; then
   exit 0
 fi
 
+# Resolve jonggrang lib — works in user projects (.jonggrang/lib/) and source repo (lib/)
+_JONGGRANG_BASE="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)"
+if [[ -z "${JONGGRANG_LIB:-}" ]]; then
+  if [[ -d "${_JONGGRANG_BASE}/.jonggrang/lib" ]]; then
+    JONGGRANG_LIB="${_JONGGRANG_BASE}/.jonggrang/lib"
+  else
+    JONGGRANG_LIB="${_JONGGRANG_BASE}/lib"
+  fi
+fi
+
 COMPACTION_STATE="$PROJECT_ROOT/.jonggrang/.ephemeral/compaction-state.json"
 
 # If no state file, run compaction check via node
@@ -28,7 +38,7 @@ if [[ ! -f "$COMPACTION_STATE" ]]; then
   # Try to refresh state
   node -e "
     try {
-      const c = require('$(dirname "$0")/../../lib/compaction.js');
+      const c = require('${JONGGRANG_LIB}/compaction.js');
       const state = c.refreshCompactionState('$PROJECT_ROOT');
       process.exit(0);
     } catch(e) {
@@ -54,7 +64,7 @@ if [[ -n "$UPDATED" ]]; then
   if [[ $AGE -gt 300 ]]; then
     node -e "
       try {
-        const c = require('$(dirname "$0")/../../lib/compaction.js');
+        const c = require('${JONGGRANG_LIB}/compaction.js');
         c.refreshCompactionState('$PROJECT_ROOT');
       } catch(e) {}
     " 2>/dev/null || true

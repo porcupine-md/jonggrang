@@ -22,6 +22,16 @@ if [[ -z "$PROJECT_ROOT" || -z "$FILE_PATH" ]]; then
   exit 0
 fi
 
+# Resolve jonggrang lib — works in user projects (.jonggrang/lib/) and source repo (lib/)
+_JONGGRANG_BASE="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)"
+if [[ -z "${JONGGRANG_LIB:-}" ]]; then
+  if [[ -d "${_JONGGRANG_BASE}/.jonggrang/lib" ]]; then
+    JONGGRANG_LIB="${_JONGGRANG_BASE}/.jonggrang/lib"
+  else
+    JONGGRANG_LIB="${_JONGGRANG_BASE}/lib"
+  fi
+fi
+
 # Determine domain from file path
 domain="backend"  # default
 
@@ -38,7 +48,7 @@ fi
 # Set dirty bit via node
 node -e "
   try {
-    const fb = require('$(dirname "$0")/../../lib/feedback.js');
+    const fb = require('${JONGGRANG_LIB}/feedback.js');
     fb.setDirtyBit('$PROJECT_ROOT', '$domain');
     console.error('[jonggrang] Dirty bit set for domain: $domain (${FILE_PATH})');
   } catch(e) {
