@@ -78,7 +78,67 @@ Skill: scaffold-api
 AGENTS.md                        --> propose update if new pattern found (human approval required)
 ```
 
-#### Step 8: Loop Decision
+#### Step 8: Test Feedback Loop
+
+After the agent finishes and marks the task `completed`, the orchestrator runs `testing.command` from `jonggrang.json` automatically. If tests pass, the task is done. If tests fail, the agent gets another chance — with the test output injected into its prompt.
+
+```
+Agent selesai + task marked completed
+    │
+    ▼
+Run testCmd
+    │
+    ├── pass → task completed ✓ (exit iteration)
+    │
+    └── fail
+         │
+         attempt 1 → inject test output into prompt → re-run agent
+         attempt 2 → inject test output into prompt → re-run agent
+         attempt 3 → show test output to user:
+                     "Provide feedback for the agent (or Enter to block): "
+                     ├── user types feedback → inject feedback + reset counter → loop again
+                     └── Enter (empty)       → task marked blocked
+```
+
+**Key details:**
+
+- **Max auto-retries: 3** — the agent gets 3 attempts to fix failing tests without human intervention. Configurable via `TEST_RETRY_LIMIT` constant.
+- **Feedback injection** — on each retry, the full test output (capped at 4000 chars, tail-end preserved) is injected into the prompt under a `## Test Failure Feedback` section with the raw output in a code block.
+- **Human escalation** — after 3 failures, the test output is displayed and the user is prompted. User feedback is combined with the last test output and injected into the next prompt. The retry counter resets, giving the agent another 3 attempts.
+- **Blocked exit** — if the user presses Enter without typing feedback, the task is marked `blocked` and the work loop moves to the next task.
+- **No test command** — if `testing.command` is not configured (empty string), the test step is skipped entirely and the task completes immediately after the agent finishes.
+
+The prompt structure on retry looks like:
+
+```markdown
+# Jonggrang Work Session
+
+## Test Failure Feedback
+The previous implementation attempt failed validation. Fix the issues below before marking the task complete.
+
+\`\`\`
+  ✗ add(2, 3) === 5: expected 5, got -1
+  ✓ add(0, 0) === 0
+  ✗ add(-1, 1) === 0: expected 0, got -2
+
+1 passed, 2 failed
+\`\`\`
+
+## Current Task
+...
+```
+
+When escalated to the user, the feedback includes both sources:
+
+```
+User feedback: the bug is in the subtract helper, not the add function itself
+
+Last test output:
+  ✗ add(2, 3) === 5: expected 5, got -1
+  ...
+```
+
+#### Step 9: Loop Decision
 
 ```
 all tasks completed          --> EXIT: COMPLETE

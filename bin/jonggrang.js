@@ -182,6 +182,15 @@ function updateTaskMode(taskId, status) {
   }
 }
 
+const TEST_RETRY_LIMIT = 3;
+
+function askUserFeedback(prompt) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(prompt, (answer) => { rl.close(); resolve(answer.trim()); });
+  });
+}
+
 async function runIteration(iteration, taskId) {
   const task = lib.getTask(TASKS_FILE, taskId);
   const taskTitle = task ? task.title : taskId;
@@ -193,34 +202,83 @@ async function runIteration(iteration, taskId) {
   // ensuring the browser sees the in_progress state transition.
   await new Promise(r => setTimeout(r, 200));
 
-  const prompt = lib.buildWorkPrompt(taskId, TASKS_FILE, MODE);
-
   if (DRY_RUN) {
     logWarn(`[DRY RUN] Would execute prompt for task: ${taskId}`);
-    console.log(prompt);
+    console.log(lib.buildWorkPrompt(taskId, TASKS_FILE, MODE));
     return true;
   }
 
-  logInfo(`Spawning fresh ${TOOL} instance...`);
+  const testCmd = lib.readConfig(CONFIG_FILE, 'testing.command', '');
+  let testFeedback = '';    // injected into prompt on retry
+  let testAttempt = 0;
 
-  const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT);
+  while (true) {
+    // Build prompt — inject test failure feedback on retries
+    const prompt = lib.buildWorkPrompt(taskId, TASKS_FILE, MODE, testFeedback || undefined);
 
-  if (exitCode === 0) {
+    logInfo(`Spawning fresh ${TOOL} instance...${testAttempt > 0 ? ` (test retry ${testAttempt}/${TEST_RETRY_LIMIT})` : ''}`);
+    const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT);
+
+    if (exitCode !== 0) {
+      logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
+      updateTaskMode(taskId, 'pending');
+      return false;
+    }
+
+    // ── Check task completion ─────────────────────────────────
     const data = lib.getTasks(TASKS_FILE);
     const t = data.tasks.find(t => t.id === taskId);
-    if (t && t.status === 'completed') {
-      logSuccess(`Task ${taskId} completed successfully`);
-      updateTaskMode(taskId, 'completed');
-      return true;
-    } else {
+    if (!t || t.status !== 'completed') {
       logWarn('Agent finished but did not mark task complete. Reverting to pending.');
       updateTaskMode(taskId, 'pending');
       return false;
     }
-  } else {
-    logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
-    updateTaskMode(taskId, 'pending');
-    return false;
+
+    // ── Run tests ─────────────────────────────────────────────
+    if (!testCmd) {
+      logSuccess(`Task ${taskId} completed successfully`);
+      updateTaskMode(taskId, 'completed');
+      return true;
+    }
+
+    logInfo('Running tests...');
+    const { passed, output } = lib.runTestCommand(testCmd, PROJECT_ROOT);
+
+    if (passed) {
+      logSuccess(`Task ${taskId} completed — tests passed`);
+      updateTaskMode(taskId, 'completed');
+      return true;
+    }
+
+    testAttempt++;
+    logWarn(`Tests failed (attempt ${testAttempt}/${TEST_RETRY_LIMIT})`);
+
+    if (testAttempt < TEST_RETRY_LIMIT) {
+      // Auto-retry: inject test output as feedback, reset task to pending
+      testFeedback = output;
+      lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+      logInfo('Retrying with test failure output...');
+      continue;
+    }
+
+    // ── Max retries hit — ask user ────────────────────────────
+    logError(`Tests still failing after ${TEST_RETRY_LIMIT} attempts.`);
+    console.log('\n--- Test output ---\n' + output + '\n---\n');
+    const userInput = await askUserFeedback(
+      'Provide feedback for the agent (or press Enter to mark task blocked): '
+    );
+
+    if (!userInput) {
+      logError(`Task ${taskId} marked as blocked after ${TEST_RETRY_LIMIT} failed test retries.`);
+      updateTaskMode(taskId, 'blocked');
+      return false;
+    }
+
+    // User gave feedback — inject it and reset counter for another round
+    testFeedback = `User feedback: ${userInput}\n\nLast test output:\n${output}`;
+    testAttempt = 0;
+    lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+    logInfo('Retrying with user feedback...');
   }
 }
 
