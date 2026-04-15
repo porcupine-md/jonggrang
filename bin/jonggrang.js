@@ -369,6 +369,20 @@ async function runPostWorkPhases(description, workType, featureId, manifest, man
 // ============================================================
 
 async function cmdWork(descriptionParts = []) {
+  // --resume: skip work loop, go straight to orchestration resume
+  if (ORCHESTRATE_RESUME) {
+    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    if (!existing) {
+      logError('No incomplete orchestration found to resume.');
+      process.exit(1);
+    }
+    logInfo(`Resuming: ${existing.manifest.description}`);
+    logInfo(`Feature ID: ${existing.featureId}`);
+    logInfo(`Current phase: ${existing.manifest.current_phase}`);
+    await runOrchestrationLoop(existing.featureId, existing.manifest, existing.manifestPath);
+    return;
+  }
+
   // If a description was passed, plan first then execute
   const description = descriptionParts.filter(a => !a.startsWith('--')).join(' ').trim();
 
@@ -980,7 +994,7 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       const gate = compaction.checkCompactionGate(PROJECT_ROOT);
       if (gate.status === 'block') {
         logError(`COMPACTION GATE blocked phase ${phaseNum}: ${gate.message}`);
-        logError('Run /compact then resume with: jonggrang orchestrate --resume');
+        logError('Run /compact then resume with: jonggrang work --resume');
         orchestration.failPhase(manifestPath, phaseNum, gate.message);
         process.exit(1);
       }
@@ -1011,7 +1025,7 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       logInfo('\n[BRAINSTORMING PHASE — Human Input Required]');
       logInfo(`Feature: ${manifest.description}`);
       logInfo('Review the architecture plan and provide design direction before continuing.');
-      logInfo('Resume with: jonggrang orchestrate --resume');
+      logInfo('Resume with: jonggrang work --resume');
       orchestration.failPhase(manifestPath, phaseNum, 'Awaiting human input (brainstorming)');
       process.exit(0);
     }
@@ -1055,7 +1069,7 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
 
     // Check if orchestration was failed/paused externally
     if (manifest.status === 'failed' || manifest.status === 'paused') {
-      logWarn(`Orchestration ${manifest.status}. Resume with: jonggrang orchestrate --resume`);
+      logWarn(`Orchestration ${manifest.status}. Resume with: jonggrang work --resume`);
       process.exit(exitCode !== 0 ? 1 : 0);
     }
   }
@@ -1590,6 +1604,7 @@ Commands:
   init                    Setup project (interactive or with flags)
   work [description]      Execute tasks — with description: plan + execute in one shot
                           Auto-adds quality gates for MEDIUM/LARGE features
+  work --resume           Resume incomplete pipeline from last phase
   plan <description>      Decompose feature into tasks (planning only)
   plan --update <desc>    Update existing plan (preserves completed tasks)
   status                  Show pipeline state + task board
