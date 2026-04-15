@@ -94,6 +94,55 @@ src/
 
 ---
 
+## Task Management CLI
+
+Use the `jonggrang task` CLI to manage tasks instead of editing `.jonggrang/jonggrang-tasks.json` directly.
+
+### Commands
+
+```bash
+# List & inspect
+jonggrang task list                         # list all tasks (JSON output)
+jonggrang task list pending                 # filter by status
+jonggrang task show task-001                # show task detail
+jonggrang task next                         # show next eligible task
+
+# Create & modify
+jonggrang task add --title "Add login page" --priority 1
+jonggrang task add --title "Write tests" --blocked-by task-001
+jonggrang task update task-001 --status in_progress
+jonggrang task update task-001 --files src/login.ts,src/login.test.ts
+
+# Complete & block
+jonggrang task done task-001                # mark completed + passes=true
+jonggrang task block task-002 --reason "Waiting for API spec"
+
+# Remove (cleans up blocked_by refs)
+jonggrang task remove task-003
+```
+
+### Output
+
+- Default output is **JSON** (machine-readable for agents)
+- Add `--pretty` for human-readable table format
+- Add `--json` to force JSON when in a TTY
+
+### Available flags for add/update
+
+| Flag | Description |
+|------|-------------|
+| `--title` | Task title |
+| `--desc` | Task description |
+| `--priority` | Priority (1 = highest) |
+| `--status` | pending, in_progress, completed, blocked, waiting, skipped |
+| `--role` | developer, tester, reviewer, lead |
+| `--skill` | Skill name |
+| `--blocked-by` | Comma-separated dependency task IDs |
+| `--files` | Comma-separated file paths |
+| `--reason` | Reason (used with `block`) |
+
+---
+
 ## Jonggrang Notes
 
 This section is updated by Jonggrang during work sessions.

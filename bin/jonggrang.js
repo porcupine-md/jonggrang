@@ -1298,6 +1298,285 @@ async function cmdMenu() {
 }
 
 // ============================================================
+// TASK CLI
+// ============================================================
+
+function cmdTask(args) {
+  const subcommand = args[0];
+  const subArgs = args.slice(1);
+
+  if (!subcommand || subcommand === 'help' || subcommand === '--help') {
+    cmdTaskHelp();
+    return;
+  }
+
+  // Parse task-specific flags
+  const flags = {};
+  const positional = [];
+  let j = 0;
+  while (j < subArgs.length) {
+    if (subArgs[j] === '--title')                                   { flags.title = subArgs[++j]; }
+    else if (subArgs[j] === '--desc' || subArgs[j] === '--description') { flags.description = subArgs[++j]; }
+    else if (subArgs[j] === '--priority')                           { flags.priority = parseInt(subArgs[++j], 10); }
+    else if (subArgs[j] === '--status')                             { flags.status = subArgs[++j]; }
+    else if (subArgs[j] === '--role')                               { flags.role = subArgs[++j]; }
+    else if (subArgs[j] === '--skill')                              { flags.skill = subArgs[++j]; }
+    else if (subArgs[j] === '--blocked-by')                         { flags.blocked_by = subArgs[++j].split(','); }
+    else if (subArgs[j] === '--files')                              { flags.files = subArgs[++j].split(','); }
+    else if (subArgs[j] === '--reason')                             { flags.reason = subArgs[++j]; }
+    else if (subArgs[j] === '--pretty')                             { flags.pretty = true; }
+    else if (subArgs[j] === '--json')                               { flags.json = true; }
+    else { positional.push(subArgs[j]); }
+    j++;
+  }
+
+  const isTTY = process.stdout.isTTY;
+  const pretty = flags.pretty || (isTTY && !flags.json);
+
+  try {
+    switch (subcommand) {
+      case 'list':   taskList(flags, positional, pretty); break;
+      case 'show':   taskShow(flags, positional, pretty); break;
+      case 'add':    taskAdd(flags, positional, pretty); break;
+      case 'update': taskUpdate(flags, positional, pretty); break;
+      case 'done':   taskDone(flags, positional, pretty); break;
+      case 'block':  taskBlock(flags, positional, pretty); break;
+      case 'remove': taskRemove(flags, positional, pretty); break;
+      case 'next':   taskNext(flags, positional, pretty); break;
+      default:
+        logError(`Unknown task subcommand: ${subcommand}`);
+        console.log("Run 'jonggrang task help' for usage.");
+        process.exit(1);
+    }
+  } catch (err) {
+    if (pretty) {
+      logError(err.message);
+    } else {
+      console.log(JSON.stringify({ error: err.message }));
+    }
+    process.exit(1);
+  }
+}
+
+// ── Task handlers ─────────────────────────────────────────────
+
+function taskList(flags, positional, pretty) {
+  safeCheckConfig();
+  const data = lib.getTasks(TASKS_FILE);
+  let tasks = data.tasks || [];
+
+  const statusFilter = positional[0] || flags.status;
+  if (statusFilter) tasks = tasks.filter(t => t.status === statusFilter);
+
+  if (pretty) {
+    console.log(`\n${BOLD}Tasks: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} completed${NC}\n`);
+    console.log(`${BOLD}${'ID'.padEnd(11)} ${'Status'.padEnd(12)} ${'Pri'.padEnd(4)} Title${NC}`);
+    console.log('-'.repeat(65));
+    for (const task of tasks) {
+      let color = NC;
+      if (task.status === 'completed') color = GREEN;
+      else if (task.status === 'in_progress') color = YELLOW;
+      else if (task.status === 'blocked') color = RED;
+      console.log(`${color}${(task.id || '').padEnd(11)} ${(task.status || '').padEnd(12)} ${String(task.priority || '-').padEnd(4)} ${task.title || ''}${NC}`);
+    }
+    if (tasks.length === 0) console.log('  (no tasks)');
+  } else {
+    console.log(JSON.stringify(tasks));
+  }
+}
+
+function taskShow(flags, positional, pretty) {
+  safeCheckConfig();
+  const taskId = positional[0];
+  if (!taskId) throw new Error('Task ID required. Usage: jonggrang task show <task-id>');
+  const task = lib.getTask(TASKS_FILE, taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  if (pretty) {
+    console.log(`\n${BOLD}${task.id}${NC} — ${task.title}`);
+    console.log(`Status:      ${task.status}`);
+    console.log(`Priority:    ${task.priority}`);
+    console.log(`Role:        ${task.role || '(none)'}`);
+    console.log(`Skill:       ${task.skill || '(none)'}`);
+    console.log(`Blocked by:  ${(task.blocked_by || []).join(', ') || '(none)'}`);
+    console.log(`Files:       ${(task.files || []).join(', ') || '(none)'}`);
+    console.log(`Passes:      ${task.passes}`);
+    if (task.description) console.log(`\nDescription:\n${task.description}`);
+    if (task.error_log && task.error_log.length > 0) {
+      console.log(`\nError log:`);
+      for (const err of task.error_log) console.log(`  - ${err}`);
+    }
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function taskAdd(flags, positional, pretty) {
+  safeCheckConfig();
+  const title = flags.title || positional[0];
+  if (!title) throw new Error('Title required. Usage: jonggrang task add --title "..." or jonggrang task add "title"');
+
+  const task = lib.addTask(TASKS_FILE, {
+    title,
+    description: flags.description || '',
+    priority: flags.priority,
+    role: flags.role || null,
+    skill: flags.skill || null,
+    blocked_by: flags.blocked_by || [],
+    files: flags.files || [],
+  });
+
+  if (pretty) {
+    logSuccess(`Created ${task.id}: ${task.title}`);
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function taskUpdate(flags, positional, pretty) {
+  safeCheckConfig();
+  const taskId = positional[0];
+  if (!taskId) throw new Error('Task ID required. Usage: jonggrang task update <task-id> --status in_progress');
+
+  const updates = {};
+  if (flags.title !== undefined)       updates.title = flags.title;
+  if (flags.description !== undefined) updates.description = flags.description;
+  if (flags.priority !== undefined)    updates.priority = flags.priority;
+  if (flags.status !== undefined)      updates.status = flags.status;
+  if (flags.role !== undefined)        updates.role = flags.role;
+  if (flags.skill !== undefined)       updates.skill = flags.skill;
+  if (flags.blocked_by !== undefined)  updates.blocked_by = flags.blocked_by;
+  if (flags.files !== undefined)       updates.files = flags.files;
+
+  if (Object.keys(updates).length === 0) throw new Error('No updates provided. Use flags like --status, --title, --priority, etc.');
+
+  const task = lib.updateTask(TASKS_FILE, taskId, updates);
+
+  if (pretty) {
+    logSuccess(`Updated ${task.id}: ${task.title}`);
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function taskDone(flags, positional, pretty) {
+  safeCheckConfig();
+  const taskId = positional[0];
+  if (!taskId) throw new Error('Task ID required. Usage: jonggrang task done <task-id>');
+
+  lib.markTaskDone(TASKS_FILE, taskId);
+  const task = lib.getTask(TASKS_FILE, taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  if (pretty) {
+    logSuccess(`Completed ${task.id}: ${task.title}`);
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function taskBlock(flags, positional, pretty) {
+  safeCheckConfig();
+  const taskId = positional[0];
+  if (!taskId) throw new Error('Task ID required. Usage: jonggrang task block <task-id> [--reason "..."]');
+
+  lib.updateTask(TASKS_FILE, taskId, { status: 'blocked' });
+
+  if (flags.reason) {
+    const data = lib.getTasks(TASKS_FILE);
+    const t = data.tasks.find(x => x.id === taskId);
+    if (t) {
+      if (!t.error_log) t.error_log = [];
+      t.error_log.push(`[${new Date().toISOString()}] Blocked: ${flags.reason}`);
+      lib.writeJSON(TASKS_FILE, data);
+    }
+  }
+
+  const task = lib.getTask(TASKS_FILE, taskId);
+  if (pretty) {
+    logWarn(`Blocked ${task.id}: ${task.title}${flags.reason ? ' — ' + flags.reason : ''}`);
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function taskRemove(flags, positional, pretty) {
+  safeCheckConfig();
+  const taskId = positional[0];
+  if (!taskId) throw new Error('Task ID required. Usage: jonggrang task remove <task-id>');
+
+  const removed = lib.removeTask(TASKS_FILE, taskId);
+  if (pretty) {
+    logSuccess(`Removed ${removed.id}: ${removed.title}`);
+  } else {
+    console.log(JSON.stringify(removed));
+  }
+}
+
+function taskNext(flags, positional, pretty) {
+  safeCheckConfig();
+  const nextId = lib.getNextTask(TASKS_FILE);
+  if (!nextId) {
+    if (pretty) {
+      logInfo('No eligible tasks (all completed or blocked).');
+    } else {
+      console.log(JSON.stringify(null));
+    }
+    return;
+  }
+  const task = lib.getTask(TASKS_FILE, nextId);
+  if (pretty) {
+    console.log(`\nNext task: ${BOLD}${task.id}${NC} — ${task.title}`);
+    console.log(`Priority: ${task.priority}  |  Status: ${task.status}`);
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function cmdTaskHelp() {
+  console.log(`Jonggrang Task Manager
+
+Usage: jonggrang task <subcommand> [options]
+
+Subcommands:
+  list [status]              List all tasks (optionally filter by status)
+  show <task-id>             Show task details
+  add --title "..." [opts]   Add a new task
+  update <task-id> [opts]    Update task fields
+  done <task-id>             Mark task as completed
+  block <task-id> [--reason] Mark task as blocked
+  remove <task-id>           Remove a task
+  next                       Show the next eligible task
+
+Add/Update flags:
+  --title <title>            Task title
+  --desc <description>       Task description
+  --priority <n>             Priority (1 = highest)
+  --status <status>          pending|in_progress|completed|blocked|waiting|skipped
+  --role <role>              developer|tester|reviewer|lead
+  --skill <skill>            Skill name
+  --blocked-by <id,id,...>   Comma-separated dependency task IDs
+  --files <path,path,...>    Comma-separated file paths
+
+Output flags:
+  --json                     Force JSON output (default in non-TTY)
+  --pretty                   Force human-readable output
+
+Examples:
+  jonggrang task list
+  jonggrang task list pending
+  jonggrang task add --title "Add login page" --priority 1
+  jonggrang task add "Quick task title"
+  jonggrang task update task-003 --status in_progress
+  jonggrang task update task-003 --blocked-by task-001,task-002
+  jonggrang task done task-003
+  jonggrang task block task-004 --reason "Waiting for API spec"
+  jonggrang task remove task-005
+  jonggrang task show task-001
+  jonggrang task next`);
+}
+
+// ============================================================
 // HELP
 // ============================================================
 
@@ -1314,6 +1593,7 @@ Commands:
   plan --update <desc>    Update existing plan (preserves completed tasks)
   status                  Show pipeline state + task board
   review                  Run code review
+  task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
   web                     Start web dashboard
   menu                    Interactive menu launcher
   version                 Show version
@@ -1364,6 +1644,13 @@ async function main() {
   const providedCommand = args[0];
   const command = providedCommand || (isInteractiveShell ? 'menu' : 'help');
   let rest = providedCommand ? args.slice(1) : [];
+
+  // Task subcommand handles its own flags — bypass global parser
+  if (command === 'task') {
+    cmdTask(rest);
+    return;
+  }
+
   const planArgs = [];
 
   // Parse global options
