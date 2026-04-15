@@ -133,10 +133,8 @@ Example:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `directory` | string | Root path of skills folder (default: `./skills`) |
-| `core_directory` | string | Path to core tier (default: `./skills/core`) |
-| `library_directory` | string | Path to library tier (default: `./skills/library`) |
-| `custom` | array | List of custom skill names in core tier |
+| `directory` | string | Root path of the skills folder used by the selected tool (e.g. `.claude/skills` or `.opencode/skills`) |
+| `custom` | array | List of custom skill names |
 
 ---
 
@@ -194,9 +192,8 @@ Example:
     "auto_setup": true
   },
   "skills": {
-    "directory": "./skills",
-    "core_directory": "./skills/core",
-    "library_directory": "./skills/library"
+    "directory": "./.claude/skills",
+    "custom": []
   },
   "review": {
     "security": true,
@@ -279,7 +276,7 @@ Persistent orchestration state for a feature run. Located at:
 | `feature_id` | string | Unique feature identifier |
 | `description` | string | Original orchestrate description |
 | `work_type` | string | `BUGFIX`, `SMALL`, `MEDIUM`, `LARGE` |
-| `status` | string | `in_progress`, `completed`, `failed` |
+| `status` | string | `running`, `completed`, `failed`, `paused` |
 | `current_phase` | number | Currently executing phase (1-16) |
 | `active_phases` | array | Phases that will run (after skipping) |
 | `phases` | object | Per-phase status, started/completed timestamps, output |

@@ -10,28 +10,30 @@ Jonggrang uses a **two-tier skill system**: a Core tier that is always loaded, a
 
 ```
 skills/
-├── core/                    ← BIOS: always loaded into every agent prompt
-│   ├── gateways.md
-│   ├── orchestrating-feature.md
-│   ├── iterating-to-completion.md
-│   ├── dispatching-parallel-agents.md
-│   ├── persisting-agent-outputs.md
+├── core/                                    ← BIOS: always loaded into every agent prompt
+│   ├── orchestrating-feature/SKILL.md
+│   ├── iterating-to-completion/SKILL.md
+│   ├── dispatching-parallel-agents/SKILL.md
+│   ├── persisting-agent-outputs/SKILL.md
+│   ├── persisting-progress-across-sessions/SKILL.md
 │   ├── prd/SKILL.md
 │   ├── scaffold-api/SKILL.md
 │   ├── scaffold-webapp/SKILL.md
 │   ├── scaffold-library/SKILL.md
+│   ├── scaffold-cli/SKILL.md
+│   ├── scaffold-tui/SKILL.md
 │   ├── component/SKILL.md
 │   ├── migration/SKILL.md
 │   ├── auth/SKILL.md
 │   ├── testing/SKILL.md
 │   ├── deploy/SKILL.md
-│   ├── gateway-backend.md
-│   ├── gateway-frontend.md
-│   ├── gateway-api.md
-│   ├── gateway-testing.md
-│   └── gateway-database.md
+│   ├── gateway-backend/SKILL.md
+│   ├── gateway-frontend/SKILL.md
+│   ├── gateway-api/SKILL.md
+│   ├── gateway-testing/SKILL.md
+│   └── gateway-database/SKILL.md
 │
-└── library/                 ← Hard Drive: JIT loaded via Gateway routing
+└── library/                                 ← Hard Drive: JIT loaded via Gateway routing
     ├── backend/
     │   ├── developing-with-tdd/SKILL.md
     │   ├── debugging-systematically/SKILL.md

@@ -27,11 +27,15 @@ ALL_NEW=$(echo -e "$UNTRACKED\n$STAGED" | sort -u | grep '\.md$' || true)
 ALLOWED_PATTERNS=(
   "^\.jonggrang/"
   "^AGENTS\.md$"
+  "^CLAUDE\.md$"
+  "^SKILL\.md$"
   "^progress\.txt$"
   "^README\.md$"
   "^CHANGELOG\.md$"
   "^CONTRIBUTING\.md$"
   "^docs/"
+  "^\.claude/"
+  "^\.opencode/"
 )
 
 while IFS= read -r file; do
