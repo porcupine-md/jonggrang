@@ -268,12 +268,24 @@ onMounted(() => {
 // ── LIFECYCLE ─────────────────────────────────────────────────
 onMounted(() => {
   const term = new Terminal({
-    convertEol: true, scrollback: 5000, fontSize: 12,
-    fontFamily: 'JetBrains Mono, Fira Code, monospace',
+    convertEol: true, scrollback: 10000, fontSize: 12,
+    fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
+    lineHeight: 1.4,
+    letterSpacing: 0.3,
     theme: {
-      background: '#05060a', foreground: '#f4f4f5',
-      cursor: '#38bdf8', cursorAccent: '#05060a',
-      selectionBackground: 'rgba(56,189,248,0.25)',
+      background:          '#0a0b0f',
+      foreground:          '#e2e4e9',
+      cursor:              '#38bdf8',
+      cursorAccent:        '#0a0b0f',
+      selectionBackground: 'rgba(56,189,248,0.2)',
+      black:   '#1a1b22', brightBlack:   '#4a4d5e',
+      red:     '#f87171', brightRed:     '#fca5a5',
+      green:   '#4ade80', brightGreen:   '#86efac',
+      yellow:  '#facc15', brightYellow:  '#fde047',
+      blue:    '#60a5fa', brightBlue:    '#93c5fd',
+      magenta: '#c084fc', brightMagenta: '#d8b4fe',
+      cyan:    '#22d3ee', brightCyan:    '#67e8f9',
+      white:   '#e2e4e9', brightWhite:   '#f8fafc',
     },
   });
   const fit = new FitAddon();
@@ -654,8 +666,19 @@ function onDrop(e, key)       {
         <!-- Logs terminal -->
         <div class="logs-section">
           <div class="logs-header">
-            <span>LOGS</span>
-            <div class="log-dot" :class="{ active: isRunning }"></div>
+            <div class="logs-header-left">
+              <div class="log-dot" :class="{ active: isRunning }"></div>
+              <span>LOGS</span>
+              <span v-if="logs" class="log-linecount">{{ logs.split('\n').length }} lines</span>
+            </div>
+            <div class="logs-header-actions">
+              <button class="log-action-btn" title="Copy logs" @click="() => navigator.clipboard.writeText(logs)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+              <button class="log-action-btn" title="Clear logs" @click="clearLogs">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+              </button>
+            </div>
           </div>
           <!-- terminal-wrap: no Vue children — xterm owns this DOM entirely -->
           <div ref="logContainerRef" class="terminal-wrap"></div>
@@ -1081,19 +1104,34 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: syst
 .logs-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .logs-header  {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 6px 10px; flex-shrink: 0;
+  padding: 5px 8px 5px 10px; flex-shrink: 0;
   font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--text-muted); text-transform: uppercase;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
 }
-.log-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.logs-header-left  { display: flex; align-items: center; gap: 6px; }
+.logs-header-actions { display: flex; align-items: center; gap: 2px; }
+.log-linecount { font-size: 9px; color: rgba(255,255,255,0.2); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.log-action-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 4px; border: none;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.log-action-btn:hover { background: rgba(255,255,255,0.06); color: var(--text-primary); }
+.log-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
 .log-dot.active { background: var(--green); animation: blink 1s infinite; }
 
 .terminal-wrap {
-  flex: 1; overflow: hidden; padding: 4px;
+  flex: 1; overflow: hidden; padding: 6px 4px 4px;
   position: relative; min-height: 0;
+  background: #0a0b0f;
 }
 .terminal-wrap .xterm { height: 100%; }
 .terminal-wrap .xterm-screen { height: 100% !important; }
 .terminal-wrap .xterm-viewport { border-radius: 4px; }
+.terminal-wrap .xterm-viewport::-webkit-scrollbar { width: 5px; }
+.terminal-wrap .xterm-viewport::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+.terminal-wrap .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
 .log-empty {
   flex: 1; display: flex; align-items: center; justify-content: center;
   font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);

@@ -58,6 +58,7 @@ let TASK_ID = '';
 let BRANCH = '';
 let VERBOSE = process.env.JONGGRANG_VERBOSE === 'true';
 let DRY_RUN = process.env.JONGGRANG_DRY_RUN === 'false';
+let DEBUG   = process.env.JONGGRANG_DEBUG === 'true';
 let WEB_PORT = parseInt(process.env.JONGGRANG_WEB_PORT || '7777', 10);
 let WEB_OPEN = true;
 let WORKTREE_MODE = false;
@@ -217,7 +218,7 @@ async function runIteration(iteration, taskId) {
     const prompt = lib.buildWorkPrompt(taskId, TASKS_FILE, MODE, testFeedback || undefined);
 
     logInfo(`Spawning fresh ${TOOL} instance...${testAttempt > 0 ? ` (test retry ${testAttempt}/${TEST_RETRY_LIMIT})` : ''}`);
-    const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT);
+    const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT, { debug: DEBUG });
 
     if (exitCode !== 0) {
       logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
@@ -640,7 +641,7 @@ async function cmdReview() {
   if (!lib.fileExists(logDir)) fs.mkdirSync(logDir, { recursive: true });
 
   logInfo('Running comprehensive review...');
-  await lib.runAgent(reviewPrompt, TOOL, 'autonomous', PROJECT_ROOT);
+  await lib.runAgent(reviewPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
 
   logSuccess('Review complete. Check jonggrang-log/ for report.');
 }
@@ -695,9 +696,9 @@ async function cmdPlan(args) {
     if (updateMode) logInfo('Mode: UPDATE (preserving completed tasks)');
     if (planSpinner) planSpinner.message('Consulting AI agent (this can take ~30s)...');
 
-    const planPrompt = lib.buildPlanPrompt(description, updateMode, TASKS_FILE, SKILLS_DIR);
+    const planPrompt = lib.buildPlanPrompt(description, updateMode, TASKS_FILE, SKILLS_DIR, CONFIG_FILE);
 
-    await lib.runAgent(planPrompt, TOOL, 'autonomous', PROJECT_ROOT);
+    await lib.runAgent(planPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
 
     console.log('');
     logSuccess('Plan complete. Review the tasks:');
@@ -1040,7 +1041,7 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     }
 
     // ── Run agent ─────────────────────────────────────────────────
-    const exitCode = await lib.runAgent(prompt, activeTool, activeMode, PROJECT_ROOT);
+    const exitCode = await lib.runAgent(prompt, activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG });
 
     if (exitCode !== 0) {
       logWarn(`Phase ${phaseNum} agent exited with code ${exitCode}`);
@@ -1621,6 +1622,7 @@ Work flags:
   --max-iterations <n>    Max iterations (default: unlimited)
   --branch <name>         Feature branch name
   --dry-run               Preview prompts, no execution
+  --debug                 Dump raw JSON from opencode/claude to stderr (diagnose stuck agents)
   --skip-gates            Skip quality gates even for MEDIUM/LARGE
 
 Examples:
@@ -1663,6 +1665,7 @@ async function main() {
       case '--branch':        BRANCH = rest[++i]; break;
       case '--tool':          TOOL = rest[++i]; INIT_TOOL = rest[i]; TOOL_SET = true; break;
       case '--verbose':       VERBOSE = true; break;
+      case '--debug':         DEBUG   = true; break;
       case '--dry-run':       DRY_RUN = true; break;
       case '--worktree':     WORKTREE_MODE = true; break;
       case '--group-tasks':  GROUP_TASK_IDS = rest[++i].split(','); break;
