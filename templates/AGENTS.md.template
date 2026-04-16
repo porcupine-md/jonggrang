@@ -131,6 +131,13 @@ jonggrang work
 # Plan + auto-approve + tasks in one shot (skips human review)
 jonggrang plan "add JWT auth" --yes
 
+# Deep mode: 3-phase analysis (discovery + brainstorm + condense) → enriched plan
+# Adds Affected Areas, Risks, and Alternatives Considered sections to plan.md
+jonggrang plan "add JWT auth" --deep
+
+# Deep mode + auto-approve in one shot
+jonggrang plan "add JWT auth" --deep --yes
+
 # Full pipeline: plan → approve → execute in one shot
 jonggrang work "add JWT auth" --yes
 

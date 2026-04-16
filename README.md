@@ -43,7 +43,9 @@ You describe what you want
 **Shorthand options:**
 ```bash
 jonggrang plan "feature" --yes      # plan + auto-approve + tasks in one shot
-jonggrang work "feature" --yes      # full pipeline: plan → approve → execute
+jonggrang plan "feature" --deep          # 3-phase deep analysis → enriched plan (Affected Areas, Risks, Alternatives)
+jonggrang work "feature" --yes           # full pipeline: plan → approve → execute
+jonggrang work "feature" --deep --yes    # deep mode full pipeline
 ```
 
 ### Orchestrate (deterministic, 16-phase)

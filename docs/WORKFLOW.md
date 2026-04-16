@@ -45,10 +45,39 @@ Phase 2 — jonggrang approve   (or auto-triggered by --yes)
 | Command | Behaviour |
 |---------|-----------|
 | `jonggrang plan "feat" --yes` | Plan + auto-approve + tasks (no interactive prompt) |
+| `jonggrang plan "feat" --deep` | Deep mode: 3-phase analysis → enriched plan.md |
+| `jonggrang plan "feat" --deep --yes` | Deep mode + auto-approve in one shot |
 | `jonggrang plan` | No description → picker: list all pending + archived plans |
 | `jonggrang work "feat" --yes` | Full pipeline: plan → approve → execute |
 | `jonggrang work --ignore-plan` | Skip pending plan warning, run existing tasks |
 | `jonggrang approve` | Manual Phase 2 only (after editing saved plan.md) |
+
+**Deep planning (`--deep`):**
+
+```
+jonggrang plan "add payment integration" --deep
+        │
+        ├─ [1/3] Discovery agent reads the codebase
+        │   → .jonggrang/.ephemeral/deep-plan-discovery.md
+        │     (file structure, patterns, deps, risks, test infra)
+        │
+        ├─ [2/3] Analysis agent: complexity + brainstorm alternatives
+        │   → .jonggrang/.ephemeral/deep-plan-analysis.md
+        │     (work_type, 2-3 approaches, recommended approach, phases)
+        │
+        └─ [3/3] Condense: synthesize both into enriched plan.md
+            plan.md extras vs standard:
+            - Affected Areas (real file paths from discovery)
+            - Risks (with mitigations)
+            - Alternatives Considered (what was rejected and why)
+            - depth: deep  (in frontmatter)
+```
+
+Use `--deep` when:
+- The feature touches many parts of the codebase
+- You're unsure which approach is best
+- You want the plan to include concrete file paths and risk analysis
+- The work_type is MEDIUM or LARGE
 
 **Resuming after accidental close:**
 

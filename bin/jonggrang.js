@@ -387,12 +387,14 @@ async function cmdWork(descriptionParts = []) {
 
   // If a description was passed, go through plan → approve → execute
   const autoApprove = descriptionParts.includes('--yes') || descriptionParts.includes('-y');
+  const deepMode    = descriptionParts.includes('--deep');
   const description = descriptionParts.filter(a => !a.startsWith('-')).join(' ').trim();
 
   if (description) {
     logInfo(`One-shot mode: plan + execute "${description}"`);
     const planArgs = [description];
     if (autoApprove) planArgs.push('--yes');
+    if (deepMode)    planArgs.push('--deep');
     await cmdPlan(planArgs, { fromWork: true });
     // Continue only if tasks were actually created (user approved or --yes)
     if (lib.fileExists(PLAN_FILE)) {
@@ -813,9 +815,11 @@ function displayPlanBox(planFile) {
 async function cmdPlan(args, opts = {}) {
   let description = '';
   let autoApprove = false;
+  let deepMode = false;
 
   for (const arg of args) {
     if (arg === '--yes' || arg === '-y') autoApprove = true;
+    else if (arg === '--deep') deepMode = true;
     else if (!arg.startsWith('--')) description = arg;
   }
 
@@ -884,13 +888,70 @@ async function cmdPlan(args, opts = {}) {
     }
   }
 
-  logHeader('JONGGRANG Plan — Phase 1');
-  logInfo(`Feature: ${description}`);
-  logInfo(`Tool:    ${TOOL}`);
-  logInfo('Generating draft plan...');
+  if (deepMode) {
+    // ── Deep mode: 3 sequential AI phases ──────────────────────
+    const jonggrangDir = path.dirname(PLAN_FILE);
+    const ephemeralDir = path.join(jonggrangDir, '.ephemeral');
+    const discoveryFile = path.join(ephemeralDir, 'deep-plan-discovery.md');
+    const analysisFile = path.join(ephemeralDir, 'deep-plan-analysis.md');
 
-  const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
-  await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+    fs.mkdirSync(ephemeralDir, { recursive: true });
+
+    logHeader('JONGGRANG Plan — Deep Mode (3 phases)');
+    logInfo(`Feature: ${description}`);
+    logInfo(`Tool:    ${TOOL}`);
+
+    // Phase 1: Discovery
+    logInfo(`${BOLD}[1/3]${NC} Codebase discovery...`);
+    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE);
+    await lib.runAgent(discoveryPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+
+    if (!lib.fileExists(discoveryFile)) {
+      logError('Discovery agent did not write .jonggrang/.ephemeral/deep-plan-discovery.md');
+      logInfo('Falling back to standard plan generation...');
+      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
+      await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+    } else {
+      // Phase 2: Analysis
+      logInfo(`${BOLD}[2/3]${NC} Complexity analysis & brainstorm...`);
+      const discoveryContent = fs.readFileSync(discoveryFile, 'utf8');
+      const analysisPrompt = lib.buildDeepPlanAnalysisPrompt(description, discoveryContent);
+      await lib.runAgent(analysisPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+
+      if (!lib.fileExists(analysisFile)) {
+        logError('Analysis agent did not write .jonggrang/.ephemeral/deep-plan-analysis.md');
+        logInfo('Falling back to standard plan generation using discovery only...');
+        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
+        await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+      } else {
+        // Phase 3: Condense
+        logInfo(`${BOLD}[3/3]${NC} Condensing into enriched plan.md...`);
+        const analysisContent = fs.readFileSync(analysisFile, 'utf8');
+        const condensePrompt = lib.buildDeepPlanCondensePrompt(
+          description, discoveryContent, analysisContent, CONFIG_FILE, TASKS_FILE
+        );
+        await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+
+        // Clean up ephemeral files
+        try {
+          fs.unlinkSync(discoveryFile);
+          fs.unlinkSync(analysisFile);
+          fs.rmdirSync(ephemeralDir);
+        } catch { /* ignore if already gone */ }
+
+        logSuccess('Deep plan complete.');
+      }
+    }
+  } else {
+    // ── Standard mode ─────────────────────────────────────────
+    logHeader('JONGGRANG Plan — Phase 1');
+    logInfo(`Feature: ${description}`);
+    logInfo(`Tool:    ${TOOL}`);
+    logInfo('Generating draft plan...');
+
+    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
+    await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+  }
 
   if (autoApprove) {
     logInfo('Auto-approving plan (--yes)...');
@@ -1511,6 +1572,7 @@ async function cmdInit() {
   console.log('       jonggrang work                   # execute tasks');
   console.log('       — or —');
   console.log('       jonggrang plan "feature" --yes   # plan + approve + tasks in one shot');
+  console.log('       jonggrang plan "feature" --deep  # deep mode: 3-phase analysis before plan');
   console.log('');
 }
 
@@ -2264,10 +2326,12 @@ Work flags:
 Examples:
   jonggrang init
   jonggrang plan "add JWT auth"             # Phase 1: generate plan.md, review it
+  jonggrang plan "add JWT auth" --deep      # deep mode: 3-phase analysis → enriched plan
   jonggrang approve                         # Phase 2: decompose plan.md → tasks
   jonggrang work                            # execute tasks (after approve)
   jonggrang plan "add JWT auth" --yes       # plan + auto-approve + tasks in one shot
   jonggrang work "add JWT auth" --yes       # full pipeline: plan → approve → execute
+  jonggrang work "add JWT auth" --deep --yes  # deep mode full pipeline
   jonggrang work --task task-003            # run specific task only
   jonggrang work --ignore-plan              # execute tasks, skip pending plan warning
   jonggrang bug "null pointer on POST /hello"   # report a bug (interactive feature picker)
