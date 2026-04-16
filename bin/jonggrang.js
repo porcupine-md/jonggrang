@@ -41,11 +41,12 @@ const JONGGRANG_HOME = resolveJonggrangHome();
 const PROJECT_ROOT = process.cwd();
 
 const paths = lib.getProjectPaths(PROJECT_ROOT);
-const CONFIG_FILE = process.env.JONGGRANG_CONFIG || paths.configFile;
-const TASKS_FILE = paths.tasksFile;
+const CONFIG_FILE   = process.env.JONGGRANG_CONFIG || paths.configFile;
+const TASKS_FILE    = paths.tasksFile;
+const PLAN_FILE     = paths.planFile;
 const PROGRESS_FILE = paths.progressFile;
-const AGENTS_FILE = paths.agentsFile;
-const SKILLS_DIR = paths.skillsDir;
+const AGENTS_FILE   = paths.agentsFile;
+const SKILLS_DIR    = paths.skillsDir;
 
 const JONGGRANG_VERSION = '0.1.0';
 
@@ -91,6 +92,7 @@ const BLUE = '\x1b[0;34m';
 const CYAN = '\x1b[0;36m';
 const NC = '\x1b[0m';
 const BOLD = '\x1b[1m';
+const DIM = '\x1b[2m';
 
 // ============================================================
 // LOGGING HELPERS
@@ -383,13 +385,32 @@ async function cmdWork(descriptionParts = []) {
     return;
   }
 
-  // If a description was passed, plan first then execute
-  const description = descriptionParts.filter(a => !a.startsWith('--')).join(' ').trim();
+  // If a description was passed, go through plan → approve → execute
+  const autoApprove = descriptionParts.includes('--yes') || descriptionParts.includes('-y');
+  const description = descriptionParts.filter(a => !a.startsWith('-')).join(' ').trim();
 
   if (description) {
     logInfo(`One-shot mode: plan + execute "${description}"`);
-    await cmdPlan([description]);
+    const planArgs = [description];
+    if (autoApprove) planArgs.push('--yes');
+    await cmdPlan(planArgs, { fromWork: true });
+    // Continue only if tasks were actually created (user approved or --yes)
+    if (lib.fileExists(PLAN_FILE)) {
+      // plan.md still exists → user chose "save draft" or "abort"
+      logWarn('Plan not approved — nothing to execute. Run "jonggrang approve" then "jonggrang work".');
+      return;
+    }
+    if (!lib.fileExists(TASKS_FILE) || lib.countPending(TASKS_FILE) === 0) {
+      logWarn('No pending tasks to execute.');
+      return;
+    }
     console.log('');
+  } else if (lib.fileExists(PLAN_FILE) && !descriptionParts.includes('--ignore-plan')) {
+    // No description given but there is an unapproved plan — warn and stop
+    logWarn('There is a pending plan at .jonggrang/plan.md that has not been approved yet.');
+    logInfo('Run "jonggrang approve" to decompose it into tasks, then "jonggrang work".');
+    logInfo('Or run "jonggrang work --ignore-plan" to skip the plan and run existing tasks.');
+    process.exit(1);
   }
 
   safeCheckConfig();
@@ -615,14 +636,29 @@ function cmdStatus() {
   // ── Task board ────────────────────────────────────────────────
   console.log(`Tasks: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} completed`);
   console.log('');
-  console.log(`${BOLD}ID          Status       Title${NC}`);
-  console.log('--------------------------------------------------------------');
 
   const data = lib.getTasks(TASKS_FILE);
   if (!data.tasks || data.tasks.length === 0) {
-    console.log(`${NC}  (no tasks yet — run: jonggrang plan "feature" or jonggrang work "feature")${NC}`);
+    const hasPlan = lib.fileExists(PLAN_FILE);
+    console.log(`${BOLD}ID          Status       Title${NC}`);
+    console.log('--------------------------------------------------------------');
+    if (hasPlan) {
+      console.log(`${NC}  (pending plan.md — run: jonggrang approve  to decompose into tasks)${NC}`);
+    } else {
+      console.log(`${NC}  (no tasks yet — run: jonggrang plan "feature"  then  jonggrang approve)${NC}`);
+    }
+    return;
   }
-  for (const task of data.tasks || []) {
+
+  // Group tasks by feature_id (null = legacy/no feature link)
+  const groups = new Map();
+  for (const task of data.tasks) {
+    const key = task.feature_id || '__legacy__';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(task);
+  }
+
+  const printTask = (task) => {
     let color;
     switch (task.status) {
       case 'completed':   color = GREEN; break;
@@ -633,6 +669,49 @@ function cmdStatus() {
     const id = (task.id || '').padEnd(11);
     const status = (task.status || '').padEnd(12);
     console.log(`${color}${id} ${status} ${task.title || ''}${NC}`);
+  };
+
+  if (groups.size === 1) {
+    // Single feature — simple flat list (original layout)
+    const [key, tasks] = [...groups][0];
+    if (key !== '__legacy__') {
+      const archivePlan = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', key, 'plan.md');
+      const label = lib.fileExists(archivePlan) ? parsePlanFrontmatter(fs.readFileSync(archivePlan, 'utf8')).feature || key : key;
+      console.log(`${BOLD}ID          Status       Title${NC}   ${DIM}[${label}]${NC}`);
+    } else {
+      console.log(`${BOLD}ID          Status       Title${NC}`);
+    }
+    console.log('--------------------------------------------------------------');
+    for (const task of tasks) printTask(task);
+  } else {
+    // Multiple features — group by feature
+    for (const [key, tasks] of groups) {
+      let groupLabel = key;
+      if (key !== '__legacy__') {
+        const archivePlan = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', key, 'plan.md');
+        if (lib.fileExists(archivePlan)) {
+          const fm = parsePlanFrontmatter(fs.readFileSync(archivePlan, 'utf8'));
+          groupLabel = `${fm.feature || key}${fm.description ? ' — ' + fm.description : ''}`;
+        }
+      }
+      const done = tasks.filter(t => t.status === 'completed').length;
+      console.log(`${BOLD}${CYAN}▸ ${groupLabel}${NC}  ${DIM}(${done}/${tasks.length})${NC}`);
+      console.log(`${BOLD}  ID          Status       Title${NC}`);
+      console.log('  ------------------------------------------------------------');
+      for (const task of tasks) {
+        let color;
+        switch (task.status) {
+          case 'completed':   color = GREEN; break;
+          case 'in_progress': color = YELLOW; break;
+          case 'blocked':     color = RED; break;
+          default:            color = NC; break;
+        }
+        const id = (task.id || '').padEnd(11);
+        const status = (task.status || '').padEnd(12);
+        console.log(`${color}  ${id} ${status} ${task.title || ''}${NC}`);
+      }
+      console.log('');
+    }
   }
 }
 
@@ -664,75 +743,599 @@ async function cmdReview() {
 // PLAN
 // ============================================================
 
-async function cmdPlan(args) {
-  let description = '';
-  let updateMode = false;
+/** Parse key: value pairs from YAML frontmatter of a plan.md */
+function parsePlanFrontmatter(content) {
+  const get = (key) => { const m = content.match(new RegExp(`^${key}:\\s*(.+)$`, 'm')); return m ? m[1].trim() : ''; };
+  return {
+    feature:     get('feature'),
+    branch:      get('branch'),
+    work_type:   get('work_type'),
+    description: get('description'),
+    created_at:  get('created_at'),
+  };
+}
 
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--update') {
-      updateMode = true;
-    } else {
-      description = args[i];
+/** Collect pending plan.md + all archived feature plan.mds, sorted newest first */
+function listAvailablePlans(jonggrangDir) {
+  const plans = [];
+
+  // Pending plan
+  const pendingPath = path.join(jonggrangDir, 'plan.md');
+  if (lib.fileExists(pendingPath)) {
+    const content = fs.readFileSync(pendingPath, 'utf8');
+    const fm = parsePlanFrontmatter(content);
+    plans.push({
+      value:     pendingPath,
+      label:     `[pending]  ${fm.feature || 'unnamed'}${fm.description ? ' — ' + fm.description : ''}`,
+      isPending: true,
+    });
+  }
+
+  // Archived plans (newest first by dir mtime)
+  const featuresDir = path.join(jonggrangDir, '.output', 'features');
+  if (lib.fileExists(featuresDir)) {
+    const entries = fs.readdirSync(featuresDir)
+      .map(e => ({ name: e, mtime: fs.statSync(path.join(featuresDir, e)).mtime }))
+      .sort((a, b) => b.mtime - a.mtime)
+      .map(e => e.name);
+
+    for (const entry of entries) {
+      const planPath = path.join(featuresDir, entry, 'plan.md');
+      if (lib.fileExists(planPath)) {
+        const content = fs.readFileSync(planPath, 'utf8');
+        const fm = parsePlanFrontmatter(content);
+        plans.push({
+          value:     planPath,
+          label:     `[archived] ${fm.feature || entry}${fm.description ? ' — ' + fm.description : ''}`,
+          isPending: false,
+          featureId: entry,
+        });
+      }
     }
   }
 
-  if (!description) {
-    logError('Usage: jonggrang plan "<feature-description>"');
-    process.exit(1);
+  return plans;
+}
+
+/** Display plan.md content in a bordered box */
+function displayPlanBox(planFile) {
+  if (!lib.fileExists(planFile)) return;
+  console.log('');
+  console.log(`${BOLD}${CYAN}┌─── .jonggrang/plan.md ─────────────────────────────────────${NC}`);
+  const planText = fs.readFileSync(planFile, 'utf8');
+  planText.split('\n').forEach(line => console.log(`${CYAN}│${NC} ${line}`));
+  console.log(`${BOLD}${CYAN}└────────────────────────────────────────────────────────────${NC}`);
+  console.log('');
+}
+
+// ── PHASE 1: Generate draft plan.md ───────────────────────────
+// opts.fromWork = true → suppress "run jonggrang work" tail (cmdWork will continue itself)
+async function cmdPlan(args, opts = {}) {
+  let description = '';
+  let autoApprove = false;
+
+  for (const arg of args) {
+    if (arg === '--yes' || arg === '-y') autoApprove = true;
+    else if (!arg.startsWith('--')) description = arg;
   }
 
   safeCheckConfig();
-
-  // Auto-detect update mode
-  if (!updateMode && lib.fileExists(TASKS_FILE)) {
-    const data = lib.getTasks(TASKS_FILE);
-    if (data.tasks.length > 0) updateMode = true;
-  }
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
   }
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
-  let planSpinner = null;
-  let outroShown = false;
 
-  if (isInteractiveTTY) {
-    intro('Jonggrang Planner');
-    planSpinner = spinner();
-    planSpinner.start('Consulting AI agent...');
+  // ── No description → pick from available plans ──────────────
+  if (!description) {
+    const available = listAvailablePlans(path.dirname(PLAN_FILE));
+    if (available.length === 0) {
+      logError('No plans found.');
+      logInfo('Run "jonggrang plan <description>" to generate a new plan.');
+      process.exit(1);
+    }
+
+    if (!isInteractiveTTY) {
+      logError('Usage: jonggrang plan "<feature-description>" [--yes]');
+      process.exit(1);
+    }
+
+    logHeader('JONGGRANG Plan — Pick');
+    const picked = await select({
+      message: 'Which plan would you like to work with?',
+      options: available,
+    });
+    if (isCancel(picked)) { cancel('Aborted.'); return; }
+
+    // If archived → copy back to plan.md so the rest of the flow works normally
+    if (picked !== PLAN_FILE) {
+      if (lib.fileExists(PLAN_FILE)) {
+        const overwrite = await confirm({
+          message: 'A pending plan already exists. Replace it with the selected plan?',
+          initialValue: false,
+        });
+        if (isCancel(overwrite) || !overwrite) { cancel('Cancelled.'); return; }
+      }
+      fs.copyFileSync(picked, PLAN_FILE);
+      logInfo('Plan loaded from archive.');
+    }
+
+    // Fall through to the interactive options loop below (skip generation)
+    await showPlanOptions(isInteractiveTTY, autoApprove, opts);
+    return;
   }
 
-  try {
-    logHeader('JONGGRANG Plan');
-    logInfo(`Feature: ${description}`);
-    logInfo(`Tool: ${TOOL}`);
-    if (updateMode) logInfo('Mode: UPDATE (preserving completed tasks)');
-    if (planSpinner) planSpinner.message('Consulting AI agent (this can take ~30s)...');
+  // ── Description given → generate new plan ───────────────────
 
-    const planPrompt = lib.buildPlanPrompt(description, updateMode, TASKS_FILE, SKILLS_DIR, CONFIG_FILE);
+  // If there is already a pending plan, ask what to do
+  if (lib.fileExists(PLAN_FILE)) {
+    if (isInteractiveTTY) {
+      const overwrite = await confirm({
+        message: 'A pending plan.md already exists. Overwrite it with a new plan?',
+        initialValue: false,
+      });
+      if (isCancel(overwrite) || !overwrite) {
+        logInfo('Keeping existing plan. Run "jonggrang approve" to continue with it.');
+        return;
+      }
+    } else {
+      logWarn('Overwriting existing .jonggrang/plan.md...');
+    }
+  }
 
-    await lib.runAgent(planPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+  logHeader('JONGGRANG Plan — Phase 1');
+  logInfo(`Feature: ${description}`);
+  logInfo(`Tool:    ${TOOL}`);
+  logInfo('Generating draft plan...');
 
-    console.log('');
-    logSuccess('Plan complete. Review the tasks:');
+  const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
+  await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+
+  if (autoApprove) {
+    logInfo('Auto-approving plan (--yes)...');
+    await cmdApprove([], { quiet: true });
+    if (!opts.fromWork) logSuccess('Tasks ready. Run "jonggrang work" to execute.');
+    return;
+  }
+
+  await showPlanOptions(isInteractiveTTY, false, opts);
+}
+
+/**
+ * Display the current plan.md and loop through options until the user
+ * approves, aborts, or saves the plan for later.
+ */
+async function showPlanOptions(isInteractiveTTY, autoApprove, opts = {}) {
+  const doApprove = async () => {
+    await cmdApprove([], { quiet: true });
+    if (!opts.fromWork) logSuccess('Tasks ready. Run "jonggrang work" to execute.');
+  };
+
+  if (!lib.fileExists(PLAN_FILE)) {
+    logError('No plan.md found. Run "jonggrang plan <description>" first.');
+    return;
+  }
+
+  if (autoApprove) {
+    displayPlanBox(PLAN_FILE);
+    logInfo('Auto-approving plan (--yes)...');
+    await doApprove();
+    return;
+  }
+
+  if (!isInteractiveTTY) {
+    logSuccess('Draft plan written to .jonggrang/plan.md');
+    logInfo('Review / edit it, then run "jonggrang approve" to decompose into tasks.');
+    return;
+  }
+
+  // Interactive options loop
+  let done = false;
+  while (!done) {
+    displayPlanBox(PLAN_FILE);
+
+    const choice = await select({
+      message: 'What would you like to do?',
+      options: [
+        { value: 'approve',  label: 'Approve — decompose to tasks now' },
+        { value: 'edit-ai',  label: 'Edit with AI — describe what to change' },
+        { value: 'edit',     label: `Edit in $EDITOR (${process.env.EDITOR || 'vi'})` },
+        { value: 'later',    label: 'Save draft — approve later with "jonggrang approve"' },
+        { value: 'delete',   label: 'Delete — permanently remove this plan' },
+        { value: 'cancel',   label: 'Cancel — exit without changes' },
+      ],
+    });
+    if (isCancel(choice)) { cancel('Cancelled.'); return; }
+
+    if (choice === 'approve') {
+      await doApprove();
+      done = true;
+
+    } else if (choice === 'edit-ai') {
+      const feedback = await text({
+        message: 'What changes do you want? (describe freely)',
+        placeholder: 'e.g. "add a caching phase" or "use Passport.js instead of custom JWT"',
+      });
+      if (isCancel(feedback) || !feedback.trim()) {
+        logInfo('No feedback entered — plan unchanged.');
+        continue;
+      }
+      logInfo('Revising plan with AI...');
+      const currentPlan = fs.readFileSync(PLAN_FILE, 'utf8');
+      const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, feedback.trim());
+      await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+      // loop back → display updated plan + options again
+
+    } else if (choice === 'edit') {
+      const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
+      execSync(`${editor} "${PLAN_FILE}"`, { stdio: 'inherit' });
+      // loop back → display edited plan + options again
+
+    } else if (choice === 'delete') {
+      const confirm_ = await confirm({ message: 'Delete this plan permanently?', initialValue: false });
+      if (!isCancel(confirm_) && confirm_) {
+        fs.unlinkSync(PLAN_FILE);
+        logWarn('Plan deleted.');
+        done = true;
+      }
+      // if user cancels/says no → loop back
+
+    } else if (choice === 'cancel') {
+      logInfo('Exited. Plan saved at .jonggrang/plan.md');
+      done = true;
+
+    } else { // 'later'
+      logSuccess('Draft plan saved to .jonggrang/plan.md');
+      logInfo('Edit it freely, then run "jonggrang approve" to decompose into tasks.');
+      done = true;
+    }
+  }
+}
+
+// ── PHASE 2: Approve plan → decompose to tasks + archive ──────
+// opts.quiet = true  → skip "Run jonggrang work" tail (used when called from within cmdWork/cmdPlan)
+async function cmdApprove(args, opts = {}) {
+  if (!lib.fileExists(PLAN_FILE)) {
+    logError('No pending plan found at .jonggrang/plan.md');
+    logInfo('Run "jonggrang plan <description>" first.');
+    process.exit(1);
+  }
+
+  safeCheckConfig();
+
+  if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+  }
+
+  const planContent = fs.readFileSync(PLAN_FILE, 'utf8');
+
+  // Parse YAML frontmatter fields
+  const fm = parsePlanFrontmatter(planContent);
+  const featureName = fm.feature || 'work-session';
+  const workType    = fm.work_type || 'MEDIUM';
+
+  // Generate featureId BEFORE running the agent so we can stamp new tasks
+  const featureId = orchestration.generateFeatureId(featureName);
+
+  // Snapshot existing task IDs so we can identify newly created ones
+  const existingTaskIds = new Set(
+    (lib.getTasks(TASKS_FILE)?.tasks || []).map(t => t.id)
+  );
+
+  logHeader('JONGGRANG Approve — Phase 2');
+  logInfo(`Feature:    ${featureName}`);
+  logInfo(`Feature ID: ${featureId}`);
+  logInfo(`Work type:  ${workType}`);
+  logInfo('Decomposing plan into tasks...');
+
+  const prompt = lib.buildTasksFromPlanPrompt(planContent, CONFIG_FILE, TASKS_FILE, SKILLS_DIR);
+  await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+
+  // Stamp every newly created task with the feature_id so tasks are traceable
+  const tasksData = lib.getTasks(TASKS_FILE);
+  if (tasksData && tasksData.tasks) {
+    let modified = false;
+    for (const task of tasksData.tasks) {
+      if (!existingTaskIds.has(task.id) && !task.feature_id) {
+        task.feature_id = featureId;
+        modified = true;
+      }
+    }
+    if (modified) lib.writeJSON(TASKS_FILE, tasksData);
+  }
+
+  // Archive the approved plan
+  const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.copyFileSync(PLAN_FILE, path.join(outputDir, 'plan.md'));
+  fs.unlinkSync(PLAN_FILE);
+
+  logSuccess('Plan approved.');
+  logInfo(`Feature ID:    ${featureId}`);
+  logInfo(`Plan archived: .jonggrang/.output/features/${featureId}/plan.md`);
+
+  if (!opts.quiet) {
     console.log('');
     cmdStatus();
+    console.log('');
+    logSuccess('Run "jonggrang work" to start executing tasks.');
+  }
+}
 
-    if (planSpinner) {
-      planSpinner.stop('Plan ready. Task board updated.');
-      outro('Tasks updated — run "jonggrang work" when you are ready.');
-      outroShown = true;
+// ============================================================
+// BUG REPORTS
+// ============================================================
+
+const BUGS_FILE_NAME = 'bugs.md';
+
+/** Parse bugs.md → array of { bugId, status, taskId|null, timestamp, description } */
+function parseBugsFile(content) {
+  const bugs = [];
+  // Split on ## headers
+  const sections = content.split(/^## /m).slice(1); // drop title section
+  for (const section of sections) {
+    const lines = section.split('\n');
+    const header = lines[0]; // e.g. "[open] bug-001 · 2026-04-16T10:00:00Z"
+    const description = lines.slice(1).join('\n').trim();
+
+    const openMatch  = header.match(/^\[open\]\s+(bug-\d+)\s+·\s+(.+)$/);
+    const taskMatch  = header.match(/^\[task:([^\]]+)\]\s+(bug-\d+)\s+·\s+(.+)$/);
+
+    if (openMatch) {
+      bugs.push({ bugId: openMatch[1], status: 'open', taskId: null, timestamp: openMatch[2].trim(), description });
+    } else if (taskMatch) {
+      bugs.push({ bugId: taskMatch[2], status: 'converted', taskId: taskMatch[1], timestamp: taskMatch[3].trim(), description });
     }
-  } catch (err) {
-    if (planSpinner) {
-      planSpinner.stop(`Plan failed: ${err.message || err}`, 1);
+  }
+  return bugs;
+}
+
+/** Append a new bug entry to bugs.md. Returns the new bugId. */
+function appendBug(bugsPath, featureName, description) {
+  let content = '';
+  let nextNum = 1;
+
+  if (lib.fileExists(bugsPath)) {
+    content = fs.readFileSync(bugsPath, 'utf8');
+    const existing = parseBugsFile(content);
+    nextNum = existing.length + 1;
+  } else {
+    content = `# Bug Reports — ${featureName}\n`;
+  }
+
+  const bugId = `bug-${String(nextNum).padStart(3, '0')}`;
+  const timestamp = new Date().toISOString();
+  content += `\n## [open] ${bugId} · ${timestamp}\n${description}\n`;
+  fs.writeFileSync(bugsPath, content, 'utf8');
+  return bugId;
+}
+
+/** Update bugs.md: change [open] bug-001 → [task:task-005] bug-001 */
+function markBugConverted(bugsPath, bugId, taskId) {
+  if (!lib.fileExists(bugsPath)) return;
+  let content = fs.readFileSync(bugsPath, 'utf8');
+  content = content.replace(
+    new RegExp(`^## \\[open\\] (${bugId} · .+)$`, 'm'),
+    `## [task:${taskId}] $1`
+  );
+  fs.writeFileSync(bugsPath, content, 'utf8');
+}
+
+/** List all features that have a plan.md (to pick a feature for bug reports) */
+function listFeatures(jonggrangDir) {
+  const features = [];
+  const featuresDir = path.join(jonggrangDir, '.output', 'features');
+  if (!lib.fileExists(featuresDir)) return features;
+
+  const entries = fs.readdirSync(featuresDir)
+    .map(e => ({ name: e, mtime: fs.statSync(path.join(featuresDir, e)).mtime }))
+    .sort((a, b) => b.mtime - a.mtime)
+    .map(e => e.name);
+
+  for (const entry of entries) {
+    const planPath = path.join(featuresDir, entry, 'plan.md');
+    if (lib.fileExists(planPath)) {
+      const fm = parsePlanFrontmatter(fs.readFileSync(planPath, 'utf8'));
+      features.push({
+        featureId:   entry,
+        featureName: fm.feature || entry,
+        description: fm.description || '',
+        bugsPath:    path.join(featuresDir, entry, BUGS_FILE_NAME),
+        planPath,
+      });
     }
-    throw err;
-  } finally {
-    if (planSpinner && !outroShown) {
-      planSpinner.stop('Plan finished.');
+  }
+  return features;
+}
+
+async function cmdBug(args) {
+  safeCheckConfig();
+
+  if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+  }
+
+  const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
+  const jonggrangDir = path.join(PROJECT_ROOT, '.jonggrang');
+
+  // Parse subcommand
+  const subArgs = [...args];
+  let sub = 'add';
+  if (['list', 'convert'].includes(subArgs[0])) sub = subArgs.shift();
+
+  // --feature <featureId> override
+  let forcedFeatureId = null;
+  const featureIdx = subArgs.indexOf('--feature');
+  if (featureIdx !== -1) {
+    forcedFeatureId = subArgs[featureIdx + 1];
+    subArgs.splice(featureIdx, 2);
+  }
+
+  const features = listFeatures(jonggrangDir);
+  if (features.length === 0) {
+    logError('No features found. Run "jonggrang plan" and "jonggrang approve" first.');
+    process.exit(1);
+  }
+
+  // ── LIST ─────────────────────────────────────────────────────
+  if (sub === 'list') {
+    const targets = forcedFeatureId
+      ? features.filter(f => f.featureId === forcedFeatureId || f.featureName === forcedFeatureId)
+      : features;
+
+    for (const feat of targets) {
+      console.log(`\n${BOLD}${CYAN}▸ ${feat.featureName}${NC}  ${DIM}(${feat.featureId})${NC}`);
+      if (!lib.fileExists(feat.bugsPath)) {
+        console.log(`  ${DIM}(no bugs reported)${NC}`);
+        continue;
+      }
+      const bugs = parseBugsFile(fs.readFileSync(feat.bugsPath, 'utf8'));
+      if (bugs.length === 0) {
+        console.log(`  ${DIM}(no bugs reported)${NC}`);
+        continue;
+      }
+      console.log(`  ${BOLD}${'ID'.padEnd(9)} ${'Status'.padEnd(18)} Description${NC}`);
+      console.log('  ' + '-'.repeat(70));
+      for (const bug of bugs) {
+        const statusLabel = bug.status === 'open'
+          ? `${YELLOW}open${NC}`
+          : `${GREEN}task:${bug.taskId}${NC}`;
+        const desc = bug.description.split('\n')[0].slice(0, 50);
+        console.log(`  ${(bug.bugId).padEnd(9)} ${statusLabel.padEnd(26)} ${desc}`);
+      }
     }
+    return;
+  }
+
+  // ── CONVERT ──────────────────────────────────────────────────
+  if (sub === 'convert') {
+    let feat;
+    if (forcedFeatureId) {
+      feat = features.find(f => f.featureId === forcedFeatureId || f.featureName === forcedFeatureId);
+      if (!feat) { logError(`Feature "${forcedFeatureId}" not found.`); process.exit(1); }
+    } else if (features.length === 1) {
+      feat = features[0];
+    } else if (isInteractiveTTY) {
+      const picked = await select({
+        message: 'Which feature to convert bugs for?',
+        options: features.map(f => ({
+          value: f.featureId,
+          label: `${f.featureName}${f.description ? ' — ' + f.description : ''}`,
+        })),
+      });
+      if (isCancel(picked)) { cancel('Aborted.'); return; }
+      feat = features.find(f => f.featureId === picked);
+    } else {
+      logError('Multiple features found. Use --feature <featureId>.');
+      process.exit(1);
+    }
+
+    if (!lib.fileExists(feat.bugsPath)) {
+      logWarn(`No bugs.md found for ${feat.featureName}.`);
+      return;
+    }
+
+    const bugs = parseBugsFile(fs.readFileSync(feat.bugsPath, 'utf8'));
+    const openBugs = bugs.filter(b => b.status === 'open');
+    if (openBugs.length === 0) {
+      logSuccess(`No open bugs in ${feat.featureName} — all already converted.`);
+      return;
+    }
+
+    logHeader('JONGGRANG Bug Convert');
+    logInfo(`Feature: ${feat.featureName}`);
+    logInfo(`Open bugs: ${openBugs.length}`);
+
+    // Snapshot existing task IDs before agent runs
+    const existingTaskIds = new Set((lib.getTasks(TASKS_FILE)?.tasks || []).map(t => t.id));
+
+    const prompt = lib.buildBugsToTasksPrompt(openBugs, feat.featureId, CONFIG_FILE, TASKS_FILE);
+    await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+
+    // Find new tasks and correlate with bugs via TASK_CREATED output lines
+    // Also update bugs.md for any open bugs → converted
+    const newTasks = (lib.getTasks(TASKS_FILE)?.tasks || []).filter(t => !existingTaskIds.has(t.id));
+    if (newTasks.length > 0) {
+      // Assign bugs to tasks in order (AI creates one task per bug in order)
+      for (let i = 0; i < Math.min(openBugs.length, newTasks.length); i++) {
+        markBugConverted(feat.bugsPath, openBugs[i].bugId, newTasks[i].id);
+        logSuccess(`${openBugs[i].bugId} → ${newTasks[i].id}: ${newTasks[i].title}`);
+      }
+    } else {
+      logWarn('No new tasks were created by the agent. Check agent output above.');
+    }
+    return;
+  }
+
+  // ── ADD (default) ─────────────────────────────────────────────
+  let description = subArgs.filter(a => !a.startsWith('--')).join(' ').trim();
+
+  // Pick feature
+  let feat;
+  if (forcedFeatureId) {
+    feat = features.find(f => f.featureId === forcedFeatureId || f.featureName === forcedFeatureId);
+    if (!feat) { logError(`Feature "${forcedFeatureId}" not found.`); process.exit(1); }
+  } else if (features.length === 1) {
+    feat = features[0];
+  } else if (isInteractiveTTY) {
+    const picked = await select({
+      message: 'Which feature does this bug belong to?',
+      options: features.map(f => ({
+        value: f.featureId,
+        label: `${f.featureName}${f.description ? ' — ' + f.description : ''}`,
+      })),
+    });
+    if (isCancel(picked)) { cancel('Aborted.'); return; }
+    feat = features.find(f => f.featureId === picked);
+  } else {
+    logError('Multiple features found. Use --feature <featureId>.');
+    process.exit(1);
+  }
+
+  // Get bug description interactively if not provided
+  if (!description && isInteractiveTTY) {
+    const input = await text({
+      message: 'Describe the bug',
+      placeholder: 'e.g. "Handler crashes when Content-Type header is missing"',
+    });
+    if (isCancel(input) || !input.trim()) { cancel('Aborted.'); return; }
+    description = input.trim();
+  }
+  if (!description) {
+    logError('Bug description required. Usage: jonggrang bug "description"');
+    process.exit(1);
+  }
+
+  // Append to bugs.md
+  const bugId = appendBug(feat.bugsPath, feat.featureName, description);
+  logSuccess(`Reported ${bugId} in ${feat.featureName}`);
+  logInfo(`Saved to: .jonggrang/.output/features/${feat.featureId}/${BUGS_FILE_NAME}`);
+
+  // Ask: create task now?
+  let createTask = false;
+  if (isInteractiveTTY) {
+    const ok = await confirm({ message: 'Create a task for this bug now?', initialValue: true });
+    if (!isCancel(ok)) createTask = ok;
+  }
+
+  if (createTask) {
+    const title = `Fix: ${description.split('\n')[0].slice(0, 80)}`;
+    const task = lib.addTask(TASKS_FILE, {
+      title,
+      description: `Bug ${bugId}: ${description}`,
+      priority: 1,
+      feature_id: feat.featureId,
+      skill: null,
+      blocked_by: [],
+      files: [],
+    });
+    // Mark bug as converted in bugs.md
+    markBugConverted(feat.bugsPath, bugId, task.id);
+    logSuccess(`Created ${task.id}: ${task.title}`);
+    logInfo('Run "jonggrang work" to execute it.');
+  } else {
+    logInfo(`Run "jonggrang bug convert --feature ${feat.featureId}" to batch-convert later.`);
   }
 }
 
@@ -903,9 +1506,11 @@ async function cmdInit() {
   console.log('');
   console.log('  Next steps:');
   console.log('    1. Edit AGENTS.md with your project conventions');
-  console.log('    2. jonggrang work "your feature"    # plan + execute in one shot');
-  console.log('       OR: jonggrang plan "feature"     # plan only');
-  console.log('           jonggrang work               # execute planned tasks');
+  console.log('    2. jonggrang plan "your feature"    # generate draft plan.md for review');
+  console.log('       jonggrang approve                # approve plan → decompose to tasks');
+  console.log('       jonggrang work                   # execute tasks');
+  console.log('       — or —');
+  console.log('       jonggrang plan "feature" --yes   # plan + approve + tasks in one shot');
   console.log('');
 }
 
@@ -1167,17 +1772,21 @@ async function cmdMenu() {
   let outroShown = false;
 
   while (running) {
+    const hasPendingPlan = lib.fileExists(PLAN_FILE);
+    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
     const choice = await select({
       message: 'What do you want to do?',
-      initialValue: 'init',
+      initialValue: hasPendingPlan ? 'approve' : 'plan',
       options: [
-        { value: 'init', label: 'Initialize project' },
-        { value: 'plan', label: 'Plan feature' },
-        { value: 'work', label: 'Start work loop' },
-        { value: 'status', label: 'Show status board' },
-        { value: 'review', label: 'Run review' },
-        { value: 'web', label: 'Launch web dashboard' },
-        { value: 'exit', label: 'Exit menu' },
+        { value: 'init',      label: 'Initialize project' },
+        { value: 'plan',      label: 'Plan feature             — Phase 1: generate draft plan.md' },
+        ...(hasArchivedPlans ? [{ value: 'pick-plan', label: 'Pick existing plan        — view/edit/approve a saved plan' }] : []),
+        { value: 'approve',   label: `Approve plan             — Phase 2: decompose to tasks${hasPendingPlan ? ' ◀ pending plan!' : ''}` },
+        { value: 'work',      label: 'Start work loop          — execute tasks' },
+        { value: 'status',    label: 'Show status board' },
+        { value: 'review',    label: 'Run code review' },
+        { value: 'web',       label: 'Launch web dashboard' },
+        { value: 'exit',      label: 'Exit menu' },
       ],
     });
 
@@ -1196,30 +1805,24 @@ async function cmdMenu() {
           break;
         case 'plan': {
           const description = await text({
-            message: 'Feature description',
+            message: 'Feature description (Phase 1 — generates plan.md for review)',
             validate(value) {
               if (!value || !value.trim()) return 'Description is required.';
             },
           });
-          if (isCancel(description)) {
-            logWarn('Plan cancelled.');
-            continue;
-          }
-
-          const update = await confirm({
-            message: 'Update existing plan?',
-            initialValue: false,
-          });
-          if (isCancel(update)) {
-            logWarn('Plan cancelled.');
-            continue;
-          }
-
+          if (isCancel(description)) { logWarn('Plan cancelled.'); continue; }
           checkDeps();
-          {
-            const args = update ? ['--update', description.trim()] : [description.trim()];
-            await cmdPlan(args);
-          }
+          await cmdPlan([description.trim()]);
+          break;
+        }
+        case 'pick-plan': {
+          checkDeps();
+          await cmdPlan([]); // no description → triggers list picker
+          break;
+        }
+        case 'approve': {
+          checkDeps();
+          await cmdApprove([]);
           break;
         }
         case 'work':
@@ -1385,14 +1988,18 @@ function taskList(flags, positional, pretty) {
 
   if (pretty) {
     console.log(`\n${BOLD}Tasks: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} completed${NC}\n`);
-    console.log(`${BOLD}${'ID'.padEnd(11)} ${'Status'.padEnd(12)} ${'Pri'.padEnd(4)} Title${NC}`);
-    console.log('-'.repeat(65));
+    // Check if tasks span multiple features
+    const featureIds = new Set(tasks.map(t => t.feature_id).filter(Boolean));
+    const multiFeature = featureIds.size > 1;
+    console.log(`${BOLD}${'ID'.padEnd(11)} ${'Status'.padEnd(12)} ${'Pri'.padEnd(4)} ${multiFeature ? 'Feature'.padEnd(22) : ''}Title${NC}`);
+    console.log('-'.repeat(multiFeature ? 87 : 65));
     for (const task of tasks) {
       let color = NC;
       if (task.status === 'completed') color = GREEN;
       else if (task.status === 'in_progress') color = YELLOW;
       else if (task.status === 'blocked') color = RED;
-      console.log(`${color}${(task.id || '').padEnd(11)} ${(task.status || '').padEnd(12)} ${String(task.priority || '-').padEnd(4)} ${task.title || ''}${NC}`);
+      const featureCol = multiFeature ? (task.feature_id || '').slice(0, 21).padEnd(22) : '';
+      console.log(`${color}${(task.id || '').padEnd(11)} ${(task.status || '').padEnd(12)} ${String(task.priority || '-').padEnd(4)} ${featureCol}${task.title || ''}${NC}`);
     }
     if (tasks.length === 0) console.log('  (no tasks)');
   } else {
@@ -1411,6 +2018,16 @@ function taskShow(flags, positional, pretty) {
     console.log(`\n${BOLD}${task.id}${NC} — ${task.title}`);
     console.log(`Status:      ${task.status}`);
     console.log(`Priority:    ${task.priority}`);
+    if (task.feature_id) {
+      const archivePlan = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', task.feature_id, 'plan.md');
+      let featureLabel = task.feature_id;
+      if (lib.fileExists(archivePlan)) {
+        const fm = parsePlanFrontmatter(fs.readFileSync(archivePlan, 'utf8'));
+        featureLabel = `${fm.feature || task.feature_id}${fm.description ? ' — ' + fm.description : ''}`;
+      }
+      console.log(`Feature:     ${featureLabel}  ${DIM}(${task.feature_id})${NC}`);
+      console.log(`Plan:        .jonggrang/.output/features/${task.feature_id}/plan.md`);
+    }
     console.log(`Role:        ${task.role || '(none)'}`);
     console.log(`Skill:       ${task.skill || '(none)'}`);
     console.log(`Blocked by:  ${(task.blocked_by || []).join(', ') || '(none)'}`);
@@ -1602,11 +2219,15 @@ Usage: jonggrang <command> [options]
 
 Commands:
   init                    Setup project (interactive or with flags)
-  work [description]      Execute tasks — with description: plan + execute in one shot
-                          Auto-adds quality gates for MEDIUM/LARGE features
+  plan <description>      Phase 1 — generate human-readable .jonggrang/plan.md for review
+  plan <description> --yes  Plan + auto-approve + decompose to tasks in one shot
+  approve                 Phase 2 — decompose approved plan.md into tasks (after review)
+  work [description]      Execute tasks — with description runs plan → approve → execute
   work --resume           Resume incomplete pipeline from last phase
-  plan <description>      Decompose feature into tasks (planning only)
   plan --update <desc>    Update existing plan (preserves completed tasks)
+  bug "description"       Report a bug → append to bugs.md + optionally create task
+  bug list                List all bug reports (all features)
+  bug convert             AI converts open bugs → tasks (batch)
   status                  Show pipeline state + task board
   review                  Run code review
   task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
@@ -1642,13 +2263,19 @@ Work flags:
 
 Examples:
   jonggrang init
-  jonggrang init --name my-api --tool claude --autonomy autonomous --force
-  jonggrang work "add user authentication with JWT"   # plan + execute + quality gates
-  jonggrang work                                       # execute existing tasks
-  jonggrang work --task task-003                       # run specific task
-  jonggrang plan "add payment flow"                    # create tasks only
-  jonggrang status                                     # pipeline + task board
-  jonggrang web                                        # visual dashboard`);
+  jonggrang plan "add JWT auth"             # Phase 1: generate plan.md, review it
+  jonggrang approve                         # Phase 2: decompose plan.md → tasks
+  jonggrang work                            # execute tasks (after approve)
+  jonggrang plan "add JWT auth" --yes       # plan + auto-approve + tasks in one shot
+  jonggrang work "add JWT auth" --yes       # full pipeline: plan → approve → execute
+  jonggrang work --task task-003            # run specific task only
+  jonggrang work --ignore-plan              # execute tasks, skip pending plan warning
+  jonggrang bug "null pointer on POST /hello"   # report a bug (interactive feature picker)
+  jonggrang bug list                        # list all bugs across features
+  jonggrang bug convert                     # AI converts open bugs → tasks
+  jonggrang bug convert --feature add-hello-endpoint-abc12345
+  jonggrang status                          # pipeline + task board
+  jonggrang web                             # visual dashboard`);
 }
 
 // ============================================================
@@ -1722,6 +2349,14 @@ async function main() {
     case 'plan':
       checkDeps();
       await cmdPlan(planArgs);
+      break;
+    case 'approve':
+      checkDeps();
+      await cmdApprove(planArgs);
+      break;
+    case 'bug':
+      checkDeps();
+      await cmdBug(planArgs);
       break;
     case 'orchestrate':
       await cmdOrchestrate(planArgs);

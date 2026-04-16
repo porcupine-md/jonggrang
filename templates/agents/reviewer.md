@@ -60,6 +60,20 @@ Depends on which phase you're called for:
 - [ ] No mocking of domain logic (only I/O)
 - [ ] No `expect(true).toBe(true)` style tests
 
+## Reporting Bugs (not design violations)
+
+When you spot a **defect** — code that is factually broken, crashes, or produces wrong output — that is NOT a design-level violation, report it as a bug instead of including it in the violations list:
+
+```bash
+jonggrang bug "what is broken, file and line if known" --feature <feature_id>
+# Answer "Create a task now?" with y to create a BUGFIX task immediately
+```
+
+**Use the output JSON `violations` array for**: design mismatches, missing auth, wrong patterns, code quality issues.
+**Use `jonggrang bug`** for: runtime defects, crashes, wrong return values, edge cases that fail.
+
+The bug will be logged to `.jonggrang/.output/features/<feature_id>/bugs.md` and a BUGFIX task will be queued for the developer.
+
 ## Output File
 
 `.jonggrang/.output/features/{feature_id}/{phase}-reviewer-report.json`

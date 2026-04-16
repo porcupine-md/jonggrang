@@ -30,6 +30,21 @@ Read these files in order:
 - **Stack**: {{stack}}
 - **Test command**: {{test_command}}
 
+## Bug Reporting
+
+If you find a defect **outside the scope of your current task**, report it:
+
+```bash
+jonggrang bug "description of what is broken" --feature <feature_id>
+# "Create a task now?" → y
+```
+
+- Bug is saved to `.jonggrang/.output/features/<feature_id>/bugs.md`
+- A BUGFIX task is created immediately and queued for the next work cycle
+- Do NOT fix out-of-scope bugs inline — complete your current task first
+
+The `feature_id` is in your task's `"feature_id"` field in jonggrang-tasks.json.
+
 ## Rules
 
 - Only modify files listed in your task's `"files"` array
@@ -37,3 +52,4 @@ Read these files in order:
 - One atomic commit per task
 - Do not skip validation
 - Log discoveries in `.jonggrang/progress.txt`
+- Report out-of-scope bugs with `jonggrang bug` (see above)

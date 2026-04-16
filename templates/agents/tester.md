@@ -58,8 +58,25 @@ npm run test -- src/auth/auth.service.test.ts
 
 1. Read the full error message
 2. Check if the TEST is wrong or the IMPLEMENTATION is wrong
-3. If implementation bug: write the failing test, note it, don't fix implementation (that's developer's job)
+3. If implementation bug: write the failing test, then **report the bug**:
+   ```bash
+   jonggrang bug "description of the bug" --feature <feature_id>
+   # When asked "Create a task now?" → y  (creates a BUGFIX task immediately)
+   ```
+   Do NOT fix implementation — that is the developer's job.
 4. If test setup is wrong: fix the test
+
+## Bugs Discovered During Testing
+
+When you find a defect that is outside your current test task (e.g., a different endpoint crashes, a helper returns wrong values):
+
+```bash
+jonggrang bug "what is broken and how to reproduce" --feature <feature_id>
+# Answer "Create a task now?" with y to create a BUGFIX task immediately
+```
+
+This logs the bug to `.jonggrang/.output/features/<feature_id>/bugs.md` and creates a traceable task.
+**Do not fix bugs out of scope.** Complete your test task first.
 
 ## Output File
 

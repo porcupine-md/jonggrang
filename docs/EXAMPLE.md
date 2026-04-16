@@ -70,10 +70,39 @@ Expected output:
 
 ### Step 3: Plan Feature
 
-Let Jonggrang decompose your feature into tasks:
+Planning is a two-phase process. Phase 1 generates a human-readable draft that you review before tasks are created.
+
+**Option A — interactive (recommended):**
 
 ```bash
 jonggrang plan "Todo REST API with Express. CRUD endpoints for todos (list, get, create, update, delete) using in-memory storage. TypeScript, Vitest tests, supertest for integration testing."
+# AI writes .jonggrang/plan.md
+# Interactive prompt:
+#   ◆ What would you like to do?
+#   ● Approve — decompose into tasks now
+#   ○ Edit in $EDITOR first
+#   ○ Save draft and exit
+#   ○ Abort
+```
+
+Once approved (or after editing), run Phase 2:
+
+```bash
+jonggrang approve
+# Reads plan.md → writes jonggrang-tasks.json
+# Archives plan.md to .jonggrang/.output/features/<id>/plan.md
+```
+
+**Option B — one-shot (skip review):**
+
+```bash
+jonggrang plan "Todo REST API ..." --yes   # plan + approve in one shot
+```
+
+**Option C — full pipeline:**
+
+```bash
+jonggrang work "Todo REST API ..." --yes   # plan → approve → execute
 ```
 
 ### Step 4: Check Task Board

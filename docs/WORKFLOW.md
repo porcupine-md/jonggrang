@@ -6,6 +6,69 @@ Jonggrang runs in two distinct modes. The **Work Loop** is the original iterativ
 
 ## Mode 1: Work Loop
 
+### Two-Phase Planning
+
+Before the work loop can run, a plan must exist and be approved. This is a **two-phase** process:
+
+```
+Phase 1 — jonggrang plan "description"
+    │
+    ├─ AI writes .jonggrang/plan.md  (high-level, human-editable)
+    │   frontmatter: feature, branch, work_type, description, created_at
+    │
+    ├─ Interactive prompt:
+    │   > Approve (immediately run Phase 2)
+    │   > Edit plan in $EDITOR, then approve
+    │   > Save for later (exit, plan.md stays on disk)
+    │   > Abort (discard plan.md)
+    │
+Phase 2 — jonggrang approve   (or auto-triggered by --yes)
+    │
+    ├─ AI reads .jonggrang/plan.md
+    ├─ Decomposes into atomic tasks → .jonggrang/jonggrang-tasks.json
+    └─ Archives plan → .jonggrang/.output/features/<id>/plan.md
+       Deletes .jonggrang/plan.md
+```
+
+**Interactive options after `jonggrang plan`:**
+
+| Option | Action |
+|--------|--------|
+| Approve | Run Phase 2 immediately |
+| Edit with AI | Describe changes → AI revises plan.md in-place → loop back |
+| Edit in $EDITOR | Open editor → loop back to options |
+| Save draft | Save plan.md, exit — run `jonggrang approve` later |
+| Abort | Delete plan.md, exit |
+
+**Shorthand options:**
+
+| Command | Behaviour |
+|---------|-----------|
+| `jonggrang plan "feat" --yes` | Plan + auto-approve + tasks (no interactive prompt) |
+| `jonggrang plan` | No description → picker: list all pending + archived plans |
+| `jonggrang work "feat" --yes` | Full pipeline: plan → approve → execute |
+| `jonggrang work --ignore-plan` | Skip pending plan warning, run existing tasks |
+| `jonggrang approve` | Manual Phase 2 only (after editing saved plan.md) |
+
+**Resuming after accidental close:**
+
+```bash
+jonggrang plan        # no description → shows list of pending + archived plans
+                      # pick one → shows plan content + interactive options
+```
+
+**Modifying a plan after approval:**
+
+| Situation | Command |
+|-----------|---------|
+| Add new scope on top of done work | `jonggrang plan "also add rate limiting"` |
+| Change remaining pending work | `jonggrang plan "use Passport.js instead"` |
+| Undo completed tasks | Not supported — create new tasks to override |
+
+> **Rule: completed tasks are immutable.** They reflect real code. Any correction must be a new task.
+
+---
+
 ### Iteration Lifecycle
 
 Each iteration is **stateless** — a fresh context window. This prevents accumulated confusion from long-running sessions.
@@ -150,13 +213,21 @@ else                         --> next iteration (fresh context)
 ### Work Loop Variants
 
 ```bash
-jonggrang work                          # all pending tasks
-jonggrang work --skill prd              # one-shot skill execution
-jonggrang work --task task-003          # specific task
+# Planning
+jonggrang plan "feature"                # Phase 1: generate plan.md for review
+jonggrang plan "feature" --yes          # Phase 1 + auto-approve + Phase 2
+jonggrang approve                       # Phase 2 only: decompose plan → tasks
+
+# Execution
+jonggrang work                          # run all pending tasks
+jonggrang work "feature" --yes          # full pipeline: plan → approve → execute
+jonggrang work --ignore-plan            # run existing tasks, skip plan warning
+jonggrang work --task task-003          # specific task only
 jonggrang work --branch feat/auth       # branch-scoped
 jonggrang work --dry-run                # preview prompt only
 jonggrang work --tool claude            # override AI tool
 jonggrang work --mode supervised        # override autonomy
+jonggrang work --debug                  # dump raw JSON from agent to stderr
 ```
 
 ---
