@@ -22,16 +22,17 @@ skills/
 │   ├── scaffold-library/SKILL.md
 │   ├── scaffold-cli/SKILL.md
 │   ├── scaffold-tui/SKILL.md
+│   ├── scaffold-deploy/SKILL.md
 │   ├── component/SKILL.md
 │   ├── migration/SKILL.md
 │   ├── auth/SKILL.md
 │   ├── testing/SKILL.md
-│   ├── deploy/SKILL.md
 │   ├── gateway-backend/SKILL.md
 │   ├── gateway-frontend/SKILL.md
 │   ├── gateway-api/SKILL.md
 │   ├── gateway-testing/SKILL.md
-│   └── gateway-database/SKILL.md
+│   ├── gateway-database/SKILL.md
+│   └── gateway-deploy/SKILL.md
 │
 └── library/                                 ← Hard Drive: JIT loaded via Gateway routing
     ├── backend/
@@ -48,8 +49,20 @@ skills/
     │   └── safe-migrations/SKILL.md
     ├── api/
     │   └── input-validation/SKILL.md
-    └── security/
-        └── rate-limiting/SKILL.md
+    ├── security/
+    │   └── rate-limiting/SKILL.md
+    └── deploy/
+        ├── aws/SKILL.md
+        ├── gcp/SKILL.md
+        ├── cloudflare/SKILL.md
+        ├── vercel/SKILL.md
+        ├── netlify/SKILL.md
+        ├── railway/SKILL.md
+        ├── coolify/SKILL.md
+        ├── fly/SKILL.md
+        ├── ssh-vps/SKILL.md
+        ├── kubernetes/SKILL.md
+        └── docker-registry/SKILL.md
 ```
 
 ### Tier 1: Core (BIOS)
@@ -99,6 +112,7 @@ The Gateway is the routing layer between agent intent and skill files. Instead o
 | test, spec, coverage, mock, fixture | testing | unit-testing-patterns, fixing-flaky-tests |
 | migration, query, schema, ORM | database | safe-migrations |
 | rate-limit, auth, token, security | security | rate-limiting |
+| deploy, release, host, server, cloud | deploy | aws, gcp, cloudflare, vercel, netlify, railway, coolify, fly, ssh-vps, kubernetes, docker-registry |
 
 ---
 
@@ -229,6 +243,7 @@ Jonggrang auto-detects the relevant core skill from the task description:
 | `gateway-api` | api/ library skills |
 | `gateway-testing` | testing/ library skills |
 | `gateway-database` | database/ library skills |
+| `gateway-deploy` | deploy/ library skills |
 
 ### Scaffold Skills
 
@@ -237,6 +252,9 @@ Jonggrang auto-detects the relevant core skill from the task description:
 | `scaffold-api` | Route, controller, validation schema, tests |
 | `scaffold-webapp` | Page component, layout, data fetching, tests |
 | `scaffold-library` | src/, build config, exports, tests |
+| `scaffold-cli` | CLI structure, args parsing, tests |
+| `scaffold-tui` | TUI structure, components, tests |
+| `scaffold-deploy` | Dockerfile, CI/CD config, environment configs |
 | `component` | UI component, test, story (if Storybook present) |
 | `migration` | Migration file, model update, seed data |
 | `auth` | Login, register, session/JWT, middleware, tests |
@@ -247,7 +265,6 @@ Jonggrang auto-detects the relevant core skill from the task description:
 |-------|-------------|
 | `prd` | Product Requirements Document from intent |
 | `testing` | Test suite for existing code |
-| `deploy` | Dockerfile, CI/CD config, environment configs |
 
 ---
 
@@ -292,6 +309,22 @@ Jonggrang auto-detects the relevant core skill from the task description:
 | Skill | What It Teaches |
 |-------|----------------|
 | `rate-limiting` | express-rate-limit, Redis store, per-IP/per-user patterns |
+
+### Deploy
+
+| Skill | What It Teaches |
+|-------|----------------|
+| `aws` | Deploying to AWS (EC2, ECS, S3, CloudFront) |
+| `gcp` | Deploying to GCP (Cloud Run, App Engine, Compute Engine) |
+| `cloudflare` | Deploying to Cloudflare (Pages, Workers, Wrangler) |
+| `vercel` | Deploying to Vercel (Next.js, static sites) |
+| `netlify` | Deploying to Netlify (static sites, edge functions) |
+| `railway` | Deploying to Railway (PaaS, Docker, Nixpacks) |
+| `coolify` | Deploying to Coolify (self-hosted PaaS) |
+| `fly` | Deploying to Fly.io (MicroVMs, Docker) |
+| `ssh-vps` | Deploying to Baremetal/VPS via SSH, SCP, Rsync, PM2 |
+| `kubernetes` | Deploying to Kubernetes clusters via kubectl, helm |
+| `docker-registry`| Building and pushing container images to registries |
 
 ---
 
