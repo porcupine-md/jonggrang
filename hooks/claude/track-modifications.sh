@@ -22,6 +22,11 @@ if [[ -z "$PROJECT_ROOT" || -z "$FILE_PATH" ]]; then
   exit 0
 fi
 
+# Skip .jonggrang/ orchestration files — ephemeral plans/reports are not production code
+if [[ "$FILE_PATH" =~ \.jonggrang/ || "$FILE_PATH" =~ /\.jonggrang/ ]]; then
+  exit 0
+fi
+
 # Resolve jonggrang lib — works in user projects (.jonggrang/lib/) and source repo (lib/)
 _JONGGRANG_BASE="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)"
 if [[ -z "${JONGGRANG_LIB:-}" ]]; then

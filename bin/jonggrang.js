@@ -897,6 +897,11 @@ async function cmdPlan(args, opts = {}) {
 
     fs.mkdirSync(ephemeralDir, { recursive: true });
 
+    // Clear any stale feedback-loop state from previous work sessions.
+    // Deep-plan phases are read-only discovery/planning — they must not be blocked
+    // by a prior run's active feedback loop.
+    feedback.clearFeedbackState(PROJECT_ROOT);
+
     logHeader('JONGGRANG Plan — Deep Mode (3 phases)');
     logInfo(`Feature: ${description}`);
     logInfo(`Tool:    ${TOOL}`);
@@ -948,6 +953,9 @@ async function cmdPlan(args, opts = {}) {
     logInfo(`Feature: ${description}`);
     logInfo(`Tool:    ${TOOL}`);
     logInfo('Generating draft plan...');
+
+    // Clear stale feedback-loop state — planning is read-only, must not be blocked.
+    feedback.clearFeedbackState(PROJECT_ROOT);
 
     const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
