@@ -11,6 +11,10 @@ const readline = require('readline');
 const { intro, outro, select, confirm, text, isCancel, cancel, spinner } = require('@clack/prompts');
 
 const lib = require('../lib/jonggrang');
+const orchestration = require('../lib/orchestration');
+const hooksLib = require('../lib/hooks');
+const compaction = require('../lib/compaction');
+const feedback = require('../lib/feedback');
 
 // ============================================================
 // CONFIGURATION
@@ -54,10 +58,14 @@ let TASK_ID = '';
 let BRANCH = '';
 let VERBOSE = process.env.JONGGRANG_VERBOSE === 'true';
 let DRY_RUN = process.env.JONGGRANG_DRY_RUN === 'false';
+let DEBUG   = process.env.JONGGRANG_DEBUG === 'true';
 let WEB_PORT = parseInt(process.env.JONGGRANG_WEB_PORT || '7777', 10);
 let WEB_OPEN = true;
 let WORKTREE_MODE = false;
 let GROUP_TASK_IDS = [];
+let ORCHESTRATE_RESUME = false;
+let ORCHESTRATE_ROLE = '';
+let SKIP_GATES = false;
 
 // Init options
 let INIT_NAME = '';
@@ -175,6 +183,15 @@ function updateTaskMode(taskId, status) {
   }
 }
 
+const TEST_RETRY_LIMIT = 3;
+
+function askUserFeedback(prompt) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(prompt, (answer) => { rl.close(); resolve(answer.trim()); });
+  });
+}
+
 async function runIteration(iteration, taskId) {
   const task = lib.getTask(TASKS_FILE, taskId);
   const taskTitle = task ? task.title : taskId;
@@ -182,39 +199,199 @@ async function runIteration(iteration, taskId) {
   logHeader(`Iteration ${iteration}: ${taskTitle}`);
 
   updateTaskMode(taskId, 'in_progress');
-
-  const prompt = lib.buildWorkPrompt(taskId, TASKS_FILE, MODE);
+  // Brief pause so the file-watcher fires before the agent starts,
+  // ensuring the browser sees the in_progress state transition.
+  await new Promise(r => setTimeout(r, 200));
 
   if (DRY_RUN) {
     logWarn(`[DRY RUN] Would execute prompt for task: ${taskId}`);
-    console.log(prompt);
+    console.log(lib.buildWorkPrompt(taskId, TASKS_FILE, MODE));
     return true;
   }
 
-  logInfo(`Spawning fresh ${TOOL} instance...`);
+  const testCmd = lib.readConfig(CONFIG_FILE, 'testing.command', '');
+  let testFeedback = '';    // injected into prompt on retry
+  let testAttempt = 0;
 
-  const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT);
+  while (true) {
+    // Build prompt — inject test failure feedback on retries
+    const prompt = lib.buildWorkPrompt(taskId, TASKS_FILE, MODE, testFeedback || undefined);
 
-  if (exitCode === 0) {
+    logInfo(`Spawning fresh ${TOOL} instance...${testAttempt > 0 ? ` (test retry ${testAttempt}/${TEST_RETRY_LIMIT})` : ''}`);
+    const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT, { debug: DEBUG });
+
+    if (exitCode !== 0) {
+      logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
+      updateTaskMode(taskId, 'pending');
+      return false;
+    }
+
+    // ── Check task completion ─────────────────────────────────
     const data = lib.getTasks(TASKS_FILE);
     const t = data.tasks.find(t => t.id === taskId);
-    if (t && t.status === 'completed') {
-      logSuccess(`Task ${taskId} completed successfully`);
-      updateTaskMode(taskId, 'completed');
-      return true;
-    } else {
+    if (!t || t.status !== 'completed') {
       logWarn('Agent finished but did not mark task complete. Reverting to pending.');
       updateTaskMode(taskId, 'pending');
       return false;
     }
-  } else {
-    logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
-    updateTaskMode(taskId, 'pending');
-    return false;
+
+    // ── Run tests ─────────────────────────────────────────────
+    if (!testCmd) {
+      logSuccess(`Task ${taskId} completed successfully`);
+      updateTaskMode(taskId, 'completed');
+      return true;
+    }
+
+    logInfo('Running tests...');
+    const { passed, output } = lib.runTestCommand(testCmd, PROJECT_ROOT);
+
+    if (passed) {
+      logSuccess(`Task ${taskId} completed — tests passed`);
+      updateTaskMode(taskId, 'completed');
+      return true;
+    }
+
+    testAttempt++;
+    logWarn(`Tests failed (attempt ${testAttempt}/${TEST_RETRY_LIMIT})`);
+
+    if (testAttempt < TEST_RETRY_LIMIT) {
+      // Auto-retry: inject test output as feedback, reset task to pending
+      testFeedback = output;
+      lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+      logInfo('Retrying with test failure output...');
+      continue;
+    }
+
+    // ── Max retries hit — ask user ────────────────────────────
+    logError(`Tests still failing after ${TEST_RETRY_LIMIT} attempts.`);
+    console.log('\n--- Test output ---\n' + output + '\n---\n');
+    const userInput = await askUserFeedback(
+      'Provide feedback for the agent (or press Enter to mark task blocked): '
+    );
+
+    if (!userInput) {
+      logError(`Task ${taskId} marked as blocked after ${TEST_RETRY_LIMIT} failed test retries.`);
+      updateTaskMode(taskId, 'blocked');
+      return false;
+    }
+
+    // User gave feedback — inject it and reset counter for another round
+    testFeedback = `User feedback: ${userInput}\n\nLast test output:\n${output}`;
+    testAttempt = 0;
+    lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+    logInfo('Retrying with user feedback...');
   }
 }
 
-async function cmdWork() {
+// ============================================================
+// WORK TYPE RESOLUTION
+// ============================================================
+
+function resolveWorkType(description) {
+  // 1. Active MANIFEST takes priority
+  const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+  if (existing) return existing.manifest.work_type;
+
+  // 2. Classify from description if given
+  if (description) return orchestration.classifyWorkType(description);
+
+  // 3. Infer from total task count (task titles are too noisy for text classification)
+  const data = lib.getTasks(TASKS_FILE);
+  if (!data.tasks || data.tasks.length === 0) return 'SMALL';
+  const total = data.tasks.length;
+  if (total >= 6) return 'LARGE';
+  if (total >= 3) return 'MEDIUM';
+  return 'SMALL';
+}
+
+// ============================================================
+// POST-WORK QUALITY GATES
+// ============================================================
+
+async function runPostWorkPhases(description, workType, featureId, manifest, manifestPath) {
+  if (workType === 'SMALL' || workType === 'BUGFIX') {
+    logInfo(`Work type: ${workType} — no quality gates needed`);
+    // Mark all remaining active phases as skipped so the phase grid shows complete
+    if (manifestPath && manifest) {
+      try {
+        const current = orchestration.readManifest(manifestPath);
+        if (current) {
+          const remaining = current.active_phases.filter(n => {
+            const s = current.phases[n]?.status;
+            return !s || (s !== 'completed' && s !== 'skipped');
+          });
+          for (const n of remaining) {
+            if (current.phases[n]) current.phases[n].status = 'skipped';
+          }
+          current.status = 'completed';
+          current.current_phase = null;
+          current.updated_at = new Date().toISOString();
+          orchestration.writeManifest(manifestPath, current);
+        }
+      } catch { /* ignore */ }
+    }
+    return;
+  }
+
+  logHeader(`Quality Gates (${workType})`);
+
+  // Use the manifest already created by cmdWork, or find/create one as fallback
+  if (!featureId || !manifest || !manifestPath) {
+    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    if (existing) {
+      featureId    = existing.featureId;
+      manifest     = existing.manifest;
+      manifestPath = existing.manifestPath;
+      logInfo(`Resuming MANIFEST: ${featureId}`);
+    } else {
+      featureId = orchestration.generateFeatureId(description || 'work-session');
+      const created = orchestration.createManifest(PROJECT_ROOT, featureId, description || 'work session', workType);
+      manifest     = created.manifest;
+      manifestPath = created.manifestPath;
+      logInfo(`Created MANIFEST: ${featureId}`);
+      // Mark phases 1-8 as already done (work loop covered them)
+      [1, 2, 3, 4, 5, 6, 7, 8].forEach(n => {
+        if (manifest.active_phases.includes(n))
+          orchestration.completePhase(manifestPath, n, { source: 'work-loop' });
+      });
+      manifest = orchestration.readManifest(manifestPath);
+    }
+  }
+
+  logInfo(`Running phases: ${manifest.active_phases.filter(n => n >= 9).join(', ')}`);
+  console.log('');
+
+  await runOrchestrationLoop(featureId, manifest, manifestPath);
+}
+
+// ============================================================
+// WORK LOOP
+// ============================================================
+
+async function cmdWork(descriptionParts = []) {
+  // --resume: skip work loop, go straight to orchestration resume
+  if (ORCHESTRATE_RESUME) {
+    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    if (!existing) {
+      logError('No incomplete orchestration found to resume.');
+      process.exit(1);
+    }
+    logInfo(`Resuming: ${existing.manifest.description}`);
+    logInfo(`Feature ID: ${existing.featureId}`);
+    logInfo(`Current phase: ${existing.manifest.current_phase}`);
+    await runOrchestrationLoop(existing.featureId, existing.manifest, existing.manifestPath);
+    return;
+  }
+
+  // If a description was passed, plan first then execute
+  const description = descriptionParts.filter(a => !a.startsWith('--')).join(' ').trim();
+
+  if (description) {
+    logInfo(`One-shot mode: plan + execute "${description}"`);
+    await cmdPlan([description]);
+    console.log('');
+  }
+
   safeCheckConfig();
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
@@ -229,6 +406,40 @@ async function cmdWork() {
 
   // In worktree mode or with explicit group tasks, don't limit — run until all tasks done
   if (WORKTREE_MODE || GROUP_TASK_IDS.length > 0) MAX_ITERATIONS = 0;
+
+  const workType = resolveWorkType(description);
+
+  // Create / resume manifest at start of work so phase grid updates in real-time
+  let workFeatureId = null, workManifest = null, workManifestPath = null;
+  if (!WORKTREE_MODE) {
+    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    if (existing) {
+      workFeatureId  = existing.featureId;
+      workManifest   = existing.manifest;
+      workManifestPath = existing.manifestPath;
+    } else {
+      workFeatureId = orchestration.generateFeatureId(description || 'work-session');
+      const created = orchestration.createManifest(
+        PROJECT_ROOT, workFeatureId, description || 'work session', workType
+      );
+      workManifest     = created.manifest;
+      workManifestPath = created.manifestPath;
+      // Planning phases 1-4 already done (cmdPlan ran above)
+      [1, 2, 3, 4].forEach(n => {
+        if (workManifest.active_phases.includes(n))
+          orchestration.completePhase(workManifestPath, n, { source: 'plan' });
+      });
+      // Mark complexity + brainstorm + architect as done (embedded in planning)
+      [5, 6, 7].forEach(n => {
+        if (workManifest.active_phases.includes(n))
+          orchestration.completePhase(workManifestPath, n, { source: 'plan' });
+      });
+    }
+    // Phase 8 = Implement — mark as running for the duration of the work loop
+    if (workManifest.active_phases.includes(8))
+      orchestration.startPhase(workManifestPath, 8);
+    workManifest = orchestration.readManifest(workManifestPath);
+  }
 
   logHeader('JONGGRANG Work Loop');
   logInfo(`Tool: ${TOOL}`);
@@ -291,6 +502,18 @@ async function cmdWork() {
       logSuccess('All tasks completed!');
       logInfo(`Completed: ${lib.countCompleted(TASKS_FILE)} / ${lib.countTotal(TASKS_FILE)}`);
       console.log('');
+
+      // Complete phase 8 (Implement) now that all tasks are done
+      if (workManifestPath && workManifest?.active_phases?.includes(8)) {
+        orchestration.completePhase(workManifestPath, 8, { source: 'work-loop' });
+        workManifest = orchestration.readManifest(workManifestPath);
+      }
+
+      // Run post-work quality gates based on work type (MEDIUM/LARGE only)
+      if (!WORKTREE_MODE && !SKIP_GATES) {
+        await runPostWorkPhases(description, workType, workFeatureId, workManifest, workManifestPath);
+      }
+
       console.log('COMPLETE');
       return;
     }
@@ -340,18 +563,66 @@ async function cmdWork() {
 function cmdStatus() {
   safeCheckConfig();
 
-  logHeader('JONGGRANG Task Board');
+  logHeader('JONGGRANG Status');
 
   const projectName = lib.readConfig(CONFIG_FILE, 'name', 'unknown');
   console.log(`Project: ${BOLD}${projectName}${NC}`);
+
+  // ── Pipeline state from MANIFEST ─────────────────────────────
+  const allManifests = orchestration.listManifests(PROJECT_ROOT);
+  const activeManifest = allManifests.find(m =>
+    ['running', 'in_progress', 'paused'].includes(m.manifest.status)
+  ) || allManifests[0];
+
+  if (activeManifest) {
+    const m = activeManifest.manifest;
+    const phaseLabel = m.current_phase
+      ? `Phase ${m.current_phase} (${orchestration.PHASES[m.current_phase]?.name || '?'})`
+      : 'complete';
+
+    console.log(`Work Type: ${BOLD}${m.work_type}${NC}  |  Pipeline: ${m.status}  |  ${phaseLabel}`);
+    console.log('');
+
+    // Phase grid — 4 per row
+    const phaseNums = Object.keys(orchestration.PHASES).map(Number);
+    for (let i = 0; i < phaseNums.length; i++) {
+      const n = phaseNums[i];
+      const phaseDef = orchestration.PHASES[n];
+      const isActive = m.active_phases.includes(n);
+      const phaseState = m.phases[n];
+      const status = phaseState?.status || 'pending';
+
+      let icon, color;
+      if (!isActive)                  { icon = '–'; color = NC; }
+      else if (status === 'completed') { icon = '✓'; color = GREEN; }
+      else if (status === 'running')   { icon = '⟳'; color = YELLOW; }
+      else if (status === 'failed')    { icon = '✗'; color = RED; }
+      else                             { icon = '·'; color = NC; }
+
+      const cell = `${color}${icon}${NC} ${String(n).padEnd(2)} ${phaseDef.name.padEnd(14)}`;
+      process.stdout.write(cell);
+      if ((i + 1) % 4 === 0) console.log('');
+    }
+    console.log('');
+
+    // Quality gates
+    const v = m.validation || {};
+    const gate = (flag, label) => flag ? `${GREEN}✓${NC} ${label}` : `· ${label}`;
+    console.log(`Quality Gates:  ${gate(v.review_passed, 'Review')}   ${gate(v.tests_passed, 'Tests')}   ${gate(v.coverage_met, 'Coverage')}`);
+    console.log('');
+  }
+
+  // ── Task board ────────────────────────────────────────────────
   console.log(`Tasks: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} completed`);
   console.log('');
-
-  console.log(`${BOLD}ID          Status       Owner      Title${NC}`);
+  console.log(`${BOLD}ID          Status       Title${NC}`);
   console.log('--------------------------------------------------------------');
 
   const data = lib.getTasks(TASKS_FILE);
-  for (const task of data.tasks) {
+  if (!data.tasks || data.tasks.length === 0) {
+    console.log(`${NC}  (no tasks yet — run: jonggrang plan "feature" or jonggrang work "feature")${NC}`);
+  }
+  for (const task of data.tasks || []) {
     let color;
     switch (task.status) {
       case 'completed':   color = GREEN; break;
@@ -361,8 +632,7 @@ function cmdStatus() {
     }
     const id = (task.id || '').padEnd(11);
     const status = (task.status || '').padEnd(12);
-    const owner = (task.owner || '-').padEnd(10);
-    console.log(`${color}${id} ${status} ${owner} ${task.title || ''}${NC}`);
+    console.log(`${color}${id} ${status} ${task.title || ''}${NC}`);
   }
 }
 
@@ -385,7 +655,7 @@ async function cmdReview() {
   if (!lib.fileExists(logDir)) fs.mkdirSync(logDir, { recursive: true });
 
   logInfo('Running comprehensive review...');
-  await lib.runAgent(reviewPrompt, TOOL, 'autonomous', PROJECT_ROOT);
+  await lib.runAgent(reviewPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
 
   logSuccess('Review complete. Check jonggrang-log/ for report.');
 }
@@ -440,9 +710,9 @@ async function cmdPlan(args) {
     if (updateMode) logInfo('Mode: UPDATE (preserving completed tasks)');
     if (planSpinner) planSpinner.message('Consulting AI agent (this can take ~30s)...');
 
-    const planPrompt = lib.buildPlanPrompt(description, updateMode, TASKS_FILE, SKILLS_DIR);
+    const planPrompt = lib.buildPlanPrompt(description, updateMode, TASKS_FILE, SKILLS_DIR, CONFIG_FILE);
 
-    await lib.runAgent(planPrompt, TOOL, 'autonomous', PROJECT_ROOT);
+    await lib.runAgent(planPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
 
     console.log('');
     logSuccess('Plan complete. Review the tasks:');
@@ -481,12 +751,8 @@ async function cmdInit() {
         message: 'jonggrang.json already exists. Overwrite?',
         initialValue: false,
       });
-      if (isCancel(overwrite)) {
+      if (isCancel(overwrite) || !overwrite) {
         cancel('Init cancelled.');
-        return;
-      }
-      if (!overwrite) {
-        logInfo('Aborted.');
         return;
       }
     } else {
@@ -495,262 +761,73 @@ async function cmdInit() {
     }
   }
 
+  // Auto-detect stack, type, testing, ci — no user input needed
+  if (!INIT_STACK) {
+    const detected = lib.detectStack(PROJECT_ROOT);
+    INIT_STACK = detected !== 'unknown' ? detected : 'node-typescript';
+    if (detected !== 'unknown') logInfo(`Detected stack: ${INIT_STACK}`);
+  }
+  if (!INIT_TYPE) INIT_TYPE = lib.stackToType(INIT_STACK);
+  if (!INIT_TESTING) {
+    const detected = lib.detectTestFramework(PROJECT_ROOT);
+    INIT_TESTING = detected !== 'none' ? detected : 'none';
+    if (INIT_TESTING !== 'none') logInfo(`Detected test framework: ${INIT_TESTING}`);
+  }
+  if (!INIT_CI) {
+    INIT_CI = lib.detectCI(PROJECT_ROOT) || 'none';
+    if (INIT_CI !== 'none') logInfo(`Detected CI: ${INIT_CI}`);
+  }
+  if (!INIT_WORK_MODE) INIT_WORK_MODE = 'solo';
+  if (!INIT_TEAM_SIZE) INIT_TEAM_SIZE = '1';
+
   console.log('');
 
+  // Only 3 questions: name, tool, autonomy
   if (isInteractiveTTY) {
-    intro('Jonggrang Init Wizard');
-
-    const defaultName = path.basename(PROJECT_ROOT);
+    intro('Jonggrang Init');
 
     if (!INIT_NAME) {
       const nameAnswer = await text({
         message: 'Project name',
-        initialValue: defaultName,
-        validate(value) {
-          if (!value || !value.trim()) return 'Project name is required.';
-        },
+        initialValue: path.basename(PROJECT_ROOT),
+        validate(v) { if (!v?.trim()) return 'Required.'; },
       });
-      if (isCancel(nameAnswer)) {
-        cancel('Init cancelled.');
-        return;
-      }
+      if (isCancel(nameAnswer)) { cancel('Cancelled.'); return; }
       INIT_NAME = nameAnswer.trim();
-    }
-
-    if (!INIT_TYPE) {
-      const typeAnswer = await select({
-        message: 'Project type',
-        initialValue: 'api',
-        options: [
-          { value: 'web-app', label: 'web-app' },
-          { value: 'api', label: 'api' },
-          { value: 'library', label: 'library' },
-          { value: 'cli', label: 'cli' },
-          { value: 'tui', label: 'tui' },
-        ],
-      });
-      if (isCancel(typeAnswer)) {
-        cancel('Init cancelled.');
-        return;
-      }
-      INIT_TYPE = typeAnswer;
-    }
-
-    if (!INIT_WORK_MODE) {
-      const workModeAnswer = await select({
-        message: 'Work mode',
-        initialValue: 'solo',
-        options: [
-          { value: 'solo', label: 'Solo' },
-          { value: 'team', label: 'Team' },
-        ],
-      });
-      if (isCancel(workModeAnswer)) {
-        cancel('Init cancelled.');
-        return;
-      }
-      INIT_WORK_MODE = workModeAnswer;
-    }
-
-    if (INIT_WORK_MODE === 'team' && !INIT_TEAM_SIZE) {
-      const teamSizeAnswer = await select({
-        message: 'Team size',
-        initialValue: '3',
-        options: ['2', '3', '4', '5'].map((value) => ({ value, label: value })),
-      });
-      if (isCancel(teamSizeAnswer)) {
-        cancel('Init cancelled.');
-        return;
-      }
-      INIT_TEAM_SIZE = teamSizeAnswer;
-    } else if (!INIT_TEAM_SIZE) {
-      INIT_TEAM_SIZE = '1';
-    }
-
-    if (!INIT_STATE) {
-      const stateAnswer = await select({
-        message: 'Project state',
-        initialValue: 'existing',
-        options: [
-          { value: 'new', label: 'New project' },
-          { value: 'existing', label: 'Adopt existing codebase' },
-        ],
-      });
-      if (isCancel(stateAnswer)) {
-        cancel('Init cancelled.');
-        return;
-      }
-      INIT_STATE = stateAnswer;
-    }
-
-    if (!INIT_STACK) {
-      if (INIT_STATE === 'existing') {
-        const detected = lib.detectStack(PROJECT_ROOT);
-        if (detected !== 'unknown') {
-          INIT_STACK = detected;
-          logInfo(`Detected stack: ${INIT_STACK}`);
-        }
-      }
-      if (!INIT_STACK) {
-        const stackOptions = {
-          'web-app': 'nextjs-typescript|express-typescript|node-typescript',
-          'api': 'express-typescript|go|python-fastapi|node-typescript',
-          'library': 'library-typescript|go|python|rust',
-          'cli': 'go|rust|node-typescript|python',
-          'tui': 'go|rust|python|node-typescript',
-        };
-        const stackDefaults = {
-          'web-app': 'nextjs-typescript',
-          'api': 'express-typescript',
-          'library': 'library-typescript',
-          'cli': 'go',
-          'tui': 'go',
-        };
-        const allowedStacks = (stackOptions[INIT_TYPE] || 'node-typescript').split('|');
-        const stackAnswer = await select({
-          message: 'Stack',
-          initialValue: stackDefaults[INIT_TYPE] || allowedStacks[0],
-          options: allowedStacks.map((value) => ({ value, label: value })),
-        });
-        if (isCancel(stackAnswer)) {
-          cancel('Init cancelled.');
-          return;
-        }
-        INIT_STACK = stackAnswer;
-      }
     }
 
     if (!INIT_TOOL) {
       const toolAnswer = await select({
-        message: 'AI agent tool',
-        initialValue: 'opencode',
+        message: 'Primary AI agent tool (both Claude Code + OpenCode will be set up)',
+        initialValue: 'claude',
         options: [
-          { value: 'opencode', label: 'OpenCode' },
-          { value: 'claude', label: 'Claude Code' },
+          { value: 'claude',    label: 'Claude Code — primary tool' },
+          { value: 'opencode',  label: 'OpenCode    — primary tool' },
         ],
       });
-      if (isCancel(toolAnswer)) {
-        cancel('Init cancelled.');
-        return;
-      }
+      if (isCancel(toolAnswer)) { cancel('Cancelled.'); return; }
       INIT_TOOL = toolAnswer;
     }
 
     if (!INIT_AUTONOMY) {
       const autonomyAnswer = await select({
-        message: 'Default autonomy mode',
+        message: 'Autonomy mode',
         initialValue: 'autonomous',
         options: [
-          { value: 'supervised', label: 'Supervised' },
-          { value: 'balanced', label: 'Balanced' },
-          { value: 'autonomous', label: 'Autonomous' },
+          { value: 'autonomous',  label: 'Autonomous  — agent acts freely' },
+          { value: 'balanced',    label: 'Balanced    — agent asks for edits' },
+          { value: 'supervised',  label: 'Supervised  — agent asks every step' },
         ],
       });
-      if (isCancel(autonomyAnswer)) {
-        cancel('Init cancelled.');
-        return;
-      }
+      if (isCancel(autonomyAnswer)) { cancel('Cancelled.'); return; }
       INIT_AUTONOMY = autonomyAnswer;
     }
 
-    if (!INIT_CI) {
-      const detectedCI = lib.detectCI(PROJECT_ROOT) || 'none';
-      const ciAnswer = await select({
-        message: 'CI/CD provider',
-        initialValue: ['github-actions', 'gitlab-ci'].includes(detectedCI) ? detectedCI : 'none',
-        options: [
-          { value: 'github-actions', label: 'GitHub Actions' },
-          { value: 'gitlab-ci', label: 'GitLab CI' },
-          { value: 'none', label: 'None' },
-        ],
-      });
-      if (isCancel(ciAnswer)) {
-        cancel('Init cancelled.');
-        return;
-      }
-      INIT_CI = ciAnswer;
-    }
-
-    if (!INIT_TESTING) {
-      const detectedTest = lib.detectTestFramework(PROJECT_ROOT);
-      if (detectedTest !== 'none') {
-        INIT_TESTING = detectedTest;
-        logInfo(`Detected test framework: ${INIT_TESTING}`);
-      } else {
-        const testingAnswer = await select({
-          message: 'Test framework',
-          initialValue: 'vitest',
-          options: [
-            { value: 'vitest', label: 'Vitest' },
-            { value: 'jest', label: 'Jest' },
-            { value: 'go-test', label: 'Go test' },
-            { value: 'pytest', label: 'Pytest' },
-            { value: 'none', label: 'None' },
-          ],
-        });
-        if (isCancel(testingAnswer)) {
-          cancel('Init cancelled.');
-          return;
-        }
-        INIT_TESTING = testingAnswer;
-      }
-    }
   } else {
     const rl = createRL();
-
-    if (!INIT_NAME) INIT_NAME = await ask(rl, 'Project name:', path.basename(PROJECT_ROOT));
-    if (!INIT_TYPE) INIT_TYPE = await ask(rl, 'Project type:', 'api', 'web-app|api|library|cli|tui');
-    if (!INIT_WORK_MODE) INIT_WORK_MODE = await ask(rl, 'Work mode:', 'solo', 'solo|team');
-
-    if (INIT_WORK_MODE === 'team' && !INIT_TEAM_SIZE) {
-      INIT_TEAM_SIZE = await ask(rl, 'Team size:', '3', '2-5');
-    } else if (!INIT_TEAM_SIZE) {
-      INIT_TEAM_SIZE = '1';
-    }
-
-    if (!INIT_STATE) INIT_STATE = await ask(rl, 'Project state:', 'existing', 'new|existing');
-
-    if (!INIT_STACK) {
-      if (INIT_STATE === 'existing') {
-        const detected = lib.detectStack(PROJECT_ROOT);
-        if (detected !== 'unknown') {
-          INIT_STACK = detected;
-          logInfo(`Detected stack: ${INIT_STACK}`);
-        }
-      }
-      if (!INIT_STACK) {
-        const stackOptions = {
-          'web-app': 'nextjs-typescript|express-typescript|node-typescript',
-          'api': 'express-typescript|go|python-fastapi|node-typescript',
-          'library': 'library-typescript|go|python|rust',
-          'cli': 'go|rust|node-typescript|python',
-          'tui': 'go|rust|python|node-typescript',
-        };
-        const stackDefaults = {
-          'web-app': 'nextjs-typescript',
-          'api': 'express-typescript',
-          'library': 'library-typescript',
-          'cli': 'go',
-          'tui': 'go',
-        };
-        INIT_STACK = await ask(rl, 'Stack:', stackDefaults[INIT_TYPE] || 'node-typescript', stackOptions[INIT_TYPE] || 'node-typescript');
-      }
-    }
-
-    if (!INIT_TOOL) INIT_TOOL = await ask(rl, 'AI agent tool:', 'opencode', 'opencode|claude');
-    if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:', 'autonomous', 'supervised|balanced|autonomous');
-    if (!INIT_CI) INIT_CI = await ask(rl, 'CI/CD provider:', lib.detectCI(PROJECT_ROOT), 'github-actions|gitlab-ci|none');
-
-    if (!INIT_TESTING) {
-      const detected = lib.detectTestFramework(PROJECT_ROOT);
-      if (detected !== 'none') {
-        INIT_TESTING = detected;
-        logInfo(`Detected test framework: ${INIT_TESTING}`);
-      } else {
-        INIT_TESTING = await ask(rl, 'Test framework:', 'vitest', 'vitest|jest|go-test|pytest|none');
-      }
-    }
-
+    if (!INIT_NAME)     INIT_NAME     = await ask(rl, 'Project name:',  path.basename(PROJECT_ROOT));
+    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'claude', 'claude|opencode');
+    if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:',  'autonomous', 'supervised|balanced|autonomous');
     rl.close();
   }
 
@@ -769,35 +846,240 @@ async function cmdInit() {
     ci: INIT_CI,
   }, JONGGRANG_HOME, PROJECT_ROOT);
 
-  logSuccess('Generated jonggrang.json');
+  logSuccess('Generated .jonggrang/jonggrang.json');
+  logSuccess('Generated opencode.json');
   logSuccess('Generated AGENTS.md');
+  logSuccess('Generated CLAUDE.md');
+  logSuccess('Installed .claude/agents/ (lead, developer, reviewer, test-lead, tester)');
+  logSuccess('Installed .claude/SKILL.md');
+  logSuccess('Installed .opencode/agents/ (lead, developer, reviewer, test-lead, tester)');
+  logSuccess('Installed .opencode/SKILL.md');
 
-  const claudeTemplate = path.join(JONGGRANG_HOME, 'templates', 'CLAUDE.md.template');
-  if (lib.fileExists(claudeTemplate)) {
-    logSuccess('Generated CLAUDE.md');
-  }
-
-  const skillRoot = path.join(JONGGRANG_HOME, 'SKILL.md');
-  if (lib.fileExists(skillRoot)) {
-    logSuccess('Generated SKILL.md');
-  }
-
-  logSuccess('Generated jonggrang-tasks.json');
-  logSuccess('Generated progress.txt');
+  logSuccess('Generated .jonggrang/jonggrang-tasks.json');
+  logSuccess('Generated .jonggrang/progress.txt');
   logSuccess(`Copied ${result.skillCount} skill templates`);
+
+  // ── Install hooks for the selected tool ──────────────────────
+  try {
+    const hookResults = hooksLib.installHooksForTool(PROJECT_ROOT, 'both', JONGGRANG_HOME);
+
+    if (hookResults.claude) {
+      logSuccess(`Installed Claude Code hooks → ${path.relative(PROJECT_ROOT, hookResults.claude.path)}`);
+    }
+    if (hookResults.opencode) {
+      logSuccess(`Installed OpenCode plugin → ${path.relative(PROJECT_ROOT, hookResults.opencode.path)}`);
+    }
+  } catch (err) {
+    logWarn(`Hook installation warning: ${err.message}`);
+  }
+
+  // ── Create .jonggrang/ directory structure ────────────────────
+  const jonggrangDirs = [
+    path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features'),
+    path.join(PROJECT_ROOT, '.jonggrang', '.ephemeral'),
+    path.join(PROJECT_ROOT, '.jonggrang', 'locks'),
+  ];
+  for (const dir of jonggrangDirs) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  logSuccess('Created .jonggrang/ workspace directory');
 
   if (!lib.fileExists(path.join(PROJECT_ROOT, '.git'))) {
     // git was already initialized by runInit if needed
   }
+
+  // Update .gitignore to exclude ephemeral files
+  const gitignorePath = path.join(PROJECT_ROOT, '.gitignore');
+  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n`;
+  try {
+    const existing = lib.fileExists(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
+    if (!existing.includes('.jonggrang/.ephemeral')) {
+      fs.appendFileSync(gitignorePath, jonggrangIgnoreBlock);
+    }
+  } catch {}
 
   console.log('');
   logSuccess('Project ready!');
   console.log('');
   console.log('  Next steps:');
   console.log('    1. Edit AGENTS.md with your project conventions');
-  console.log('    2. Run: jonggrang plan "your feature description"');
-  console.log('    3. Run: jonggrang work');
+  console.log('    2. jonggrang work "your feature"    # plan + execute in one shot');
+  console.log('       OR: jonggrang plan "feature"     # plan only');
+  console.log('           jonggrang work               # execute planned tasks');
   console.log('');
+}
+
+// ============================================================
+// ORCHESTRATE COMMAND — 16-Phase Deterministic Workflow
+// ============================================================
+
+async function cmdOrchestrate(descriptionParts) {
+  const description = descriptionParts.join(' ').trim();
+
+  checkDeps();
+
+  // ── Check for resume (must come before empty-description guard) ──
+  if (ORCHESTRATE_RESUME) {
+    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    if (!existing) {
+      logError('No incomplete orchestration found to resume.');
+      process.exit(1);
+    }
+    logInfo(`Resuming orchestration: ${existing.manifest.description}`);
+    logInfo(`Feature ID: ${existing.featureId}`);
+    logInfo(`Current phase: ${existing.manifest.current_phase}`);
+    await runOrchestrationLoop(existing.featureId, existing.manifest, existing.manifestPath);
+    return;
+  }
+
+  if (!description) {
+    logError('Usage: jonggrang orchestrate "feature description"');
+    logError('       jonggrang orchestrate --resume');
+    process.exit(1);
+  }
+
+  // ── Compaction check before starting ─────────────────────────
+  if (!DRY_RUN) {
+    const gate = compaction.checkCompactionGate(PROJECT_ROOT);
+    if (gate.status === 'block') {
+      logError(`COMPACTION GATE: ${gate.message}`);
+      logError('Run /compact before starting a new orchestration.');
+      process.exit(1);
+    }
+    if (gate.status === 'warn' || gate.status === 'must') {
+      logWarn(gate.message);
+    }
+  }
+
+  // ── Classify work type ────────────────────────────────────────
+  const workType = orchestration.classifyWorkType(description);
+  const activePhases = orchestration.getActivePhases(workType);
+
+  logHeader(`Orchestrating: ${description}`);
+  logInfo(`Work type: ${workType}`);
+  logInfo(`Active phases: ${activePhases.join(', ')}`);
+  console.log('');
+
+  // ── Create MANIFEST ───────────────────────────────────────────
+  const featureId = orchestration.generateFeatureId(description);
+  const { manifest, manifestPath } = orchestration.createManifest(
+    PROJECT_ROOT, featureId, description, workType
+  );
+
+  logInfo(`Feature ID: ${featureId}`);
+  logInfo(`MANIFEST: ${manifestPath}`);
+  console.log('');
+
+  // ── Run orchestration loop ────────────────────────────────────
+  await runOrchestrationLoop(featureId, manifest, manifestPath);
+}
+
+async function runOrchestrationLoop(featureId, manifest, manifestPath) {
+  const activeTool = TOOL || lib.readConfig(CONFIG_FILE, '.tool', 'opencode');
+  const activeMode = MODE || lib.readConfig(CONFIG_FILE, '.mode.autonomy', 'autonomous');
+
+  for (const phaseNum of manifest.active_phases) {
+    const phaseState = manifest.phases[phaseNum];
+    if (!phaseState || phaseState.status === 'completed' || phaseState.status === 'skipped') {
+      continue;
+    }
+
+    const phaseDef = orchestration.PHASES[phaseNum];
+    logInfo(`\n── Phase ${phaseNum}: ${phaseDef.name} ──`);
+    logInfo(phaseDef.description);
+
+    // ── Compaction gate before heavy phases ─────────────────────
+    if (orchestration.HEAVY_PHASES.has(phaseNum) && !DRY_RUN) {
+      compaction.refreshCompactionState(PROJECT_ROOT);
+      const gate = compaction.checkCompactionGate(PROJECT_ROOT);
+      if (gate.status === 'block') {
+        logError(`COMPACTION GATE blocked phase ${phaseNum}: ${gate.message}`);
+        logError('Run /compact then resume with: jonggrang work --resume');
+        orchestration.failPhase(manifestPath, phaseNum, gate.message);
+        process.exit(1);
+      }
+      if (gate.status !== 'ok') logWarn(gate.message);
+    }
+
+    orchestration.startPhase(manifestPath, phaseNum);
+
+    // ── Phase-specific logic ─────────────────────────────────────
+    if (phaseNum === 1) {
+      // Setup — already done (manifest created)
+      logSuccess('Setup complete (MANIFEST created)');
+      orchestration.completePhase(manifestPath, phaseNum, { manifest_path: manifestPath });
+      manifest = orchestration.readManifest(manifestPath);
+      continue;
+    }
+
+    if (phaseNum === 2) {
+      // Triage — already classified
+      logSuccess(`Triage: ${manifest.work_type}, active phases: ${manifest.active_phases.join(', ')}`);
+      orchestration.completePhase(manifestPath, phaseNum, { work_type: manifest.work_type });
+      manifest = orchestration.readManifest(manifestPath);
+      continue;
+    }
+
+    if (phaseNum === 6 && activeMode !== 'autonomous') {
+      // Brainstorming — pause for human input in non-autonomous modes
+      logInfo('\n[BRAINSTORMING PHASE — Human Input Required]');
+      logInfo(`Feature: ${manifest.description}`);
+      logInfo('Review the architecture plan and provide design direction before continuing.');
+      logInfo('Resume with: jonggrang work --resume');
+      orchestration.failPhase(manifestPath, phaseNum, 'Awaiting human input (brainstorming)');
+      process.exit(0);
+    }
+
+    // ── Build phase prompt ────────────────────────────────────────
+    const phaseContext = orchestration.buildPhaseContext(manifest, phaseNum);
+    const agentsContent = lib.fileExists(paths.agentsFile)
+      ? fs.readFileSync(paths.agentsFile, 'utf8') : '';
+    const progressContent = lib.fileExists(paths.progressFile)
+      ? fs.readFileSync(paths.progressFile, 'utf8').slice(-2000) : '';
+
+    const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    const prompt = [
+      phaseContext,
+      agentsContent ? `\n## Project Conventions (AGENTS.md)\n${agentsContent}` : '',
+      progressContent ? `\n## Recent Learnings (progress.txt)\n${progressContent}` : '',
+      `\n## Output Directory\nWrite all output files to: ${outputDir}/`,
+    ].filter(Boolean).join('\n');
+
+    if (DRY_RUN) {
+      logInfo(`[DRY RUN] Phase ${phaseNum} prompt (${prompt.length} chars)`);
+      orchestration.completePhase(manifestPath, phaseNum, { dry_run: true });
+      manifest = orchestration.readManifest(manifestPath);
+      continue;
+    }
+
+    // ── Run agent ─────────────────────────────────────────────────
+    const exitCode = await lib.runAgent(prompt, activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG });
+
+    if (exitCode !== 0) {
+      logWarn(`Phase ${phaseNum} agent exited with code ${exitCode}`);
+      orchestration.failPhase(manifestPath, phaseNum, `Agent exit code: ${exitCode}`);
+    } else {
+      orchestration.completePhase(manifestPath, phaseNum);
+      logSuccess(`Phase ${phaseNum} complete`);
+    }
+
+    manifest = orchestration.readManifest(manifestPath);
+
+    // Check if orchestration was failed/paused externally
+    if (manifest.status === 'failed' || manifest.status === 'paused') {
+      logWarn(`Orchestration ${manifest.status}. Resume with: jonggrang work --resume`);
+      process.exit(exitCode !== 0 ? 1 : 0);
+    }
+  }
+
+  if (manifest.status === 'completed') {
+    logHeader('Orchestration Complete!');
+    logSuccess(`Feature: ${manifest.description}`);
+    logSuccess(`All ${manifest.active_phases.length} phases completed.`);
+    feedback.clearFeedbackState(PROJECT_ROOT);
+  }
 }
 
 // ============================================================
@@ -1031,61 +1313,342 @@ async function cmdMenu() {
 }
 
 // ============================================================
+// TASK CLI
+// ============================================================
+
+function cmdTask(args) {
+  const subcommand = args[0];
+  const subArgs = args.slice(1);
+
+  if (!subcommand || subcommand === 'help' || subcommand === '--help') {
+    cmdTaskHelp();
+    return;
+  }
+
+  // Parse task-specific flags
+  const flags = {};
+  const positional = [];
+  let j = 0;
+  while (j < subArgs.length) {
+    if (subArgs[j] === '--title')                                   { flags.title = subArgs[++j]; }
+    else if (subArgs[j] === '--desc' || subArgs[j] === '--description') { flags.description = subArgs[++j]; }
+    else if (subArgs[j] === '--priority')                           { flags.priority = parseInt(subArgs[++j], 10); }
+    else if (subArgs[j] === '--status')                             { flags.status = subArgs[++j]; }
+    else if (subArgs[j] === '--role')                               { flags.role = subArgs[++j]; }
+    else if (subArgs[j] === '--skill')                              { flags.skill = subArgs[++j]; }
+    else if (subArgs[j] === '--blocked-by')                         { flags.blocked_by = subArgs[++j].split(','); }
+    else if (subArgs[j] === '--files')                              { flags.files = subArgs[++j].split(','); }
+    else if (subArgs[j] === '--reason')                             { flags.reason = subArgs[++j]; }
+    else if (subArgs[j] === '--pretty')                             { flags.pretty = true; }
+    else if (subArgs[j] === '--json')                               { flags.json = true; }
+    else { positional.push(subArgs[j]); }
+    j++;
+  }
+
+  const isTTY = process.stdout.isTTY;
+  const pretty = flags.pretty || (isTTY && !flags.json);
+
+  try {
+    switch (subcommand) {
+      case 'list':   taskList(flags, positional, pretty); break;
+      case 'show':   taskShow(flags, positional, pretty); break;
+      case 'add':    taskAdd(flags, positional, pretty); break;
+      case 'update': taskUpdate(flags, positional, pretty); break;
+      case 'done':   taskDone(flags, positional, pretty); break;
+      case 'block':  taskBlock(flags, positional, pretty); break;
+      case 'remove': taskRemove(flags, positional, pretty); break;
+      case 'next':   taskNext(flags, positional, pretty); break;
+      default:
+        logError(`Unknown task subcommand: ${subcommand}`);
+        console.log("Run 'jonggrang task help' for usage.");
+        process.exit(1);
+    }
+  } catch (err) {
+    if (pretty) {
+      logError(err.message);
+    } else {
+      console.log(JSON.stringify({ error: err.message }));
+    }
+    process.exit(1);
+  }
+}
+
+// ── Task handlers ─────────────────────────────────────────────
+
+function taskList(flags, positional, pretty) {
+  safeCheckConfig();
+  const data = lib.getTasks(TASKS_FILE);
+  let tasks = data.tasks || [];
+
+  const statusFilter = positional[0] || flags.status;
+  if (statusFilter) tasks = tasks.filter(t => t.status === statusFilter);
+
+  if (pretty) {
+    console.log(`\n${BOLD}Tasks: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} completed${NC}\n`);
+    console.log(`${BOLD}${'ID'.padEnd(11)} ${'Status'.padEnd(12)} ${'Pri'.padEnd(4)} Title${NC}`);
+    console.log('-'.repeat(65));
+    for (const task of tasks) {
+      let color = NC;
+      if (task.status === 'completed') color = GREEN;
+      else if (task.status === 'in_progress') color = YELLOW;
+      else if (task.status === 'blocked') color = RED;
+      console.log(`${color}${(task.id || '').padEnd(11)} ${(task.status || '').padEnd(12)} ${String(task.priority || '-').padEnd(4)} ${task.title || ''}${NC}`);
+    }
+    if (tasks.length === 0) console.log('  (no tasks)');
+  } else {
+    console.log(JSON.stringify(tasks));
+  }
+}
+
+function taskShow(flags, positional, pretty) {
+  safeCheckConfig();
+  const taskId = positional[0];
+  if (!taskId) throw new Error('Task ID required. Usage: jonggrang task show <task-id>');
+  const task = lib.getTask(TASKS_FILE, taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  if (pretty) {
+    console.log(`\n${BOLD}${task.id}${NC} — ${task.title}`);
+    console.log(`Status:      ${task.status}`);
+    console.log(`Priority:    ${task.priority}`);
+    console.log(`Role:        ${task.role || '(none)'}`);
+    console.log(`Skill:       ${task.skill || '(none)'}`);
+    console.log(`Blocked by:  ${(task.blocked_by || []).join(', ') || '(none)'}`);
+    console.log(`Files:       ${(task.files || []).join(', ') || '(none)'}`);
+    console.log(`Passes:      ${task.passes}`);
+    if (task.description) console.log(`\nDescription:\n${task.description}`);
+    if (task.error_log && task.error_log.length > 0) {
+      console.log(`\nError log:`);
+      for (const err of task.error_log) console.log(`  - ${err}`);
+    }
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function taskAdd(flags, positional, pretty) {
+  safeCheckConfig();
+  const title = flags.title || positional[0];
+  if (!title) throw new Error('Title required. Usage: jonggrang task add --title "..." or jonggrang task add "title"');
+
+  const task = lib.addTask(TASKS_FILE, {
+    title,
+    description: flags.description || '',
+    priority: flags.priority,
+    role: flags.role || null,
+    skill: flags.skill || null,
+    blocked_by: flags.blocked_by || [],
+    files: flags.files || [],
+  });
+
+  if (pretty) {
+    logSuccess(`Created ${task.id}: ${task.title}`);
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function taskUpdate(flags, positional, pretty) {
+  safeCheckConfig();
+  const taskId = positional[0];
+  if (!taskId) throw new Error('Task ID required. Usage: jonggrang task update <task-id> --status in_progress');
+
+  const updates = {};
+  if (flags.title !== undefined)       updates.title = flags.title;
+  if (flags.description !== undefined) updates.description = flags.description;
+  if (flags.priority !== undefined)    updates.priority = flags.priority;
+  if (flags.status !== undefined)      updates.status = flags.status;
+  if (flags.role !== undefined)        updates.role = flags.role;
+  if (flags.skill !== undefined)       updates.skill = flags.skill;
+  if (flags.blocked_by !== undefined)  updates.blocked_by = flags.blocked_by;
+  if (flags.files !== undefined)       updates.files = flags.files;
+
+  if (Object.keys(updates).length === 0) throw new Error('No updates provided. Use flags like --status, --title, --priority, etc.');
+
+  const task = lib.updateTask(TASKS_FILE, taskId, updates);
+
+  if (pretty) {
+    logSuccess(`Updated ${task.id}: ${task.title}`);
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function taskDone(flags, positional, pretty) {
+  safeCheckConfig();
+  const taskId = positional[0];
+  if (!taskId) throw new Error('Task ID required. Usage: jonggrang task done <task-id>');
+
+  lib.markTaskDone(TASKS_FILE, taskId);
+  const task = lib.getTask(TASKS_FILE, taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  if (pretty) {
+    logSuccess(`Completed ${task.id}: ${task.title}`);
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function taskBlock(flags, positional, pretty) {
+  safeCheckConfig();
+  const taskId = positional[0];
+  if (!taskId) throw new Error('Task ID required. Usage: jonggrang task block <task-id> [--reason "..."]');
+
+  lib.updateTask(TASKS_FILE, taskId, { status: 'blocked' });
+
+  if (flags.reason) {
+    const data = lib.getTasks(TASKS_FILE);
+    const t = data.tasks.find(x => x.id === taskId);
+    if (t) {
+      if (!t.error_log) t.error_log = [];
+      t.error_log.push(`[${new Date().toISOString()}] Blocked: ${flags.reason}`);
+      lib.writeJSON(TASKS_FILE, data);
+    }
+  }
+
+  const task = lib.getTask(TASKS_FILE, taskId);
+  if (pretty) {
+    logWarn(`Blocked ${task.id}: ${task.title}${flags.reason ? ' — ' + flags.reason : ''}`);
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function taskRemove(flags, positional, pretty) {
+  safeCheckConfig();
+  const taskId = positional[0];
+  if (!taskId) throw new Error('Task ID required. Usage: jonggrang task remove <task-id>');
+
+  const removed = lib.removeTask(TASKS_FILE, taskId);
+  if (pretty) {
+    logSuccess(`Removed ${removed.id}: ${removed.title}`);
+  } else {
+    console.log(JSON.stringify(removed));
+  }
+}
+
+function taskNext(flags, positional, pretty) {
+  safeCheckConfig();
+  const nextId = lib.getNextTask(TASKS_FILE);
+  if (!nextId) {
+    if (pretty) {
+      logInfo('No eligible tasks (all completed or blocked).');
+    } else {
+      console.log(JSON.stringify(null));
+    }
+    return;
+  }
+  const task = lib.getTask(TASKS_FILE, nextId);
+  if (pretty) {
+    console.log(`\nNext task: ${BOLD}${task.id}${NC} — ${task.title}`);
+    console.log(`Priority: ${task.priority}  |  Status: ${task.status}`);
+  } else {
+    console.log(JSON.stringify(task));
+  }
+}
+
+function cmdTaskHelp() {
+  console.log(`Jonggrang Task Manager
+
+Usage: jonggrang task <subcommand> [options]
+
+Subcommands:
+  list [status]              List all tasks (optionally filter by status)
+  show <task-id>             Show task details
+  add --title "..." [opts]   Add a new task
+  update <task-id> [opts]    Update task fields
+  done <task-id>             Mark task as completed
+  block <task-id> [--reason] Mark task as blocked
+  remove <task-id>           Remove a task
+  next                       Show the next eligible task
+
+Add/Update flags:
+  --title <title>            Task title
+  --desc <description>       Task description
+  --priority <n>             Priority (1 = highest)
+  --status <status>          pending|in_progress|completed|blocked|waiting|skipped
+  --role <role>              developer|tester|reviewer|lead
+  --skill <skill>            Skill name
+  --blocked-by <id,id,...>   Comma-separated dependency task IDs
+  --files <path,path,...>    Comma-separated file paths
+
+Output flags:
+  --json                     Force JSON output (default in non-TTY)
+  --pretty                   Force human-readable output
+
+Examples:
+  jonggrang task list
+  jonggrang task list pending
+  jonggrang task add --title "Add login page" --priority 1
+  jonggrang task add "Quick task title"
+  jonggrang task update task-003 --status in_progress
+  jonggrang task update task-003 --blocked-by task-001,task-002
+  jonggrang task done task-003
+  jonggrang task block task-004 --reason "Waiting for API spec"
+  jonggrang task remove task-005
+  jonggrang task show task-001
+  jonggrang task next`);
+}
+
+// ============================================================
 // HELP
 // ============================================================
 
 function cmdHelp() {
-  console.log(`Jonggrang — AI Development Workflow Orchestrator (Node.js)
+  console.log(`Jonggrang — AI Development Workflow Orchestrator
 
 Usage: jonggrang <command> [options]
 
 Commands:
-  menu                    Interactive menu launcher
   init                    Setup project (interactive or with flags)
-  work                    Start work loop
-  review                  Run code review
-  status                  Show task board
-  plan <description>      Decompose feature into tasks
+  work [description]      Execute tasks — with description: plan + execute in one shot
+                          Auto-adds quality gates for MEDIUM/LARGE features
+  work --resume           Resume incomplete pipeline from last phase
+  plan <description>      Decompose feature into tasks (planning only)
   plan --update <desc>    Update existing plan (preserves completed tasks)
+  status                  Show pipeline state + task board
+  review                  Run code review
+  task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
   web                     Start web dashboard
+  menu                    Interactive menu launcher
   version                 Show version
 
-Init options (bypass wizard):
-  --name <name>           Project name
-  --type <type>           web-app | api | library | cli | tui
-  --work-mode <mode>      solo | team
-  --team-size <n>         Team size 2-5 (if team)
-  --state <state>         new | existing
-  --stack <stack>         nextjs-typescript | express-typescript | go | python-fastapi | library-typescript
-  --tool <tool>           opencode | claude (default: opencode)
-  --autonomy <mode>       supervised | balanced | autonomous
-  --ci <provider>         github-actions | gitlab-ci | none
-  --testing <framework>   vitest | jest | go-test | pytest | none
-  --force                 Overwrite existing jonggrang.json
+  # Backward compat (routes to work):
+  orchestrate <desc>      Alias for: jonggrang work "<desc>"
+  orchestrate --resume    Resume incomplete pipeline
 
-Work options:
+Work type auto-detection:
+  BUGFIX / SMALL          Work loop only (fast)
+  MEDIUM                  Work loop + reviewer quality pass
+  LARGE                   Work loop + reviewer + test-lead + tester + final
+
+Init flags (bypass wizard):
+  --name <name>           Project name
+  --tool <tool>           claude | opencode (default: claude) — both tools always set up
+  --autonomy <mode>       supervised | balanced | autonomous
+  --force                 Overwrite existing jonggrang.json
+  (stack, type, testing, ci are auto-detected from the project)
+
+Work flags:
   --mode <mode>           supervised | balanced | autonomous
-  --tool <tool>           Override AI tool for this session
-  --task <task-id>        Work on specific task
+  --tool <tool>           Override AI tool
+  --task <task-id>        Work on specific task only
   --max-iterations <n>    Max iterations (default: unlimited)
   --branch <name>         Feature branch name
-  --dry-run               Plan only, no execution
-
-Web options:
-  --port <port>           Dashboard port (default: 7777-7999 auto)
-  --no-open               Don't auto-open browser
+  --dry-run               Preview prompts, no execution
+  --debug                 Dump raw JSON from opencode/claude to stderr (diagnose stuck agents)
+  --skip-gates            Skip quality gates even for MEDIUM/LARGE
 
 Examples:
   jonggrang init
-  jonggrang init --name my-app --type api --tool opencode --autonomy balanced --force
-  jonggrang plan "user authentication with JWT"
-  jonggrang work
-  jonggrang work --tool claude --mode autonomous
-  jonggrang work --max-iterations 5
-  jonggrang status
-  jonggrang review
-  jonggrang web
-  jonggrang web --port 8080`);
+  jonggrang init --name my-api --tool claude --autonomy autonomous --force
+  jonggrang work "add user authentication with JWT"   # plan + execute + quality gates
+  jonggrang work                                       # execute existing tasks
+  jonggrang work --task task-003                       # run specific task
+  jonggrang plan "add payment flow"                    # create tasks only
+  jonggrang status                                     # pipeline + task board
+  jonggrang web                                        # visual dashboard`);
 }
 
 // ============================================================
@@ -1098,6 +1661,13 @@ async function main() {
   const providedCommand = args[0];
   const command = providedCommand || (isInteractiveShell ? 'menu' : 'help');
   let rest = providedCommand ? args.slice(1) : [];
+
+  // Task subcommand handles its own flags — bypass global parser
+  if (command === 'task') {
+    cmdTask(rest);
+    return;
+  }
+
   const planArgs = [];
 
   // Parse global options
@@ -1110,6 +1680,7 @@ async function main() {
       case '--branch':        BRANCH = rest[++i]; break;
       case '--tool':          TOOL = rest[++i]; INIT_TOOL = rest[i]; TOOL_SET = true; break;
       case '--verbose':       VERBOSE = true; break;
+      case '--debug':         DEBUG   = true; break;
       case '--dry-run':       DRY_RUN = true; break;
       case '--worktree':     WORKTREE_MODE = true; break;
       case '--group-tasks':  GROUP_TASK_IDS = rest[++i].split(','); break;
@@ -1125,6 +1696,9 @@ async function main() {
       case '--force':         INIT_FORCE = true; break;
       case '--port':          WEB_PORT = parseInt(rest[++i], 10); break;
       case '--no-open':       WEB_OPEN = false; break;
+      case '--resume':        ORCHESTRATE_RESUME = true; break;
+      case '--role':          ORCHESTRATE_ROLE = rest[++i]; break;
+      case '--skip-gates':    SKIP_GATES = true; break;
       default:                planArgs.push(rest[i]); break;
     }
     i++;
@@ -1136,7 +1710,7 @@ async function main() {
       break;
     case 'work':
       checkDeps();
-      await cmdWork();
+      await cmdWork(planArgs);
       break;
     case 'review':
       checkDeps();
@@ -1148,6 +1722,9 @@ async function main() {
     case 'plan':
       checkDeps();
       await cmdPlan(planArgs);
+      break;
+    case 'orchestrate':
+      await cmdOrchestrate(planArgs);
       break;
     case 'web':
     case 'dashboard':

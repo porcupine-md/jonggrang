@@ -1,9 +1,22 @@
 {
   "name": "jonggrang",
-  "version": "0.1.4",
-  "description": "Backend and frontend runner for Jonggrang UI",
+  "version": "0.2.0",
+  "description": "Deterministic AI orchestration platform — 16-phase workflow engine for autonomous software development",
   "license": "MIT",
   "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "orchestration",
+    "claude",
+    "opencode",
+    "workflow",
+    "autonomous",
+    "developer-tools"
+  ],
   "bin": {
     "jonggrang": "./bin/jonggrang.js"
   },
@@ -14,6 +27,7 @@
     "server.js",
     "templates",
     "skills",
+    "hooks",
     "docs",
     "SKILL.md",
     "README.md"
@@ -31,6 +45,7 @@
     "chokidar": "^4.0.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "js-yaml": "^4.1.1",
     "socket.io": "^4.8.1"
   }
 }

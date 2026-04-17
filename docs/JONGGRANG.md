@@ -2,7 +2,9 @@
 
 > *"Jonggrang, the wise servant-guardian — the unseen puppeteer who orchestrates the entire play of software development."*
 
-Jonggrang is a CLI tool that serves as an **AI development orchestrator** — from project bootstrap to delivery. Built on top of Claude Code, inspired by the Ralph Loop pattern, Agent Orchestra (Addy Osmani), and the collapsed SDLC concept (Boris Tane).
+Jonggrang is a CLI tool that serves as an **AI development orchestrator** — from project bootstrap to delivery. It operates in two modes: a simple **work loop** (stateless, task-by-task) and a full **deterministic orchestration** (16-phase, role-specialized, persistent state).
+
+Inspired by the Ralph Loop pattern, Agent Orchestra (Addy Osmani), the collapsed SDLC (Boris Tane), and the Thin Agent / Fat Platform architecture from deterministic AI systems research.
 
 ---
 
@@ -10,14 +12,16 @@ Jonggrang is a CLI tool that serves as an **AI development orchestrator** — fr
 
 1. [Philosophy](#philosophy)
 2. [Architecture Overview](#architecture-overview)
-3. [Three Phases](#three-phases)
-4. [Autonomy Modes](#autonomy-modes)
-5. [Skill System](#skill-system)
-6. [Team Mode](#team-mode)
-7. [Quality Gates](#quality-gates)
-8. [Compound Learning](#compound-learning)
-9. [Config Reference](#config-reference)
-10. [Comparison with Ralph](#comparison-with-ralph)
+3. [The Two Modes](#the-two-modes)
+4. [Five-Role Assembly Line](#five-role-assembly-line)
+5. [Autonomy Modes](#autonomy-modes)
+6. [Skill System](#skill-system)
+7. [Deterministic Hooks](#deterministic-hooks)
+8. [Team Mode](#team-mode)
+9. [Quality Gates](#quality-gates)
+10. [Compound Learning](#compound-learning)
+11. [Config Reference](#config-reference)
+12. [Comparison with Ralph](#comparison-with-ralph)
 
 ---
 
@@ -25,621 +29,535 @@ Jonggrang is a CLI tool that serves as an **AI development orchestrator** — fr
 
 ### Core Principles
 
-1. **Intent, Build, Observe, Repeat** — The traditional SDLC has collapsed. There are no longer separate phases for requirements, design, implementation, and testing. Everything happens in one tight loop.
+1. **Thin Agent / Fat Platform** — AI models are ephemeral workers. All intelligence, state, and enforcement lives in the platform (hooks, skills, orchestration engine). Agents are reduced to stateless workers; the platform holds all the knowledge.
 
-2. **Context Engineering > Prompt Engineering** — The quality of agent output is directly proportional to the quality of context provided. A strong spec = the greatest leverage.
+2. **Context Engineering > Prompt Engineering** — Token usage alone explains 80% of performance variance in agent tasks. Jonggrang manages context aggressively: JIT skill loading, compaction gates, fresh context per iteration.
 
-3. **Verification > Generation** — The bottleneck is no longer writing code, but verifying code. Every layer of Jonggrang is designed to catch errors as early as possible.
+3. **Deterministic Enforcement > Probabilistic Guidance** — Hooks enforce rules outside the LLM's context. The agent cannot rationalize around a bash script that blocks its exit.
 
-4. **Stateless Execution, Persistent Memory** — Each work loop iteration starts with a clean context. Memory persists via git history, progress log, task state, and AGENTS.md.
+4. **Verification > Generation** — The bottleneck is no longer writing code, but verifying it. Every layer is designed to catch errors early: reviewer agents, tester agents, quality gate hooks.
 
-5. **Right-sized Tasks** — Every task must be completable within a single context window. Atomic, testable, committable.
+5. **Stateless Execution, Persistent Memory** — Each iteration starts with a clean context window. Memory persists via MANIFEST.yaml, git history, `.jonggrang/progress.txt`, and AGENTS.md.
 
-6. **Human in the Loop (Adjustable)** — From fully supervised to fully autonomous. The user chooses the level of control that suits them.
+6. **Right-sized Tasks** — Every task must fit in a single context window. Atomic, testable, committable.
+
+7. **Human in the Loop (Adjustable)** — From fully supervised to fully autonomous.
 
 ---
 
 ## Architecture Overview
 
 ```
-+-----------------------------------------------------------+
-|                        JONGGRANG CLI                          |
-+--------------+-----------------+-------------------------+
-|  jonggrang init  |   jonggrang work    |    jonggrang review         |
-|  (Wizard)    |   (Loop Engine) |    (Observe Layer)      |
-+--------------+-----------------+-------------------------+
-|                     SKILL SYSTEM                          |
-|  Prompt templates + inline scripts that are fed to        |
-|  Claude Code as execution instructions                    |
-+-----------------------------------------------------------+
-|                   QUALITY GATES                           |
-|  Plan approval > Hooks (lint/test/typecheck) >            |
-|  Reviewer agent > Human escalation                        |
-+-----------------------------------------------------------+
-|                  MEMORY LAYER                             |
-|  AGENTS.md | progress.txt | jonggrang-tasks.json | git       |
-+-----------------------------------------------------------+
-|                   CLAUDE CODE                             |
-|  Execution engine — runs instructions from skills         |
-+-----------------------------------------------------------+
+┌─────────────────────────────────────────────────────────┐
+│  LAYER 1: AGENT LAYER                                   │
+│  Lead · Developer · Reviewer · Test Lead · Tester       │
+│  Stateless workers, <150 lines each                     │
+├─────────────────────────────────────────────────────────┤
+│  LAYER 2: SKILL LAYER                                   │
+│  Core (BIOS) — always loaded                            │
+│  Library (Hard Drive) — JIT via Gateway                 │
+├─────────────────────────────────────────────────────────┤
+│  LAYER 3: ORCHESTRATION LAYER                           │
+│  16-phase state machine · MANIFEST.yaml · Work types    │
+│  Phase skip logic · Compaction gates                    │
+├─────────────────────────────────────────────────────────┤
+│  LAYER 4: HOOK LAYER (deterministic enforcement)        │
+│  Claude Code: PreToolUse · PostToolUse · Stop           │
+│  OpenCode:    tool.execute.before/after · file.edited   │
+├─────────────────────────────────────────────────────────┤
+│  LAYER 5: INFRASTRUCTURE                                │
+│  Token tracking · Dirty bits · File locks               │
+│  MANIFEST persistence · Session resume                  │
+└─────────────────────────────────────────────────────────┘
 ```
 
-### File Structure
+### Project File Structure
 
 ```
 project-root/
-├── jonggrang.json              # Project config (generated by jonggrang init)
-├── AGENTS.md               # Human-curated project knowledge
-├── progress.txt            # Append-only learnings per session
-├── jonggrang-tasks.json        # Task state (pending/in_progress/done)
-├── skills/                 # Skill templates
-│   ├── prd/SKILL.md
-│   ├── scaffold-api/SKILL.md
-│   ├── scaffold-webapp/SKILL.md
-│   ├── scaffold-library/SKILL.md
-│   ├── component/SKILL.md
-│   ├── migration/SKILL.md
-│   ├── auth/SKILL.md
-│   ├── testing/SKILL.md
-│   └── deploy/SKILL.md
-├── scripts/
-│   └── jonggrang.sh            # Main execution loop
-├── templates/              # Project templates per stack
-└── docs/
-    ├── JONGGRANG.md            # This file
-    ├── SKILLS.md           # Skill system documentation
-    ├── WORKFLOW.md          # Detailed workflow documentation
-    └── CONFIG.md           # Config reference
+├── AGENTS.md                   # Human-curated knowledge
+├── skills/
+│   ├── core/                   # Tier 1: always loaded
+│   │   ├── gateway-backend/
+│   │   ├── gateway-frontend/
+│   │   ├── orchestrating-feature/
+│   │   ├── iterating-to-completion/
+│   │   └── [all standard skills]
+│   └── library/                # Tier 2: JIT loaded via Gateway
+│       ├── backend/
+│       ├── frontend/
+│       ├── testing/
+│       ├── database/
+│       ├── api/
+│       └── security/
+├── templates/
+│   └── agents/                 # Role definitions
+│       ├── lead.md
+│       ├── developer.md
+│       ├── reviewer.md
+│       ├── test-lead.md
+│       └── tester.md
+├── .jonggrang/
+│   ├── jonggrang.json          # Project config
+│   ├── jonggrang-tasks.json    # Task board state
+│   ├── progress.txt            # Append-only agent learnings
+│   ├── .output/
+│   │   └── features/{id}/
+│   │       ├── MANIFEST.yaml   # Phase state (persistent)
+│   │       └── [phase outputs]
+│   ├── .ephemeral/             # Cleared on restart
+│   │   ├── feedback-loop-state.json
+│   │   └── compaction-state.json
+│   └── locks/                  # File ownership
+├── .claude/
+│   └── settings.json           # Claude Code enforcement hooks
+└── .opencode/
+    └── plugins/
+        └── jonggrang.js        # OpenCode enforcement plugin
 ```
 
 ---
 
-## Three Phases
+## The Two Modes
 
-### Phase 1: `jonggrang init` — Wizard Bootstrap
+### Mode 1: Work Loop (`jonggrang work`)
 
-An interactive wizard that sets up the entire project from scratch or adopts an existing project.
+Simple stateless loop. Each iteration gets a fresh context window.
 
 ```
-$ jonggrang init
-
-  JONGGRANG — Project Setup
-
-? Project name: my-awesome-app
-? Project type:
-  > web-app    (Full-stack web application)
-    api        (REST/GraphQL API service)
-    library    (Reusable library/package)
-
-? Work mode:
-  > solo       (Single developer)
-    team       (Collaborative — how many people? 3-5)
-
-? Project state:
-  > new        (Start from scratch — choose template)
-    existing   (Adopt an existing project)
-
-[If new]
-? Stack/template:
-  > Next.js + TypeScript + Tailwind
-    Express + TypeScript + PostgreSQL
-    Go + Chi + PostgreSQL
-    Python + FastAPI + SQLAlchemy
-    Library TypeScript (npm)
-
-[If existing]
-  Detecting stack... Found: Next.js 14, TypeScript, Prisma, PostgreSQL
-  Detecting test framework... Found: Vitest
-  Detecting CI/CD... Found: GitHub Actions
-
-? Default autonomy mode:
-  > supervised  (Agent proposes, you approve each step)
-    balanced    (Agent runs automatically, pauses at quality gates)
-    autonomous  (Full loop, review at the end)
-
-? Setup CI/CD:
-  > github-actions
-    gitlab-ci
-    none
-    custom
-
-? Setup testing:
-  > auto-detect
-    vitest / jest / go-test / pytest / skip
-
-Output:
-  Generated jonggrang.json
-  Generated AGENTS.md
-  Generated skills/ (9 skills)
-  Initialized jonggrang-tasks.json
-  Project ready! Run `jonggrang work` to start.
+jonggrang plan "feature"
+    |
+    v
+Decompose into atomic tasks (.jonggrang/jonggrang-tasks.json)
+    |
+    v
+jonggrang work
+    |
+    v
+For each task:
+  1. Load AGENTS.md + .jonggrang/progress.txt + task state
+  2. Pick highest-priority unblocked task
+  3. Implement via AI agent
+  4. Validate (typecheck, lint, tests)
+  5. Commit if pass, log learnings
+  6. Repeat
+    |
+    v
+jonggrang review  →  Comprehensive scan
 ```
+
+Best for: well-understood tasks, boilerplate, incremental work.
+
+### Mode 2: Orchestrate (`jonggrang orchestrate`)
+
+Full 16-phase deterministic pipeline with the five-role assembly line.
+
+```
+jonggrang orchestrate "feature"
+    |
+    v
+Phase 1-2   Setup + Triage
+            Classify BUGFIX/SMALL/MEDIUM/LARGE → skip irrelevant phases
+    |
+    v
+Phase 3-4   Codebase Discovery + Skill Discovery
+            ⚠ Compaction gate check
+    |
+    v
+Phase 5-7   Lead: Complexity → Brainstorming → Architecture Plan
+    |
+    v
+Phase 8     Developer: Implement atomic tasks
+            ⚠ Compaction gate check
+    |
+    v
+Phase 9-11  Reviewer: Design check → Domain compliance → Code quality
+    |
+    v
+Phase 12    Test Lead: Design test strategy
+    |
+    v
+Phase 13-15 Tester: Execute → Coverage → Test quality
+            ⚠ Compaction gate check
+    |
+    v
+Phase 16    Completion: commit + optional PR
+```
+
+State persists in `MANIFEST.yaml`. Interrupt and resume across sessions:
+```bash
+jonggrang orchestrate --resume
+```
+
+**Phase skipping by work type:**
+
+| Work Type | Trigger | Phases skipped |
+|-----------|---------|----------------|
+| `BUGFIX` | "fix", "bug", "issue", "error", "crash" | 5, 6, 7, 9, 12 |
+| `SMALL` | <100 lines, single concern | 5, 6, 7, 9 |
+| `MEDIUM` | Multi-file, some design | None |
+| `LARGE` | New subsystem, architectural | None |
+
+A bug fix runs ~5 phases. A new subsystem gets all 16.
 
 ---
 
-### Phase 2: `jonggrang work` — Execution Loop
+## Five-Role Assembly Line
 
-The core engine that runs the development loop. Inspired by the Ralph pattern: stateless per iteration, memory via external files.
-
-```
-$ jonggrang work [options]
-
-Options:
-  --mode <mode>          supervised | balanced | autonomous
-  --task <task-id>       Work on specific task
-  --max-iterations <n>   Maximum loop iterations (default: 10)
-  --skill <skill-name>   Run specific skill instead of task loop
-  --branch <name>        Feature branch name
-```
-
-#### Work Loop Cycle (Per Iteration)
+Complex work flows through a specialized assembly line. Each role has a restricted toolset, preventing them from doing work outside their expertise.
 
 ```
-FRESH CONTEXT START
-|
-|--> 1. Load context
-|      Read AGENTS.md, progress.txt, jonggrang-tasks.json, git log
-|
-|--> 2. Pick task
-|      Highest priority where status = pending
-|
-|--> 3. Plan (mode-dependent)
-|      supervised:  propose plan, wait for human approval
-|      balanced:    propose plan, auto-approve
-|      autonomous:  plan + execute immediately
-|
-|--> 4. Implement
-|      Execute via Claude Code using relevant SKILL templates
-|
-|--> 5. Validate
-|      typecheck + tests + linter + mode-specific gates
-|
-|--> 6. Commit (if validation passes)
-|      Atomic commit per task
-|
-|--> 7. Update state
-|      jonggrang-tasks.json (mark done)
-|      progress.txt (append learnings)
-|      AGENTS.md (update if new patterns discovered)
-|
-|--> 8. Next iteration or EXIT
-       More tasks?      --> loop to 1
-       All done?        --> EXIT: COMPLETE
-       Max iterations?  --> EXIT: PAUSED
-       3x fail same?    --> EXIT: BLOCKED
+User → Orchestrator
+         |
+         ├──► Lead Agent          "Design the architecture"
+         │        └──► Architecture Plan JSON
+         │
+         ├──► Developer Agent     "Implement task-001"
+         │        └──► Source code
+         │
+         ├──► Reviewer Agent      "Review task-001"
+         │        └──► Review Report JSON (approved/rejected)
+         │
+         ├──► Test Lead Agent     "Plan tests for this implementation"
+         │        └──► Test Plan JSON
+         │
+         └──► Tester Agent        "Execute the test plan"
+                  └──► Test Results JSON
 ```
 
-#### Stop Conditions
+### Role Definitions
 
-| Condition | Exit Code | Behavior |
-|-----------|-----------|----------|
-| All tasks done | COMPLETE | Branch ready for review |
-| Max iterations reached | PAUSED | State saved, resume with `jonggrang work` |
-| 3x fail on same task | BLOCKED | Log error, skip or ask human |
-| User Ctrl+C | INTERRUPTED | State saved cleanly |
+| Role | Responsibility | Tools | Forbidden |
+|------|---------------|-------|-----------|
+| **Lead** | Architecture & strategy. Never writes code. | Task, Read, TodoWrite | Edit, Write, Bash |
+| **Developer** | Implementation. Executes tasks from the plan. | Edit, Write, Bash, Read | Task |
+| **Reviewer** | Validates code against specs and patterns. | Read, Bash | Edit, Write, Task |
+| **Test Lead** | Analyzes implementation, designs test strategy. | Task, Read, TodoWrite | Edit, Write, Bash |
+| **Tester** | Writes and runs tests from the plan. | Edit, Write, Bash, Read | Task |
 
----
+**Key constraint:** Coordinators (Lead, Test Lead) can spawn sub-agents via `Task` but cannot touch files. Executors (Developer, Tester) can modify files but cannot spawn agents. This enforces the Thin Agent / Fat Platform model.
 
-### Phase 3: `jonggrang review` — Observe Layer
+### Completion Signals
 
-The verification and observability layer.
+Each agent outputs a completion signal only when success criteria are genuinely met:
 
-```
-$ jonggrang review [options]
+| Agent | Signal |
+|-------|--------|
+| Lead | `ARCHITECTURE_PLAN_COMPLETE` |
+| Developer | `IMPLEMENTATION_COMPLETE` |
+| Reviewer | `REVIEW_COMPLETE` |
+| Test Lead | `TEST_PLAN_COMPLETE` |
+| Tester | `ALL_TESTS_PASSING` |
 
-Options:
-  --full          Full review (all changes since last review)
-  --task <id>     Review specific task
-  --security      Security-focused review
-  --performance   Performance-focused review
-```
-
-**Review includes:**
-- Code quality analysis
-- Test coverage check
-- Security scan (dependency vulnerabilities, common patterns)
-- Performance review (N+1 queries, memory leaks, etc.)
-- Consistency with AGENTS.md conventions
-- Summary report in `jonggrang-log/review-{timestamp}.md`
+The orchestrator blocks on these signals. Hooks enforce that `ALL_TESTS_PASSING` cannot be output if tests are actually failing.
 
 ---
 
 ## Autonomy Modes
 
-Three modes that can be selected during `jonggrang init` (as default) or overridden during `jonggrang work --mode`.
-
 ### Supervised Mode
 
 > *"Agent proposes, human decides."*
 
-Best for: learning, critical systems, early-stage projects.
+Best for: learning, critical systems, architectural work.
 
-- Agent creates a plan before each task
-- Human must approve the plan before implementation
-- Human reviews each commit before accepting it
-- Agent pauses and asks when there is ambiguity
-
-```
-[supervised] Task: Create user registration endpoint
-  Agent proposes plan...
-
-  Plan:
-  1. Create src/routes/users.ts (POST /api/users)
-  2. Create src/validators/user.ts (email + password validation)
-  3. Create tests/users.test.ts (happy path + validation errors)
-  4. Register route in src/routes/index.ts
-
-  Approve? [y/n/edit] > y
-  Implementing...
-  Validation passed (typecheck, 4 tests, lint)
-  Commit? [y/n/view diff] > y
-  Committed: feat(users): add registration endpoint
-```
+- Pauses at Phase 6 (Brainstorming) for design input
+- Validates plan before implementation
+- Requires human approval at commit
 
 ### Balanced Mode
 
 > *"Agent runs, pauses at checkpoints."*
 
-Best for: daily development, trusted codebase, experienced developers.
+Best for: daily development, trusted codebase.
 
-- Agent auto-approves its own plan
-- Implementation runs automatically
-- Pauses only if: validation fails, ambiguity is found, or task is too large
-- Human reviews at the end of the batch
-
-```
-[balanced] Task: Create user registration endpoint
-  Planning... OK (auto-approved)
-  Implementing...
-  Validating... PASS (typecheck, 4 tests, lint)
-  Committed: feat(users): add registration endpoint
-  
-  Next task: Add email verification flow
-  Planning... OK (auto-approved)
-  Implementing...
-  Validating... FAIL (test: email service mock not configured)
-  
-  PAUSED — Validation failed. Fix needed:
-  Email service mock not found. Configure in tests/setup.ts?
-  [fix/skip/abort] >
-```
+- Auto-approves plans
+- Pauses only on validation failure or ambiguity
+- Human reviews at end of batch
 
 ### Autonomous Mode
 
-> *"Full Ralph loop — human reviews at the end."*
+> *"Full loop — human reviews at the end."*
 
 Best for: well-defined tasks, boilerplate, confident specs.
 
-- Agent runs the full loop without interruption
-- Auto-plan, auto-implement, auto-commit
-- Retries up to 2x on validation failure, then skips to the next task
-- Human only reviews the final result (all commits + report)
-
-```
-[autonomous] Starting work loop (max 10 iterations)...
-
-  Iteration 1: Create user registration endpoint
-    Plan > Implement > Validate PASS > Commit
-  
-  Iteration 2: Add email verification flow
-    Plan > Implement > Validate FAIL > Retry 1 > PASS > Commit
-  
-  Iteration 3: Add password reset flow
-    Plan > Implement > Validate PASS > Commit
-  
-  ...
-
-  COMPLETE (8/8 tasks done, 10 commits, 3 retries)
-  Run `jonggrang review --full` to review all changes.
-```
-
-### Mode Comparison Matrix
+- Runs all phases without interruption
+- Skips Phase 6 (brainstorming) automatically
+- Retries up to 2x on failure, then skips
+- Human reviews final result
 
 | Behavior | Supervised | Balanced | Autonomous |
 |----------|-----------|----------|------------|
 | Plan approval | Human | Auto | Auto |
-| Implementation | Auto | Auto | Auto |
+| Phase 6 (brainstorm) | Human pause | Human pause | Auto-skip |
 | Commit approval | Human | Auto | Auto |
-| Pause on fail | Immediate | After fail | After 2 retries |
+| Pause on fail | Immediate | After fail | After 2x retry |
 | Human touchpoints | Every step | On exception | End only |
-| Best for | Critical/learning | Daily work | Boilerplate/batch |
 
 ---
 
 ## Skill System
 
-Skills are **prompt templates in markdown format** that contain complete instructions for Claude Code. If a task requires script execution, the script is written inside the skill file and Claude Code executes it.
+Skills are **markdown prompt templates** that guide agents through specific tasks. They live in a two-tier architecture.
 
-See [SKILLS.md](./SKILLS.md) for full documentation.
+### Tier 1: Core Skills (BIOS)
+
+Location: `skills/core/`
+
+Always available to agents. Includes:
+- All standard scaffold/generate skills (scaffold-api, testing, auth, etc.)
+- Domain gateways (gateway-backend, gateway-frontend, gateway-api, gateway-testing, gateway-database)
+- Orchestration skills (orchestrating-feature, iterating-to-completion, dispatching-parallel-agents, persisting-agent-outputs)
+
+### Tier 2: Library Skills (Hard Drive)
+
+Location: `skills/library/{domain}/`
+
+Invisible to agents until explicitly loaded via a Gateway. Loaded JIT when intent is detected. Prevents context bloat from skills the agent doesn't need.
+
+### Gateway Pattern
+
+Agents don't hardcode skill paths. They invoke a gateway which detects intent and returns the right files to load:
+
+```
+Agent: "I need to fix a React infinite loop"
+    ↓
+Invokes: gateway-frontend
+    ↓
+Detects keywords: "infinite loop", "useEffect"
+    ↓
+Returns: "Read skills/library/frontend/debugging-react-hooks/SKILL.md"
+```
+
+This implements **intent-based context loading** — agents only load knowledge relevant to the task at hand.
 
 ### Skill File Format
 
 ```markdown
-# skills/<skill-name>/SKILL.md
 ---
-name: <skill-name>
+name: skill-name
 description: One-line description
-type: scaffold | transform | validate | generate
-project_types: [web-app, api, library]  # which ones are relevant
-trigger: "natural language trigger phrase"
-inputs:
-  - name: <input-name>
-    description: <what this input is>
-    required: true|false
-    default: <default value>
+type: scaffold | transform | validate | generate | gateway | orchestrate | pattern | workflow
+tier: core | library
+domains: [backend, frontend, api, testing, database, deploy, security]
+trigger: "natural language triggers"
 ---
 
 ## Context
-Background information and relevant project context.
-Use {{variable}} for interpolation from jonggrang.json and inputs.
+Background. Variables: {{project_name}}, {{stack}}, {{test_framework}}
 
 ## Instructions
-Step-by-step instructions that Claude Code must follow.
-
-## Script (optional)
-If there is a script that needs to be run, write it here.
-Claude Code will execute this script.
+1. Step one
 
 ## Validation
-Checklist to verify the results of skill execution.
-
-## Examples (optional)
-Example input/output for reference.
+- [ ] Check one
 ```
 
-### Built-in Skills
+See [SKILLS.md](./SKILLS.md) for full documentation.
 
-| Skill | Type | Description |
-|-------|------|-------------|
-| `prd` | generate | Generate PRD from intent/feature description |
-| `scaffold-api` | scaffold | Setup API project structure |
-| `scaffold-webapp` | scaffold | Setup web app project structure |
-| `scaffold-library` | scaffold | Setup library project structure |
-| `component` | scaffold | Generate UI component + test + story |
-| `migration` | scaffold | Generate database migration + model update |
-| `auth` | scaffold | Setup authentication flow |
-| `testing` | generate | Generate test suite for existing code |
-| `deploy` | generate | Setup deployment config (CI/CD, Docker, etc) |
+---
 
-### Custom Skills
+## Deterministic Hooks
 
-Users can add custom skills:
+While skills provide guidance, **hooks provide enforcement**. They run outside the LLM's context and cannot be bypassed.
 
+### Eight-Layer Defense
+
+| Layer | Mechanism | Tool |
+|-------|-----------|------|
+| 1 | CLAUDE.md / AGENTS.md | Full ruleset loaded at session start |
+| 2 | Core Skills | Procedural workflows (how to do X) |
+| 3 | Agent Definitions | Role behavior, tool restrictions, output formats |
+| 4 | UserPromptSubmit / session.created | Inject reminders every prompt |
+| 5 | PreToolUse / tool.execute.before | Block BEFORE action (agent-first, compaction gate) |
+| 6 | PostToolUse / tool.execute.after | Track modifications (dirty bit) |
+| 7 | SubagentStop / session.updated | Block premature exit (output enforcement) |
+| 8 | Stop / session.idle | Block exit until review + tests pass (feedback loop) |
+
+### Compaction Gate
+
+Before heavy phases (3, 8, 13), the platform checks token usage:
+
+| Usage | Status | Action |
+|-------|--------|--------|
+| < 75% | `ok` | Proceed |
+| 75–80% | `warn` | Warning, proceed |
+| 80–85% | `must` | Strong warning, proceed |
+| > 85% | `block` | Hard block — run `/compact` first |
+
+### Feedback Loop
+
+When a developer agent modifies files, the dirty bit is set. The agent cannot exit until a reviewer AND tester have both passed for every modified domain:
+
+```json
+{
+  "active": true,
+  "dirty_bit": true,
+  "modified_domains": ["backend", "frontend"],
+  "domain_phases": {
+    "backend":  { "review": "PASS", "testing": "PASS" },
+    "frontend": { "review": "PASS", "testing": "FAIL" }
+  }
+}
 ```
-$ jonggrang skill add <name>
-# Generates skills/<name>/SKILL.md template
-```
+
+Exit is blocked until ALL domains pass ALL phases. If any domain fails, ALL domains reset.
+
+### Universal: Claude Code + OpenCode
+
+The same enforcement logic runs on both tools:
+
+| Hook | Claude Code | OpenCode |
+|------|-------------|----------|
+| Agent-first (block direct edit) | `PreToolUse` | `tool.execute.before` |
+| Compaction gate (block Task) | `PreToolUse` | `tool.execute.before` |
+| Dirty bit (file modified) | `PostToolUse` | `tool.execute.after` + `file.edited` |
+| Output enforcement (exit) | `SubagentStop` | `session.updated` |
+| Feedback loop (exit) | `Stop` | `session.idle` |
+| Quality gate (exit) | `Stop` | `session.idle` |
 
 ---
 
 ## Team Mode
 
-### Overview
+Team mode allows multiple developers to work in parallel on a single project with coordination via a shared task board.
 
-Team mode allows 3-5 developers to work in parallel on a single project, with coordination via a shared task board and file ownership.
+### Parallel Execution
 
-### Coordination Model: Hybrid
-
-Jonggrang uses a hybrid model that combines lead-worker and peer coordination:
+Jonggrang detects independent task groups using a Union-Find algorithm on the `blocked_by` dependency graph. Independent groups run in separate git worktrees simultaneously.
 
 ```
-Team Lead (optional)
-|
-|--> jonggrang plan          # Decompose feature into tasks
-|--> jonggrang assign        # Assign tasks to members (optional)
-|
-Team Members
-|
-|--> jonggrang work --pick   # Self-claim available task
-|--> jonggrang work --task X # Work on assigned/claimed task
-|--> jonggrang status        # View team task board
-```
-
-### Task Coordination
-
-**Shared state via `jonggrang-tasks.json`:**
-
-```json
-{
-  "feature": "user-management",
-  "branch": "feat/user-management",
-  "tasks": [
-    {
-      "id": "task-001",
-      "title": "Create user registration endpoint",
-      "priority": 1,
-      "status": "completed",
-      "owner": "andi",
-      "files": ["src/routes/users.ts", "src/validators/user.ts"],
-      "passes": true,
-      "completed_at": "2026-04-02T10:30:00Z"
-    },
-    {
-      "id": "task-002",
-      "title": "Add email verification flow",
-      "priority": 2,
-      "status": "in_progress",
-      "owner": "budi",
-      "files": ["src/services/email.ts", "src/routes/verify.ts"],
-      "passes": false,
-      "started_at": "2026-04-02T10:35:00Z"
-    },
-    {
-      "id": "task-003",
-      "title": "Add password reset flow",
-      "priority": 3,
-      "status": "pending",
-      "owner": null,
-      "files": [],
-      "passes": false
-    }
-  ]
-}
+Task A (independent)         → Group 1 → worktree-1
+Task B → blocked_by A  \
+Task C → blocked_by B   → Group 2 → worktree-2 (serial within group)
+Task D (independent)         → Group 3 → worktree-3
 ```
 
 ### File Ownership
 
-**Rule: One file, one owner.** Prevents merge conflicts.
-
-- When a task is claimed, the files to be modified are registered in the task
-- Jonggrang warns if there is a file conflict between tasks
-- If a conflict is unavoidable, the task is serialized (blocked_by)
+**Rule: One file, one owner.** Lock files in `.jonggrang/locks/` prevent race conditions. When an agent writes a file, it registers a lock. Other agents check locks before writing.
 
 ### Team Commands
 
-```
-$ jonggrang plan <feature-description>    # Decompose into tasks
-$ jonggrang assign <task-id> <member>     # Assign task to member
-$ jonggrang status                        # View task board
-$ jonggrang work --pick                   # Auto-claim next available task
-$ jonggrang sync                          # Pull latest jonggrang-tasks.json + rebase
+```bash
+jonggrang plan "feature description"    # decompose into tasks
+jonggrang work --pick                   # self-claim next available task
+jonggrang status                        # view task board
 ```
 
-### Solo to Team Transition
-
-Solo mode and team mode use the same format. Transition = change `mode` in `jonggrang.json` from `solo` to `team`. The task board can be shared immediately.
+Via web dashboard:
+```bash
+jonggrang web
+# → parallel groups UI, diff review, merge/revise controls
+```
 
 ---
 
 ## Quality Gates
-
-Quality gates are layered according to autonomy mode, ensuring every output is verified.
 
 ### Gate Layers
 
 ```
 Layer 1: PLAN GATE
   Before implementation begins.
-  supervised:  Human review + approve
+  supervised:  Human review + approve plan
   balanced:    Auto-approved, logged
   autonomous:  Auto-approved, logged
 
-Layer 2: IMPLEMENTATION HOOKS
-  During and after implementation.
-  - Pre-commit: typecheck + lint
-  - Post-implement: test suite
-  - All modes: automatic, failure = pause/retry
+Layer 2: HOOK ENFORCEMENT (deterministic)
+  During work.
+  - PreToolUse: agent-first + compaction gate
+  - PostToolUse: dirty bit tracking
+  - Stop: feedback loop + quality gate
 
-Layer 3: TASK REVIEW
-  After task completion.
-  supervised:  Human review diff + approve commit
-  balanced:    Auto-commit, flagged for batch review
-  autonomous:  Auto-commit, reviewer agent scan
+Layer 3: ASSEMBLY LINE REVIEW
+  After implementation.
+  - Reviewer agent: design verification
+  - Reviewer agent: domain compliance
+  - Reviewer agent: code quality
+  - Tester agent: test execution + coverage
 
 Layer 4: SESSION REVIEW
-  After all tasks are done / session ends.
-  All modes:   `jonggrang review` — comprehensive scan
-  - Code quality + consistency
-  - Test coverage
-  - Security vulnerabilities
-  - Performance patterns
-  - AGENTS.md compliance
+  After all work completes.
+  jonggrang review → comprehensive scan
+  - Code quality, test coverage, security, performance
 ```
 
-### Hook Configuration
+### Failure Recovery
 
-Hooks are configured in `jonggrang.json`:
+| Failure Type | Recovery |
+|---|---|
+| Single task failure | Retry up to `retry_limit` times |
+| 3 consecutive failures | Mark task `blocked`, notify human |
+| Reviewer rejects | Developer re-implements, reviewer re-checks |
+| Tests fail | Developer fixes, tester re-runs |
+| Context > 85% | Compaction gate blocks, human runs /compact, resume |
+| Agent stuck (>3 blocked exits) | Escalation advisor triggers |
 
-```json
-{
-  "hooks": {
-    "pre_implement": [],
-    "post_implement": ["npm run typecheck", "npm run lint"],
-    "pre_commit": ["npm run test"],
-    "post_commit": [],
-    "task_complete": ["npm run test -- --coverage"],
-    "session_end": []
-  }
-}
-```
+### Escalation Advisor
 
-### Kill Criteria
+When an agent is stuck in a loop (blocked exit >3 times), an out-of-band LLM analyzes the session transcript and injects a hint:
 
-- Task fails validation 3x consecutively --> skip + log + notify human
-- Agent stuck in a loop (same error repeated) --> kill iteration + reset
-- Token budget exceeded (configurable) --> pause session
+> "Hint: The developer agent is writing to auth.ts but has not spawned a reviewer. The feedback loop requires review before exit."
 
 ---
 
 ## Compound Learning
 
-Jonggrang builds institutional memory that improves with each subsequent session.
-
 ### Memory Channels
 
 | Channel | Type | Who Writes | Purpose |
 |---------|------|-----------|---------|
-| `AGENTS.md` | Curated | Human (reviewed) | Project knowledge, conventions, gotchas |
-| `progress.txt` | Append-only | Agent | Per-session learnings, discoveries |
-| `jonggrang-tasks.json` | Structured | Agent + Human | Task state, history |
-| Git history | Immutable | Agent | Code changes, commit messages |
+| `AGENTS.md` | Curated | Human (reviewed) | Conventions, gotchas, patterns |
+| `.jonggrang/progress.txt` | Append-only | Agent | Per-task learnings, surprises |
+| `.jonggrang/jonggrang-tasks.json` | Structured | Agent + Human | Task state and history |
+| `.jonggrang/.output/` | Structured JSON | Agent | Phase outputs, architecture plans |
+| `MANIFEST.yaml` | YAML | Orchestrator | Phase state, resume point |
+| Git history | Immutable | Agent | Code changes with context |
 
 ### AGENTS.md
 
-Human-curated project knowledge. The agent may propose updates, but the human approves them.
+Human-curated project knowledge. Research shows human-written AGENTS.md improves agent success ~4%. LLM-generated ones can decrease quality by ~3% and increase cost 20%+.
 
-Contains:
-- Project conventions (naming, structure, patterns)
-- Known gotchas and workarounds
-- Architecture decisions and rationale
-- Dependencies and integration notes
-- Testing conventions
+**Agent proposes, human curates.**
 
-**Important:** Research shows that human-written AGENTS.md provides approximately a ~4% increase in success rate. LLM-generated ones can actually decrease quality by ~3% and increase cost by 20%+. Therefore: agent proposes, human curates.
+### .jonggrang/progress.txt
 
-### progress.txt
-
-An append-only log written by the agent at the end of each iteration:
+Append-only log written after each task:
 
 ```
-## Session 2026-04-02T10:30:00Z — Task: user-registration
+## Session 2026-04-11 — Task: user-registration
 
 ### What was done
-- Created POST /api/users endpoint with email validation
-- Added Zod schema for request body validation
+- Created POST /api/users with Zod validation
+- Added Prisma unique constraint error handling
 
 ### What was learned
-- Prisma unique constraint errors need explicit handling (P2002)
-- Test database needs explicit cleanup between test runs
-
-### Patterns discovered
-- All route files follow: router > middleware > handler > response pattern
-- Validation errors return 422, not 400 (project convention)
+- Prisma P2002 error needs explicit catch (not caught by generic handler)
+- Test database requires explicit cleanup between runs
 ```
-
-### Reflection Cycle
-
-After each task, the agent writes a reflection:
-1. What was surprising/unexpected
-2. New patterns discovered
-3. Suggested updates for AGENTS.md
-4. Suggested improvements for the skill template used
-
-The human reviews reflections and merges the relevant ones into AGENTS.md.
 
 ---
 
 ## Config Reference
 
-### jonggrang.json
-
-```json
+```jsonc
 {
-  "name": "my-awesome-app",
+  "name": "my-app",
   "version": "1.0.0",
-  
+  "tool": "opencode",           // "opencode" | "claude"
+
   "project": {
-    "type": "web-app",
-    "stack": "nextjs-typescript",
-    "template": "nextjs"
+    "type": "api",              // web-app | api | library | cli | tui
+    "stack": "express-typescript"
   },
-  
+
   "mode": {
-    "work": "solo",
-    "autonomy": "balanced",
+    "work": "solo",             // solo | team
+    "autonomy": "balanced",     // supervised | balanced | autonomous
     "max_team_size": 5
   },
-  
+
   "work": {
     "max_iterations": 10,
     "retry_limit": 2,
@@ -647,7 +565,14 @@ The human reviews reflections and merges the relevant ones into AGENTS.md.
     "branch_prefix": "feat/",
     "commit_prefix": "feat|fix|refactor|test|docs|chore"
   },
-  
+
+  "orchestration": {
+    "compaction": {
+      "warn_threshold": 0.75,   // 75% — warn
+      "block_threshold": 0.85   // 85% — hard block
+    }
+  },
+
   "hooks": {
     "pre_implement": [],
     "post_implement": ["npm run typecheck", "npm run lint"],
@@ -656,23 +581,23 @@ The human reviews reflections and merges the relevant ones into AGENTS.md.
     "task_complete": ["npm run test -- --coverage"],
     "session_end": []
   },
-  
+
   "testing": {
     "framework": "vitest",
     "command": "npm run test",
     "coverage_threshold": 80
   },
-  
+
   "ci": {
     "provider": "github-actions",
     "auto_setup": true
   },
-  
+
   "skills": {
     "directory": "./skills",
     "custom": []
   },
-  
+
   "review": {
     "security": true,
     "performance": true,
@@ -681,99 +606,43 @@ The human reviews reflections and merges the relevant ones into AGENTS.md.
 }
 ```
 
-See [CONFIG.md](./CONFIG.md) for a complete reference of every field.
+See [CONFIG.md](./CONFIG.md) for a complete reference.
 
 ---
 
-## Comparison with Ralph
+## Comparison
 
-| Aspect | Ralph | Jonggrang |
-|--------|-------|-------|
-| **Identity** | Bash script loop | Full CLI orchestrator |
-| **Bootstrap** | Manual PRD required | `jonggrang init` wizard — from scratch |
-| **Project types** | Generic | web-app, api, library — stack-aware |
-| **Autonomy** | Autonomous only | 3 modes: supervised, balanced, autonomous |
-| **Team support** | Solo only | Solo + team (3-5 devs) |
-| **Skill system** | PRD + basic prompt | Rich skill templates per project type |
-| **Templates** | None | Project templates per stack |
-| **State management** | prd.json + progress.txt | jonggrang-tasks.json + progress.txt + AGENTS.md |
-| **Quality gates** | typecheck + tests | 4-layer gates (plan, hooks, review, session) |
-| **Review** | Manual | `jonggrang review` — automated comprehensive scan |
-| **Learning** | progress.txt + AGENTS.md | progress.txt + AGENTS.md + reflection cycle |
-| **Tool support** | Amp / Claude Code | Claude Code focused, extensible |
-
-### What Jonggrang Keeps from Ralph
-
-- Stateless-per-iteration loop (fresh context, no accumulated confusion)
-- External memory persistence (git, files)
-- Atomic task-per-iteration approach
-- AGENTS.md as project knowledge base
-- progress.txt as append-only learnings
-
-### What Jonggrang Adds
-
-- Full project bootstrap wizard
-- Stack-aware skill templates
-- Adjustable autonomy (not just full-auto)
-- Team coordination with file ownership
-- 4-layer quality gate system
-- Built-in review/observe phase
-- Structured config (jonggrang.json)
-- Reflection cycle for compound learning
-
----
-
-## Quick Start
-
-```bash
-# 1. Init project
-$ jonggrang init
-
-# 2. Create PRD (or write tasks manually)
-$ jonggrang work --skill prd
-# Describe your feature, Jonggrang generates structured tasks
-
-# 3. Start working
-$ jonggrang work                          # default mode from config
-$ jonggrang work --mode autonomous        # override mode
-$ jonggrang work --task task-003          # specific task
-
-# 4. Check status
-$ jonggrang status
-
-# 5. Review
-$ jonggrang review --full
-
-# Team workflow
-$ jonggrang plan "user management feature"  # decompose
-$ jonggrang assign task-001 andi            # assign
-$ jonggrang work --pick                     # self-claim next
-$ jonggrang sync                            # sync with team
-```
+| Aspect | Ralph | Jonggrang v1 | Jonggrang (current) |
+|--------|-------|-------------|---------------------|
+| **Model** | Thick agent | Thick agent | Thin Agent / Fat Platform |
+| **Orchestration** | Single loop | Task loop | 16-phase state machine |
+| **Roles** | None | None | Lead / Dev / Reviewer / TestLead / Tester |
+| **Skill system** | PRD prompt | 9 flat skills | Two-tier: Core (BIOS) + Library (JIT) |
+| **State** | progress.txt | tasks + progress | MANIFEST.yaml + `.jonggrang/` + dual ephemeral/persistent |
+| **Enforcement** | None | Pre-commit hooks | 8-layer deterministic hooks (Claude + OpenCode) |
+| **Feedback loop** | None | None | Dirty bits + domain-level review/test gates |
+| **Context mgmt** | None | None | Compaction gates (75/80/85%) |
+| **Resume** | None | None | MANIFEST.yaml persists across sessions |
+| **Tools** | Amp/Claude | Claude + OpenCode | Claude + OpenCode (universal hooks) |
+| **Team** | Solo | Solo + team | Solo + team + parallel worktrees |
 
 ---
 
 ## Roadmap
 
-### v1 — Foundation
-- Solo mode
-- Init wizard (new + existing project)
-- Work loop with 3 autonomy modes
-- Skill system (9 built-in skills)
-- Quality gates (hooks + validation)
-- AGENTS.md + progress.txt
-- `jonggrang review` basic
+### Done
+- Two-mode operation: work loop + orchestrate
+- 16-phase state machine with intelligent phase skipping
+- Five-role assembly line (Lead/Dev/Reviewer/TestLead/Tester)
+- Two-tier skill system (Core BIOS + Library JIT + Gateways)
+- Universal hook layer (Claude Code hooks + OpenCode plugin)
+- Compaction gate (token tracking from session transcripts)
+- Feedback loop (dirty bits + multi-domain pass tracking)
+- MANIFEST.yaml persistent state + session resume
+- Parallel worktree execution + merge workflow
 
-### v2 — Team
-- Team mode (3-5 devs)
-- Shared task board + file ownership
-- `jonggrang plan` / `jonggrang assign` / `jonggrang sync`
-- Lead-worker + peer coordination
-- Conflict detection
-
-### v3 — Observe
-- Advanced review (security, performance)
-- Closed-loop observability
-- Telemetry feedback to agent context
-- Dashboard / reporting
-- Multi-model routing (plan=cheap, implement=strong, review=security)
+### Next
+- Heterogeneous LLM routing per phase (DeepSeek for reasoning, etc.)
+- Self-annealing: auto-patch skills/hooks when agent fails repeatedly
+- Agent-to-agent negotiation for dynamic API contracts
+- Web dashboard: orchestration phase visualization

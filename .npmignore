@@ -1,0 +1,30 @@
+# Source & dev files — not needed in the published package
+client/src
+client/public
+client/node_modules
+client/package.json
+client/package-lock.json
+client/index.html
+client/vite.config.*
+client/tsconfig*
+client/README.md
+
+# Build artifacts not in client/dist
+*.local
+dist-ssr
+
+# Dev/test files
+.jonggrang/
+.claude/
+.opencode/
+*.log
+node_modules
+
+# Editor
+.vscode
+.idea
+.DS_Store
+
+# Git
+.git
+.gitignore
