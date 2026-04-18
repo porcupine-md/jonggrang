@@ -1101,12 +1101,15 @@ async function cmdApprove(args, opts = {}) {
   const prompt = lib.buildTasksFromPlanPrompt(planContent, CONFIG_FILE, TASKS_FILE, SKILLS_DIR);
   await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
 
-  // Stamp every newly created task with the feature_id so tasks are traceable
+  // Stamp every newly created task with the authoritative feature_id.
+  // Always overwrite: the decomposition agent may have set feature_id to the bare slug
+  // (e.g. "frontend-backend-integration") from the plan frontmatter, which lacks the
+  // unique suffix (e.g. "-mo35rirj"). That wrong ID breaks plan.md path lookups.
   const tasksData = lib.getTasks(TASKS_FILE);
   if (tasksData && tasksData.tasks) {
     let modified = false;
     for (const task of tasksData.tasks) {
-      if (!existingTaskIds.has(task.id) && !task.feature_id) {
+      if (!existingTaskIds.has(task.id) && task.feature_id !== featureId) {
         task.feature_id = featureId;
         modified = true;
       }
