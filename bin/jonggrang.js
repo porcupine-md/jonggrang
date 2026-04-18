@@ -1120,6 +1120,19 @@ async function cmdApprove(args, opts = {}) {
   fs.copyFileSync(PLAN_FILE, path.join(outputDir, 'plan.md'));
   fs.unlinkSync(PLAN_FILE);
 
+  // Create a MANIFEST for this feature so cmdWork can resume under the correct feature ID.
+  // Without this, cmdWork creates a generic work-session-xxx MANIFEST disconnected from the plan.
+  const manifestPath = path.join(outputDir, 'MANIFEST.yaml');
+  if (!fs.existsSync(manifestPath)) {
+    const created = orchestration.createManifest(PROJECT_ROOT, featureId, featureName, workType);
+    // Mark all planning phases as done — they were completed by plan+approve
+    const mPath = created.manifestPath;
+    [1, 2, 3, 4, 5, 6, 7].forEach(n => {
+      if (created.manifest.active_phases.includes(n))
+        orchestration.completePhase(mPath, n, { source: 'approve' });
+    });
+  }
+
   logSuccess('Plan approved.');
   logInfo(`Feature ID:    ${featureId}`);
   logInfo(`Plan archived: .jonggrang/.output/features/${featureId}/plan.md`);
