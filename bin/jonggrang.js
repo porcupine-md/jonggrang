@@ -1117,6 +1117,14 @@ async function cmdApprove(args, opts = {}) {
     if (modified) lib.writeJSON(TASKS_FILE, tasksData);
   }
 
+  // Only archive if the agent actually created new tasks
+  const refreshedTasks = lib.getTasks(TASKS_FILE);
+  const newTasks = (refreshedTasks?.tasks || []).filter(t => !existingTaskIds.has(t.id));
+  if (newTasks.length === 0) {
+    logError('Agent did not create any tasks. plan.md has been preserved — re-run "jonggrang approve" after fixing the issue.');
+    process.exit(1);
+  }
+
   // Archive the approved plan
   const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
   fs.mkdirSync(outputDir, { recursive: true });

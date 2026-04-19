@@ -372,17 +372,24 @@ async function runPlan() {
 }
 
 async function approvePlan() {
-  // Save any edits first
-  if (pendingPlan.value) {
-    await fetch('/api/jonggrang/plan/content', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: pendingPlan.value }),
-    });
+  try {
+    if (pendingPlan.value) {
+      const res = await fetch('/api/jonggrang/plan/content', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: pendingPlan.value }),
+      });
+      if (!res.ok) {
+        const message = await res.text();
+        throw new Error(message || `Failed to save plan edits (${res.status})`);
+      }
+    }
+    clearLogs();
+    showPlanModal.value = false;
+    await api('/api/jonggrang/approve', {});
+  } catch (err) {
+    alert(err instanceof Error ? err.message : 'Failed to save plan edits before approval.');
   }
-  clearLogs();
-  showPlanModal.value = false;
-  await api('/api/jonggrang/approve', {});
 }
 
 async function discardPlan() {
