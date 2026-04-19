@@ -465,11 +465,12 @@ Skills are **markdown prompt templates** that guide AI agents through specific t
 | `scaffold-api` | scaffold | API endpoint with route, validation, tests |
 | `scaffold-webapp` | scaffold | Web app page with components, data fetching |
 | `scaffold-library` | scaffold | Library with build config, exports, tests |
+| `scaffold-deploy` | scaffold | Dockerfile, CI/CD config, environment configs |
 | `component` | scaffold | UI component with test and story |
 | `migration` | scaffold | Database migration with model update |
 | `auth` | scaffold | Authentication flow end-to-end |
 | `testing` | generate | Test suite for existing code |
-| `deploy` | generate | Dockerfile, CI/CD, environment configs |
+| `gateway-deploy` | gateway | Route deploy intents to specific library skills |
 | `orchestrating-feature` | orchestrate | 16-phase full workflow orchestration |
 | `iterating-to-completion` | orchestrate | Completion promises + scratchpads + loop detection |
 | `dispatching-parallel-agents` | orchestrate | Independent task parallel dispatch |

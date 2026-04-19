@@ -1,7 +1,7 @@
 ---
-name: deploy
-description: Setup deployment config (Dockerfile, CI/CD pipeline, environment configs)
-type: generate
+name: scaffold-deploy
+description: Generate deployment configuration files (Dockerfile, vercel.json, wrangler.toml, etc.) based on target type.
+type: scaffold
 project_types: [web-app, api, library, cli, tui]
 trigger: "setup deploy, create CI/CD, dockerize, deploy config"
 inputs:
