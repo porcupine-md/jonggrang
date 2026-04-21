@@ -8,8 +8,9 @@ Read these files in order:
 1. `.claude/SKILL.md` — Full agent protocol (how to execute tasks)
 2. `AGENTS.md` — Project-specific conventions and patterns
 3. `.jonggrang/progress.txt` — Learnings from previous sessions
-4. `.jonggrang/jonggrang-tasks.json` — Your task assignment
-5. `.jonggrang/jonggrang.json` — Project config
+4. `.jonggrang/jonggrang.json` — Project config
+
+Then run `jonggrang task next` to find your task assignment — do NOT read `.jonggrang/jonggrang-tasks.json` directly.
 
 ## Quick Protocol
 
@@ -43,7 +44,7 @@ jonggrang bug "description of what is broken" --feature <feature_id>
 - A BUGFIX task is created immediately and queued for the next work cycle
 - Do NOT fix out-of-scope bugs inline — complete your current task first
 
-The `feature_id` is in your task's `"feature_id"` field in jonggrang-tasks.json.
+Get the `feature_id` by running: `jonggrang task show <id>` — look for the `feature_id` field in the output.
 
 ## Rules
 

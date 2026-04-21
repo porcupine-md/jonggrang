@@ -118,7 +118,7 @@ jonggrang plan
 
 # Phase 2 — approve plan → decompose into tasks
 jonggrang approve
-# → AI reads .jonggrang/plan.md → writes .jonggrang/jonggrang-tasks.json
+# → AI reads .jonggrang/plan.md → runs `jonggrang task import` to create tasks
 # → plan.md is archived to .jonggrang/.output/features/<featureId>/plan.md
 
 # Execute tasks
@@ -201,7 +201,7 @@ jonggrang bug "description" --feature <feature_id>
 jonggrang bug convert --feature <feature_id>   # converts all open bugs to tasks later
 ```
 
-The `feature_id` is in your current task's `"feature_id"` field (see jonggrang-tasks.json).
+Get the `feature_id` by running: `jonggrang task show <id>` — look for the `feature_id` field in the output.
 
 **Rules:**
 - Do NOT fix out-of-scope bugs inline — stay focused on your current task
