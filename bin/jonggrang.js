@@ -2036,6 +2036,7 @@ function cmdTask(args) {
     else if (subArgs[j] === '--blocked-by')                         { flags.blocked_by = subArgs[++j].split(','); }
     else if (subArgs[j] === '--files')                              { flags.files = subArgs[++j].split(','); }
     else if (subArgs[j] === '--reason')                             { flags.reason = subArgs[++j]; }
+    else if (subArgs[j] === '--input')                              { flags.input = subArgs[++j]; }
     else if (subArgs[j] === '--pretty')                             { flags.pretty = true; }
     else if (subArgs[j] === '--json')                               { flags.json = true; }
     else { positional.push(subArgs[j]); }
@@ -2050,6 +2051,7 @@ function cmdTask(args) {
       case 'list':   taskList(flags, positional, pretty); break;
       case 'show':   taskShow(flags, positional, pretty); break;
       case 'add':    taskAdd(flags, positional, pretty); break;
+      case 'import': taskImport(flags, positional, pretty); break;
       case 'update': taskUpdate(flags, positional, pretty); break;
       case 'done':   taskDone(flags, positional, pretty); break;
       case 'block':  taskBlock(flags, positional, pretty); break;
@@ -2156,6 +2158,41 @@ function taskAdd(flags, positional, pretty) {
     logSuccess(`Created ${task.id}: ${task.title}`);
   } else {
     console.log(JSON.stringify(task));
+  }
+}
+
+function taskImport(flags, positional, pretty) {
+  safeCheckConfig();
+
+  let raw;
+  if (flags.input) {
+    raw = flags.input;
+  } else if (positional[0]) {
+    const filePath = path.resolve(positional[0]);
+    if (!fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
+    raw = fs.readFileSync(filePath, 'utf8');
+  } else if (!process.stdin.isTTY) {
+    raw = fs.readFileSync('/dev/stdin', 'utf8');
+  } else {
+    throw new Error('Provide tasks via --json \'[...]\', a file path, or stdin.');
+  }
+
+  let taskDataArray;
+  try {
+    taskDataArray = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`Invalid JSON: ${e.message}`);
+  }
+  if (!Array.isArray(taskDataArray)) throw new Error('Input must be a JSON array of tasks.');
+  if (taskDataArray.length === 0) throw new Error('Task array is empty.');
+
+  const created = lib.addTasksBulk(TASKS_FILE, taskDataArray);
+
+  if (pretty) {
+    logSuccess(`Imported ${created.length} task(s):`);
+    for (const t of created) console.log(`  ${t.id}: ${t.title}`);
+  } else {
+    console.log(JSON.stringify(created));
   }
 }
 
@@ -2267,7 +2304,8 @@ Usage: jonggrang task <subcommand> [options]
 Subcommands:
   list [status]              List all tasks (optionally filter by status)
   show <task-id>             Show task details
-  add --title "..." [opts]   Add a new task
+  add --title "..." [opts]   Add a single task
+  import [opts]              Import multiple tasks from a JSON array (bulk add)
   update <task-id> [opts]    Update task fields
   done <task-id>             Mark task as completed
   block <task-id> [--reason] Mark task as blocked
@@ -2284,6 +2322,11 @@ Add/Update flags:
   --blocked-by <id,id,...>   Comma-separated dependency task IDs
   --files <path,path,...>    Comma-separated file paths
 
+Import flags:
+  --input '<array>'          JSON array of task objects (inline string)
+  <file>                     Path to a JSON file containing a task array
+  (stdin)                    Pipe a JSON array via stdin
+
 Output flags:
   --json                     Force JSON output (default in non-TTY)
   --pretty                   Force human-readable output
@@ -2293,6 +2336,9 @@ Examples:
   jonggrang task list pending
   jonggrang task add --title "Add login page" --priority 1
   jonggrang task add "Quick task title"
+  jonggrang task import --input '[{"id":"task-001","title":"Setup CI","priority":1},{"id":"task-002","title":"Write tests","priority":2,"blocked_by":["task-001"]}]'
+  jonggrang task import tasks.json
+  echo '[{"title":"Fix bug"}]' | jonggrang task import
   jonggrang task update task-003 --status in_progress
   jonggrang task update task-003 --blocked-by task-001,task-002
   jonggrang task done task-003
