@@ -2031,7 +2031,6 @@ function cmdTask(args) {
     else if (subArgs[j] === '--desc' || subArgs[j] === '--description') { flags.description = subArgs[++j]; }
     else if (subArgs[j] === '--priority')                           { flags.priority = parseInt(subArgs[++j], 10); }
     else if (subArgs[j] === '--status')                             { flags.status = subArgs[++j]; }
-    else if (subArgs[j] === '--role')                               { flags.role = subArgs[++j]; }
     else if (subArgs[j] === '--skill')                              { flags.skill = subArgs[++j]; }
     else if (subArgs[j] === '--blocked-by')                         { flags.blocked_by = subArgs[++j].split(','); }
     else if (subArgs[j] === '--files')                              { flags.files = subArgs[++j].split(','); }
@@ -2124,7 +2123,6 @@ function taskShow(flags, positional, pretty) {
       console.log(`Feature:     ${featureLabel}  ${DIM}(${task.feature_id})${NC}`);
       console.log(`Plan:        .jonggrang/.output/features/${task.feature_id}/plan.md`);
     }
-    console.log(`Role:        ${task.role || '(none)'}`);
     console.log(`Skill:       ${task.skill || '(none)'}`);
     console.log(`Blocked by:  ${(task.blocked_by || []).join(', ') || '(none)'}`);
     console.log(`Files:       ${(task.files || []).join(', ') || '(none)'}`);
@@ -2148,7 +2146,6 @@ function taskAdd(flags, positional, pretty) {
     title,
     description: flags.description || '',
     priority: flags.priority,
-    role: flags.role || null,
     skill: flags.skill || null,
     blocked_by: flags.blocked_by || [],
     files: flags.files || [],
@@ -2206,7 +2203,6 @@ function taskUpdate(flags, positional, pretty) {
   if (flags.description !== undefined) updates.description = flags.description;
   if (flags.priority !== undefined)    updates.priority = flags.priority;
   if (flags.status !== undefined)      updates.status = flags.status;
-  if (flags.role !== undefined)        updates.role = flags.role;
   if (flags.skill !== undefined)       updates.skill = flags.skill;
   if (flags.blocked_by !== undefined)  updates.blocked_by = flags.blocked_by;
   if (flags.files !== undefined)       updates.files = flags.files;
@@ -2317,7 +2313,6 @@ Add/Update flags:
   --desc <description>       Task description
   --priority <n>             Priority (1 = highest)
   --status <status>          pending|in_progress|completed|blocked|waiting|skipped
-  --role <role>              developer|tester|reviewer|lead
   --skill <skill>            Skill name
   --blocked-by <id,id,...>   Comma-separated dependency task IDs
   --files <path,path,...>    Comma-separated file paths

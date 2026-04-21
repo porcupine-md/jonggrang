@@ -256,7 +256,6 @@ jonggrang task remove task-003
 | `--desc` | Task description |
 | `--priority` | Priority (1 = highest) |
 | `--status` | pending, in_progress, completed, blocked, waiting, skipped |
-| `--role` | developer, tester, reviewer, lead |
 | `--skill` | Skill name |
 | `--blocked-by` | Comma-separated dependency task IDs |
 | `--files` | Comma-separated file paths |
