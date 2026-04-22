@@ -103,6 +103,19 @@ chokidar.watch(paths.tasksFile, { ignoreInitial: true }).on('all', () => readTas
 chokidar.watch(paths.progressFile, { ignoreInitial: true }).on('all', () => readProgress());
 chokidar.watch(paths.configFile, { ignoreInitial: true }).on('all', () => readConfigFile());
 
+// Watch plan.md — emit plan_update so the UI can show the draft
+function emitPlanUpdate() {
+    try {
+        if (lib.fileExists(paths.planFile)) {
+            const content = fs.readFileSync(paths.planFile, 'utf8');
+            io.emit('plan_update', { exists: true, content });
+        } else {
+            io.emit('plan_update', { exists: false, content: '' });
+        }
+    } catch { /* ignore */ }
+}
+chokidar.watch(paths.planFile, { ignoreInitial: false }).on('all', emitPlanUpdate);
+
 // Watch manifests directory for real-time phase grid updates.
 // Watch the .jonggrang dir (which exists or will be created) so chokidar
 // can detect when the nested features/ subdirectory appears.
@@ -138,6 +151,7 @@ io.on('connection', (socket) => {
     socket.emit('tasks_update', latestTasks);
     socket.emit('progress_update', latestProgress);
     socket.emit('config_update', latestConfig);
+    emitPlanUpdate(); // send current plan.md state on connect
     socket.emit('jonggrang_status', { isRunning: isJonggrangRunning });
 
     socket.on('disconnect', () => {
@@ -312,13 +326,14 @@ app.post('/api/jonggrang/stop', (req, res) => {
     res.json({ success: true, message: 'Jonggrang stop signal sent' });
 });
 
-// --- Plan ---
+// --- Plan (Phase 1: generate draft plan.md) ---
 app.post('/api/jonggrang/plan', (req, res) => {
     const { description } = req.body;
     if (!description) return res.status(400).json({ error: 'description required' });
 
+    // Phase 1 only — generates plan.md, does NOT produce tasks yet
     const args = ['plan', description];
-    console.log('Starting jonggrang plan...', args);
+    console.log('Starting jonggrang plan (Phase 1)...', args);
 
     const child = spawnJonggrang(args, { JONGGRANG_MODE: 'autonomous' });
 
@@ -327,10 +342,72 @@ app.post('/api/jonggrang/plan', (req, res) => {
     child.stdout.on('data', (data) => io.emit('log', data.toString()));
     child.stderr.on('data', (data) => io.emit('log', data.toString()));
     child.on('close', (code) => {
-        io.emit('log', `\nPlan process exited with code ${code}\n`);
+        io.emit('log', `\nPlan phase 1 exited with code ${code}\n`);
+        // Emit current plan.md state so UI can show it
+        emitPlanUpdate();
     });
 
-    res.json({ success: true, message: 'Plan started' });
+    res.json({ success: true, message: 'Plan Phase 1 started' });
+});
+
+// --- Get current plan.md content ---
+app.get('/api/jonggrang/plan/content', (req, res) => {
+    if (!lib.fileExists(paths.planFile)) {
+        return res.json({ exists: false, content: '' });
+    }
+    try {
+        const content = fs.readFileSync(paths.planFile, 'utf8');
+        res.json({ exists: true, content });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Save edited plan.md from UI ---
+app.put('/api/jonggrang/plan/content', (req, res) => {
+    const { content } = req.body;
+    if (content === undefined) return res.status(400).json({ error: 'content required' });
+    try {
+        fs.writeFileSync(paths.planFile, content, 'utf8');
+        emitPlanUpdate();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Discard pending plan.md ---
+app.delete('/api/jonggrang/plan/content', (req, res) => {
+    try {
+        if (lib.fileExists(paths.planFile)) fs.unlinkSync(paths.planFile);
+        emitPlanUpdate();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Approve (Phase 2: plan.md → tasks) ---
+app.post('/api/jonggrang/approve', (req, res) => {
+    if (!lib.fileExists(paths.planFile)) {
+        return res.status(400).json({ error: 'No pending plan.md found. Run plan first.' });
+    }
+
+    const args = ['approve'];
+    console.log('Starting jonggrang approve (Phase 2)...');
+
+    const child = spawnJonggrang(args, { JONGGRANG_MODE: 'autonomous' });
+
+    io.emit('log', 'Approving plan — decomposing to tasks...\n');
+
+    child.stdout.on('data', (data) => io.emit('log', data.toString()));
+    child.stderr.on('data', (data) => io.emit('log', data.toString()));
+    child.on('close', (code) => {
+        io.emit('log', `\nApprove phase 2 exited with code ${code}\n`);
+        emitPlanUpdate(); // plan.md deleted after approve — emit empty state
+    });
+
+    res.json({ success: true, message: 'Approve started' });
 });
 
 // --- Review ---

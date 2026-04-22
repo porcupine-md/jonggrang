@@ -21,8 +21,11 @@ Inspired by the [Ralph Loop](https://github.com/snarktank/ralph), [Agent Orchest
 You describe what you want
         |
         v
-  jonggrang plan  -->  Decomposes into atomic tasks
-        |
+  jonggrang plan  -->  Phase 1: AI writes .jonggrang/plan.md (high-level, human-editable)
+        |              Review / edit the plan in your editor
+        v
+  jonggrang approve  -->  Phase 2: AI reads plan.md → decomposes into tasks
+        |                 plan.md archived, jonggrang-tasks.json written
         v
   jonggrang work  -->  For each task:
         |            1. Fresh context (no accumulated confusion)
@@ -35,6 +38,14 @@ You describe what you want
         |            8. Repeat
         v
   jonggrang review  -->  Comprehensive code review
+```
+
+**Shorthand options:**
+```bash
+jonggrang plan "feature" --yes      # plan + auto-approve + tasks in one shot
+jonggrang plan "feature" --deep          # 3-phase deep analysis → enriched plan (Affected Areas, Risks, Alternatives)
+jonggrang work "feature" --yes           # full pipeline: plan → approve → execute
+jonggrang work "feature" --deep --yes    # deep mode full pipeline
 ```
 
 ### Orchestrate (deterministic, 16-phase)
@@ -103,11 +114,19 @@ cd my-project
 # 2. Initialize Jonggrang
 jonggrang init
 
-# 3a. Simple work loop
-jonggrang plan "REST API for todo management"
-jonggrang work
+# 3a. Two-phase work loop (review plan before decompose)
+jonggrang plan "REST API for todo management"   # generates plan.md for review
+jonggrang approve                               # approve → decomposes to tasks
+jonggrang work                                  # execute tasks
 
-# 3b. Full deterministic orchestration
+# 3b. One-shot (skip review)
+jonggrang plan "REST API for todo management" --yes   # plan + approve + tasks
+jonggrang work                                        # execute tasks
+
+# 3c. Full pipeline in one command
+jonggrang work "REST API for todo management" --yes   # plan → approve → execute
+
+# 3d. Full deterministic orchestration
 jonggrang orchestrate "REST API for todo management with CRUD and tests"
 
 # 4. Review results
@@ -157,15 +176,32 @@ Interactive wizard that sets up your project. Generates:
 
 ### `jonggrang plan <description>`
 
-Decomposes a feature description into atomic tasks. Each task is:
+**Phase 1** — AI generates `.jonggrang/plan.md`, a human-readable draft plan with YAML frontmatter (`feature`, `branch`, `work_type`). You review and edit the plan before anything gets decomposed into tasks.
+
+```bash
+jonggrang plan "user authentication with JWT, email registration, and password reset"
+# → writes .jonggrang/plan.md
+# → interactive prompt: Approve / Edit / Open $EDITOR / Save for later / Abort
+
+jonggrang plan "user auth" --yes   # skip interactive prompt, auto-approve
+```
+
+### `jonggrang approve`
+
+**Phase 2** — AI reads the approved `plan.md` and decomposes it into atomic tasks in `jonggrang-tasks.json`. Each task is:
 - Small enough for one AI context window
 - Has clear acceptance criteria
 - Has file ownership (prevents conflicts)
 - Has dependency ordering (`blocked_by`)
 
 ```bash
-jonggrang plan "user authentication with JWT, email registration, and password reset"
+jonggrang approve
+# → reads .jonggrang/plan.md
+# → writes .jonggrang/jonggrang-tasks.json
+# → archives plan to .jonggrang/.output/features/<id>/plan.md
 ```
+
+> **Rule: completed tasks are immutable.** They reflect real code. Any correction must be a new task that fixes/replaces the previous implementation.
 
 ### `jonggrang work`
 
@@ -173,12 +209,15 @@ Runs the simple development loop. Each iteration is **stateless** — a fresh ag
 
 ```bash
 jonggrang work                                    # use config defaults
+jonggrang work "feature" --yes                    # plan → approve → execute in one shot
+jonggrang work --ignore-plan                      # skip pending plan warning, run existing tasks
 jonggrang work --mode autonomous                  # override autonomy mode
 jonggrang work --tool claude                      # override AI tool
 jonggrang work --max-iterations 5
 jonggrang work --task task-003                    # work on specific task
 jonggrang work --branch feat/auth                 # create/use a branch
 jonggrang work --dry-run                          # show prompts, don't execute
+jonggrang work --debug                            # dump raw JSON from opencode/claude to stderr
 ```
 
 ### `jonggrang orchestrate <description>`
@@ -494,8 +533,12 @@ your-project/
 ├── .jonggrang/
 │   ├── jonggrang.json       # Project config
 │   ├── jonggrang-tasks.json # Task board state
+│   ├── plan.md              # Draft plan (exists between plan → approve)
 │   ├── progress.txt         # Auto-generated learnings
-│   ├── .output/             # Agent outputs + MANIFEST.yaml
+│   ├── .output/
+│   │   └── features/<id>/
+│   │       ├── plan.md      # Archived plan (after approve)
+│   │       └── MANIFEST.yaml
 │   ├── .ephemeral/          # Runtime state (feedback loop, compaction)
 │   └── locks/               # File ownership locks
 ├── .claude/
@@ -562,6 +605,13 @@ The dashboard provides a visual Kanban board, real-time agent logs, parallel gro
 - `POST /api/jonggrang/orchestrate/resume` — resume incomplete run
 - `GET  /api/jonggrang/compaction` — current context usage
 - `GET  /api/jonggrang/feedback-state` — current dirty bit state
+- `POST /api/jonggrang/plan` — Phase 1: generate plan.md
+- `GET  /api/jonggrang/plan/content` — read current plan.md
+- `PUT  /api/jonggrang/plan/content` — save edited plan.md from UI
+- `DELETE /api/jonggrang/plan/content` — discard pending plan
+- `POST /api/jonggrang/approve` — Phase 2: decompose plan.md → tasks
+
+WebSocket emits `plan_update: { exists, content }` whenever plan.md changes.
 
 ---
 

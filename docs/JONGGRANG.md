@@ -100,9 +100,11 @@ project-root/
 ├── .jonggrang/
 │   ├── jonggrang.json          # Project config
 │   ├── jonggrang-tasks.json    # Task board state
+│   ├── plan.md                 # Draft plan (exists between plan → approve)
 │   ├── progress.txt            # Append-only agent learnings
 │   ├── .output/
 │   │   └── features/{id}/
+│   │       ├── plan.md         # Archived plan (after approve)
 │   │       ├── MANIFEST.yaml   # Phase state (persistent)
 │   │       └── [phase outputs]
 │   ├── .ephemeral/             # Cleared on restart
@@ -122,14 +124,20 @@ project-root/
 
 ### Mode 1: Work Loop (`jonggrang work`)
 
-Simple stateless loop. Each iteration gets a fresh context window.
+Simple stateless loop. Each iteration gets a fresh context window. Planning is a **two-phase** process to allow human review before task decomposition.
 
 ```
 jonggrang plan "feature"
     |
     v
-Decompose into atomic tasks (.jonggrang/jonggrang-tasks.json)
+Phase 1 → AI writes .jonggrang/plan.md  (high-level, human-editable)
+    |      Interactive: Approve / Edit / Save / Abort
+    v
+jonggrang approve   (or auto-triggered by --yes)
     |
+    v
+Phase 2 → AI decomposes plan.md → .jonggrang/jonggrang-tasks.json
+    |      plan.md archived to .jonggrang/.output/features/<id>/plan.md
     v
 jonggrang work
     |
@@ -145,6 +153,15 @@ For each task:
     v
 jonggrang review  →  Comprehensive scan
 ```
+
+**Shortcuts:**
+```bash
+jonggrang plan "feature" --yes      # plan + auto-approve + tasks in one shot
+jonggrang work "feature" --yes      # full pipeline: plan → approve → execute
+jonggrang work --ignore-plan        # run existing tasks, skip pending plan warning
+```
+
+> **Rule: completed tasks are immutable.** Any correction requires a new task.
 
 Best for: well-understood tasks, boilerplate, incremental work.
 

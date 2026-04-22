@@ -28,11 +28,13 @@ const currentView    = ref('kanban'); // 'kanban' | 'graph'
 const selectedTask   = ref(null);
 const showLogPanel   = ref(true);
 const showNewTaskForm = ref(false);
-const showPlanModal  = ref(false);
-const showWorkModal  = ref(false);
-const newTask        = ref({ title: '', description: '', priority: 1 });
-const planDesc       = ref('');
-const workDesc       = ref('');
+const showPlanModal    = ref(false);
+const planStage        = ref('describe'); // 'describe' | 'review'
+const planDesc         = ref('');
+const pendingPlan      = ref('');         // plan.md content for review
+const showWorkModal    = ref(false);
+const newTask          = ref({ title: '', description: '', priority: 1 });
+const workDesc         = ref('');
 
 // Pipeline / manifest
 const manifests       = ref([]);
@@ -233,6 +235,17 @@ onMounted(() => {
     if (d?.tasks) rawTasks.value = d.tasks;
   });
   socket.on('config_update', d => { if (d) projectConfig.value = d; });
+  socket.on('plan_update', d => {
+    if (d?.exists && d.content) {
+      pendingPlan.value = d.content;
+      // Auto-advance modal to review stage when plan.md arrives
+      if (showPlanModal.value && planStage.value === 'describe') {
+        planStage.value = 'review';
+      }
+    } else {
+      pendingPlan.value = '';
+    }
+  });
   socket.on('log', d => {
     logs.value += typeof d === 'string' ? d : (d?.data || '');
   });
@@ -338,12 +351,51 @@ async function runWork() {
   fetchManifests();
 }
 
+function openPlanModal() {
+  // If there's already a pending plan, go straight to review
+  if (pendingPlan.value) {
+    planStage.value = 'review';
+  } else {
+    planStage.value = 'describe';
+    planDesc.value = '';
+  }
+  showPlanModal.value = true;
+}
+
 async function runPlan() {
   if (!planDesc.value.trim()) return;
   clearLogs();
+  planStage.value = 'describe'; // stay on describe stage while AI generates
   await api('/api/jonggrang/plan', { description: planDesc.value });
-  showPlanModal.value = false;
   planDesc.value = '';
+  // plan_update socket event will advance stage to 'review' when plan.md is ready
+}
+
+async function approvePlan() {
+  try {
+    if (pendingPlan.value) {
+      const res = await fetch('/api/jonggrang/plan/content', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: pendingPlan.value }),
+      });
+      if (!res.ok) {
+        const message = await res.text();
+        throw new Error(message || `Failed to save plan edits (${res.status})`);
+      }
+    }
+    clearLogs();
+    showPlanModal.value = false;
+    await api('/api/jonggrang/approve', {});
+  } catch (err) {
+    alert(err instanceof Error ? err.message : 'Failed to save plan edits before approval.');
+  }
+}
+
+async function discardPlan() {
+  await fetch('/api/jonggrang/plan/content', { method: 'DELETE' });
+  pendingPlan.value = '';
+  showPlanModal.value = false;
 }
 
 async function stopWork() {
@@ -497,7 +549,8 @@ function onDrop(e, key)       {
 
         <div class="sep"></div>
 
-        <button class="topbar-btn" @click="showPlanModal = true" title="Plan feature">
+        <button class="topbar-btn" @click="openPlanModal" title="Plan feature"
+          :class="{ 'has-pending-plan': pendingPlan }">
           <FileTextIcon :size="15" />
         </button>
         <button class="topbar-btn" @click="startReview" title="Run review">
@@ -783,26 +836,49 @@ function onDrop(e, key)       {
       </div>
     </Teleport>
 
-    <!-- Plan modal -->
+    <!-- Plan modal — two stage: describe → review -->
     <Teleport to="body">
       <div v-if="showPlanModal" class="overlay" @click.self="showPlanModal = false">
-        <div class="modal">
+
+        <!-- Stage 1: Describe feature -->
+        <div v-if="planStage === 'describe'" class="modal">
           <div class="modal-head">
-            <span>Plan Feature</span>
+            <span>Plan Feature <span class="stage-badge">1 / 2 — Describe</span></span>
             <button class="icon-btn" @click="showPlanModal = false"><XIcon :size="15" /></button>
           </div>
           <div class="modal-body">
             <textarea v-model="planDesc" class="modal-textarea" rows="3"
-              placeholder="Describe the feature to plan..."
+              placeholder="Describe the feature to plan... (Ctrl+Enter to generate)"
               autofocus @keydown.ctrl.enter="runPlan"></textarea>
           </div>
           <div class="modal-foot">
             <button class="btn-ghost" @click="showPlanModal = false">Cancel</button>
-            <button class="btn-primary" @click="runPlan" :disabled="!planDesc.trim()">
-              <FileTextIcon :size="13" /> Plan
+            <button class="btn-primary" @click="runPlan" :disabled="!planDesc.trim() || isRunning">
+              <FileTextIcon :size="13" /> Generate Plan
             </button>
           </div>
         </div>
+
+        <!-- Stage 2: Review & edit plan.md -->
+        <div v-else-if="planStage === 'review'" class="modal modal-wide">
+          <div class="modal-head">
+            <span>Review Plan <span class="stage-badge">2 / 2 — Review &amp; Approve</span></span>
+            <button class="icon-btn" @click="showPlanModal = false"><XIcon :size="15" /></button>
+          </div>
+          <div class="modal-body">
+            <div class="plan-review-hint">Edit the plan below, then approve to decompose into tasks.</div>
+            <textarea v-model="pendingPlan" class="modal-textarea plan-textarea"
+              spellcheck="false"></textarea>
+          </div>
+          <div class="modal-foot">
+            <button class="btn-ghost btn-danger" @click="discardPlan">Discard</button>
+            <button class="btn-ghost" @click="planStage = 'describe'">← Back</button>
+            <button class="btn-primary" @click="approvePlan">
+              <CheckCircle2Icon :size="13" /> Approve &amp; Decompose
+            </button>
+          </div>
+        </div>
+
       </div>
     </Teleport>
 
@@ -1216,6 +1292,16 @@ body { background: var(--bg-base); color: var(--text-primary); font-family: syst
   border-radius: 10px; width: 440px; max-width: 90vw;
   box-shadow: 0 24px 48px rgba(0,0,0,0.5);
 }
+.modal-wide { width: 720px; }
+.stage-badge {
+  font-size: 10px; font-weight: 500; color: var(--text-muted);
+  background: var(--bg-elevated); border-radius: 4px;
+  padding: 2px 6px; margin-left: 6px; letter-spacing: 0.03em;
+}
+.plan-review-hint { font-size: 11px; color: var(--text-muted); }
+.plan-textarea { min-height: 380px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; }
+.has-pending-plan { color: var(--yellow) !important; }
+.modal-foot { justify-content: flex-end; gap: 8px; }
 .modal-head {
   display: flex; align-items: center; gap: 8px;
   padding: 14px 16px; border-bottom: 1px solid var(--border-subtle);
