@@ -48,7 +48,7 @@ const PROGRESS_FILE = paths.progressFile;
 const AGENTS_FILE   = paths.agentsFile;
 const SKILLS_DIR    = paths.skillsDir;
 
-const JONGGRANG_VERSION = '0.1.0';
+const JONGGRANG_VERSION = require('../package.json').version;
 
 // Defaults (can be overridden by flags/env)
 let MAX_ITERATIONS = parseInt(process.env.JONGGRANG_MAX_ITERATIONS || '0', 10);
