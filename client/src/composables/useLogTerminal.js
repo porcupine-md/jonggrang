@@ -32,7 +32,7 @@ export function useLogTerminal(logs) {
   const fitAddon = shallowRef(null);
   const logContentLength = ref(0);
   const hasLogs = computed(() => logs.value.length > 0);
-  const logLineCount = computed(() => (hasLogs.value ? logs.value.split('\n').length : 0));
+  const logLineCount = ref(0);
 
   let resizeObserver = null;
   let windowResizeHandler = null;
@@ -47,6 +47,7 @@ export function useLogTerminal(logs) {
 
     term.clear();
     logContentLength.value = logs.value.length;
+    logLineCount.value = logs.value ? logs.value.split('\n').length : 0;
     if (!logs.value) return;
 
     term.write(logs.value.replace(/\r?\n/g, '\r\n'));
@@ -76,6 +77,7 @@ export function useLogTerminal(logs) {
 
   function clearTerminal() {
     logContentLength.value = 0;
+    logLineCount.value = 0;
     terminalInstance.value?.clear();
   }
 
@@ -103,6 +105,8 @@ export function useLogTerminal(logs) {
     const diff = nextLogs.slice(logContentLength.value);
     if (!diff) return;
 
+    const newlineCount = (diff.match(/\n/g) || []).length;
+    logLineCount.value += newlineCount + (logContentLength.value === 0 ? 1 : 0);
     term.write(diff.replace(/\r?\n/g, '\r\n'));
     logContentLength.value = nextLogs.length;
     term.scrollToBottom();

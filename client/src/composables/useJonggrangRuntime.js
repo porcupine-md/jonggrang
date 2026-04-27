@@ -82,7 +82,7 @@ export function useJonggrangRuntime({ requestJson, reportError, onPlanUpdate }) 
 
     const target = selectManifestEntry(nextManifests, activeManifest.value?.featureId);
     if (target && activeManifest.value?.featureId !== target.featureId) {
-      activeManifest.value = toActiveManifest(target);
+      await fetchManifest(target.featureId);
     }
   }
 

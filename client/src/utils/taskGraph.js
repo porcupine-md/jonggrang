@@ -21,8 +21,9 @@ function computeNodeLevels(tasks, dependentsById, blockersById) {
     }
   });
 
-  while (queue.length > 0) {
-    const taskId = queue.shift();
+  let head = 0;
+  while (head < queue.length) {
+    const taskId = queue[head++];
     const currentLevel = nodeLevels.get(taskId) ?? 0;
     const dependents = dependentsById.get(taskId) || [];
 

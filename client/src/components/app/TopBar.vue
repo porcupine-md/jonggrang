@@ -52,20 +52,21 @@ defineEmits([
     </div>
 
     <div class="topbar-center">
-      <button :class="['tab', { active: currentView === 'kanban' }]" @click="$emit('select-view', 'kanban')" title="Task Board">
+      <button :class="['tab', { active: currentView === 'kanban' }]" @click="$emit('select-view', 'kanban')" title="Task Board" aria-label="Task Board">
         <LayoutGridIcon :size="15" />
       </button>
-      <button :class="['tab', { active: currentView === 'graph' }]" @click="$emit('select-view', 'graph')" title="Dependency Graph">
+      <button :class="['tab', { active: currentView === 'graph' }]" @click="$emit('select-view', 'graph')" title="Dependency Graph" aria-label="Dependency Graph">
         <GitBranchIcon :size="15" />
       </button>
 
       <div class="sep"></div>
 
       <button class="topbar-btn" @click="$emit('open-plan')" title="Plan feature"
+        :aria-label="hasPendingPlan ? 'Plan feature (pending plan)' : 'Plan feature'"
         :class="{ 'has-pending-plan': hasPendingPlan }">
         <FileTextIcon :size="15" />
       </button>
-      <button class="topbar-btn" @click="$emit('start-review')" title="Run review">
+      <button class="topbar-btn" @click="$emit('start-review')" title="Run review" aria-label="Run review">
         <EyeIcon :size="15" />
       </button>
 
@@ -90,7 +91,7 @@ defineEmits([
       </div>
       <div class="status-dot" :class="{ active: isRunning }"></div>
       <span class="status-text">{{ isRunning ? 'Running' : 'Idle' }}</span>
-      <button class="topbar-btn" @click="$emit('toggle-logs')" title="Toggle logs">
+      <button class="topbar-btn" @click="$emit('toggle-logs')" title="Toggle logs" aria-label="Toggle logs">
         <BookOpenIcon :size="15" />
       </button>
     </div>
