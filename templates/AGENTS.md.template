@@ -94,6 +94,127 @@ src/
 
 ---
 
+## Jonggrang Workflow
+
+Jonggrang uses a **two-phase planning** flow so humans can review and edit a plan before AI decomposes it into tasks.
+
+### Full workflow
+
+```bash
+# Phase 1 — generate a human-readable draft plan
+jonggrang plan "add JWT authentication"
+# → AI writes .jonggrang/plan.md (high-level, no tasks yet)
+# → Interactive options:
+#     Approve           → run Phase 2 immediately
+#     Edit with AI      → describe changes, AI revises plan, loop back
+#     Edit in $EDITOR   → open editor, loop back
+#     Save draft        → exit, run "jonggrang approve" later
+#     Abort             → discard plan.md
+
+# Resume after accidental close:
+jonggrang plan
+# → no description → shows list of pending + archived plans
+# → pick one → shows plan + interactive options again
+
+# Phase 2 — approve plan → decompose into tasks
+jonggrang approve
+# → AI reads .jonggrang/plan.md → runs `jonggrang task import` to create tasks
+# → plan.md is archived to .jonggrang/.output/features/<featureId>/plan.md
+
+# Execute tasks
+jonggrang work
+```
+
+### Shorthand options
+
+```bash
+# Plan + auto-approve + tasks in one shot (skips human review)
+jonggrang plan "add JWT auth" --yes
+
+# Deep mode: 3-phase analysis (discovery + brainstorm + condense) → enriched plan
+# Adds Affected Areas, Risks, and Alternatives Considered sections to plan.md
+jonggrang plan "add JWT auth" --deep
+
+# Deep mode + auto-approve in one shot
+jonggrang plan "add JWT auth" --deep --yes
+
+# Full pipeline: plan → approve → execute in one shot
+jonggrang work "add JWT auth" --yes
+
+# Execute existing tasks only (skip pending plan warning)
+jonggrang work --ignore-plan
+```
+
+### Modifying an approved plan
+
+| Situation | Command |
+|-----------|---------|
+| Add new scope on top of done work | `jonggrang plan "also add rate limiting"` |
+| Change remaining pending work | `jonggrang plan "use Passport.js instead"` |
+| Undo completed tasks | Not supported — create new tasks to override |
+
+**Rule: completed tasks are immutable.** They reflect real code. Any correction must be a new task that fixes/replaces the previous implementation.
+
+### Plan file format
+
+```markdown
+---
+feature: jwt-auth
+branch: feat/jwt-auth
+work_type: MEDIUM
+description: JWT authentication with login, register, refresh
+created_at: 2026-04-16T10:30:00Z
+---
+
+# Plan: JWT Authentication
+
+## Approach
+...
+
+## Phases
+1. DB schema — users + refresh_tokens
+2. Auth service — register/login/refresh
+3. JWT middleware
+...
+
+## Key Decisions
+- Token storage: httpOnly cookie
+
+## Out of Scope
+- OAuth, 2FA, email verification
+```
+
+---
+
+## Bug Reporting
+
+When you discover a defect **outside the scope of your current task**, report it immediately:
+
+```bash
+# Report a bug and create a BUGFIX task in one shot
+jonggrang bug "description of what is broken" --feature <feature_id>
+# When asked "Create a task now?" → y
+
+# Or save for later (batch convert)
+jonggrang bug "description" --feature <feature_id>
+# When asked "Create a task now?" → n
+jonggrang bug convert --feature <feature_id>   # converts all open bugs to tasks later
+```
+
+Get the `feature_id` by running: `jonggrang task show <id>` — look for the `feature_id` field in the output.
+
+**Rules:**
+- Do NOT fix out-of-scope bugs inline — stay focused on your current task
+- Report real defects only (crashes, wrong return values, broken edge cases)
+- Do NOT report style issues, TODOs, or future features — those go in the plan
+
+Bug reports are saved to `.jonggrang/.output/features/<feature_id>/bugs.md` and can be viewed with:
+```bash
+jonggrang bug list
+```
+
+---
+
 ## Task Management CLI
 
 Use the `jonggrang task` CLI to manage tasks instead of editing `.jonggrang/jonggrang-tasks.json` directly.
@@ -135,7 +256,6 @@ jonggrang task remove task-003
 | `--desc` | Task description |
 | `--priority` | Priority (1 = highest) |
 | `--status` | pending, in_progress, completed, blocked, waiting, skipped |
-| `--role` | developer, tester, reviewer, lead |
 | `--skill` | Skill name |
 | `--blocked-by` | Comma-separated dependency task IDs |
 | `--files` | Comma-separated file paths |

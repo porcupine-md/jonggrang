@@ -24,7 +24,7 @@ function selectManifestEntry(list, currentFeatureId) {
   return running || active || list[0] || null;
 }
 
-export function useJonggrangRuntime({ requestJson, reportError }) {
+export function useJonggrangRuntime({ requestJson, reportError, onPlanUpdate }) {
   const socket = io({ transports: ['websocket'], autoConnect: false });
 
   const isRunning = ref(false);
@@ -149,6 +149,8 @@ export function useJonggrangRuntime({ requestJson, reportError }) {
     syncActiveManifest(list);
   };
 
+  const handlePlanUpdate = onPlanUpdate ? (d) => onPlanUpdate(d) : null;
+
   onMounted(() => {
     socket.connect();
     socket.on('jonggrang_status', handleStatus);
@@ -157,6 +159,7 @@ export function useJonggrangRuntime({ requestJson, reportError }) {
     socket.on('log', handleLog);
     socket.on('orchestration_complete', handleOrchestrationComplete);
     socket.on('manifests_update', handleManifestsUpdate);
+    if (handlePlanUpdate) socket.on('plan_update', handlePlanUpdate);
 
     void fetchManifests();
     void fetchCompaction();
@@ -178,6 +181,7 @@ export function useJonggrangRuntime({ requestJson, reportError }) {
     socket.off('log', handleLog);
     socket.off('orchestration_complete', handleOrchestrationComplete);
     socket.off('manifests_update', handleManifestsUpdate);
+    if (handlePlanUpdate) socket.off('plan_update', handlePlanUpdate);
     socket.disconnect();
   });
 

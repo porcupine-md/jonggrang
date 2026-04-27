@@ -28,6 +28,10 @@ defineProps({
     type: Boolean,
     default: false,
   },
+  hasPendingPlan: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 defineEmits([
@@ -57,7 +61,8 @@ defineEmits([
 
       <div class="sep"></div>
 
-      <button class="topbar-btn" @click="$emit('open-plan')" title="Plan feature">
+      <button class="topbar-btn" @click="$emit('open-plan')" title="Plan feature"
+        :class="{ 'has-pending-plan': hasPendingPlan }">
         <FileTextIcon :size="15" />
       </button>
       <button class="topbar-btn" @click="$emit('start-review')" title="Run review">
@@ -181,6 +186,10 @@ defineEmits([
 .topbar-btn:hover {
   background: var(--bg-elevated);
   color: var(--text-secondary);
+}
+
+.topbar-btn.has-pending-plan {
+  color: var(--yellow);
 }
 
 .run-btn,

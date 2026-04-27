@@ -10,6 +10,10 @@ defineProps({
     type: String,
     required: true,
   },
+  wide: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 defineEmits(['close']);
@@ -18,7 +22,7 @@ defineEmits(['close']);
 <template>
   <Teleport to="body">
     <div v-if="show" class="overlay" @click.self="$emit('close')">
-      <div class="modal">
+      <div :class="['modal', { 'modal-wide': wide }]">
         <div class="modal-head">
           <span class="modal-title">{{ title }}</span>
           <slot name="header-extra" />
@@ -56,6 +60,10 @@ defineEmits(['close']);
   width: 440px;
   max-width: 90vw;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+}
+
+.modal-wide {
+  width: 720px;
 }
 
 .modal-head {

@@ -55,6 +55,18 @@ npm run test -- --run  # run just the new/changed tests
 
 If any check fails, fix before signaling.
 
+## Bugs Discovered While Implementing
+
+If you notice a defect that is **outside the scope of your current task** (e.g., a bug in an adjacent module, an incorrect helper, a broken edge case you weren't asked to fix):
+
+```bash
+jonggrang bug "description of what is broken and where" --feature <feature_id>
+# Answer "Create a task now?" with y to create a BUGFIX task immediately
+```
+
+This appends the bug to `.jonggrang/.output/features/<feature_id>/bugs.md` and creates a traceable task.
+**Do NOT fix out-of-scope bugs inline.** Stay focused on your current task.
+
 ## Output File
 
 `.jonggrang/.output/features/{feature_id}/08-developer-{task_id}.json`

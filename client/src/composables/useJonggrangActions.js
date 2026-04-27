@@ -65,8 +65,8 @@ export function useJonggrangActions({
     if (!response) return;
 
     clearLogs();
-    showPlanModal.value = false;
     planDesc.value = '';
+    // Don't close modal — plan_update socket event advances to review stage
   }
 
   async function stopWork() {

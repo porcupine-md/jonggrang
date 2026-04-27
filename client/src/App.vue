@@ -29,11 +29,13 @@ const currentView    = ref('kanban'); // 'kanban' | 'graph'
 const selectedTaskId = ref(null);
 const showLogPanel   = ref(true);
 const showNewTaskForm = ref(false);
-const showPlanModal  = ref(false);
-const showWorkModal  = ref(false);
-const newTask        = ref({ title: '', description: '', priority: 1 });
-const planDesc       = ref('');
-const workDesc       = ref('');
+const showPlanModal    = ref(false);
+const planStage        = ref('describe'); // 'describe' | 'review'
+const planDesc         = ref('');
+const pendingPlan      = ref('');         // plan.md content for review
+const showWorkModal    = ref(false);
+const newTask          = ref({ title: '', description: '', priority: 1 });
+const workDesc         = ref('');
 
 const { requestError, clearRequestError, setRequestError, requestJson } = useJonggrangApi();
 const {
@@ -50,6 +52,16 @@ const {
 } = useJonggrangRuntime({
   requestJson,
   reportError: setRequestError,
+  onPlanUpdate: (d) => {
+    if (d?.exists && d.content) {
+      pendingPlan.value = d.content;
+      if (showPlanModal.value && planStage.value === 'describe') {
+        planStage.value = 'review';
+      }
+    } else {
+      pendingPlan.value = '';
+    }
+  },
 });
 const { logContainerRef, hasLogs, logLineCount, clearTerminal } = useLogTerminal(logs);
 
@@ -155,6 +167,37 @@ async function copyLogs() {
   }
 }
 
+function openPlanModal() {
+  if (pendingPlan.value) {
+    planStage.value = 'review';
+  } else {
+    planStage.value = 'describe';
+    planDesc.value = '';
+  }
+  showPlanModal.value = true;
+}
+
+async function approvePlan() {
+  try {
+    if (pendingPlan.value) {
+      await requestJson('/api/jonggrang/plan/content', { method: 'PUT', body: { content: pendingPlan.value } });
+    }
+    clearLogs();
+    showPlanModal.value = false;
+    await requestJson('/api/jonggrang/approve', { method: 'POST', body: {} });
+  } catch (err) {
+    setRequestError(err, 'Failed to approve plan.');
+  }
+}
+
+async function discardPlan() {
+  try {
+    await requestJson('/api/jonggrang/plan/content', { method: 'DELETE' });
+  } catch { /* ignore */ }
+  pendingPlan.value = '';
+  showPlanModal.value = false;
+}
+
 function selectTask(task) {
   selectedTaskId.value = selectedTaskId.value === task.id ? null : task.id;
 }
@@ -167,8 +210,9 @@ function selectTask(task) {
       :current-view="currentView"
       :ctx-pct="ctxPct"
       :is-running="isRunning"
+      :has-pending-plan="!!pendingPlan"
       @select-view="currentView = $event"
-      @open-plan="showPlanModal = true"
+      @open-plan="openPlanModal"
       @start-review="startReview"
       @open-work="showWorkModal = true"
       @stop-work="stopWork"
@@ -258,9 +302,16 @@ function selectTask(task) {
     <PlanModal
       :show="showPlanModal"
       :description="planDesc"
+      :stage="planStage"
+      :pending-plan="pendingPlan"
+      :is-running="isRunning"
       @close="showPlanModal = false"
       @update:description="planDesc = $event"
+      @update:pending-plan="pendingPlan = $event"
       @run="runPlan"
+      @approve="approvePlan"
+      @discard="discardPlan"
+      @back="planStage = 'describe'"
     />
 
     <NewTaskModal
@@ -300,5 +351,4 @@ function selectTask(task) {
 .terminal-host {
   height: 100%;
 }
-
 </style>
