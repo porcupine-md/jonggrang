@@ -106,7 +106,7 @@ export function useLogTerminal(logs) {
     if (!diff) return;
 
     const newlineCount = (diff.match(/\n/g) || []).length;
-    logLineCount.value += newlineCount + (logContentLength.value === 0 ? 1 : 0);
+    logLineCount.value += newlineCount + (logLineCount.value === 0 ? 1 : 0);
     term.write(diff.replace(/\r?\n/g, '\r\n'));
     logContentLength.value = nextLogs.length;
     term.scrollToBottom();
