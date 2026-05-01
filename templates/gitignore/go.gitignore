@@ -1,0 +1,21 @@
+# Go
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Vendor (uncomment if not using modules)
+# vendor/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db

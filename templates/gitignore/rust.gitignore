@@ -1,0 +1,15 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock (keep for binaries, omit for libraries)
+# Cargo.lock
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db

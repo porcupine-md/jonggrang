@@ -27,6 +27,12 @@ Read AGENTS.md for conventions. Read existing commands to understand patterns.
 
 ## Instructions
 
+0. **Ensure `.gitignore` is set up**
+   - Check if `.gitignore` exists
+   - Detect language: `go.mod` → Go, `Cargo.toml` → Rust, `pyproject.toml`/`requirements.txt` → Python, `package.json` → Node/TypeScript
+   - Create or append missing entries using `templates/gitignore/<lang>.gitignore` as reference
+   - Never remove or overwrite existing entries — only append what's missing
+
 1. **Analyze existing command patterns**
    - Read existing command files
    - Identify: argument parsing library (cobra, clap, click, commander, argparse, etc.)
