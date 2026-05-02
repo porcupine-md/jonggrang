@@ -958,10 +958,26 @@ async function cmdPlan(args, opts = {}) {
     feedback.clearFeedbackState(PROJECT_ROOT);
 
     const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
-    await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+    const result = await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, captureText: autoApprove });
+
+    // If --yes and the agent didn't write plan.md, extract it from captured output
+    if (autoApprove && !lib.fileExists(PLAN_FILE)) {
+      const captured = typeof result === 'object' ? result.text : null;
+      const extracted = lib.extractPlanFromText(captured);
+      if (extracted) {
+        fs.mkdirSync(path.dirname(PLAN_FILE), { recursive: true });
+        fs.writeFileSync(PLAN_FILE, extracted, 'utf8');
+        logInfo('Plan extracted from agent output and saved to plan.md.');
+      }
+    }
   }
 
   if (autoApprove) {
+    if (!lib.fileExists(PLAN_FILE)) {
+      logError('Plan generation failed — agent did not write plan.md.');
+      logInfo('Re-run without --yes to see full agent output and debug the issue.');
+      process.exit(1);
+    }
     logInfo('Auto-approving plan (--yes)...');
     await cmdApprove([], { quiet: true });
     if (!opts.fromWork) logSuccess('Tasks ready. Run "jonggrang work" to execute.');
