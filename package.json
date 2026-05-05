@@ -38,7 +38,10 @@
     "dev:client": "cd client && npm run dev",
     "dev": "npm run dev:server & npm run dev:client",
     "build": "cd client && npm install && npm run build",
-    "install:all": "npm install && cd client && npm install"
+    "install:all": "npm install && cd client && npm install",
+    "check": "bash scripts/check.sh",
+    "check:quick": "bash scripts/check.sh --quick",
+    "check:syntax": "bash scripts/check.sh --syntax-only"
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0",
