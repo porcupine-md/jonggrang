@@ -6,52 +6,56 @@
 # Input (stdin): JSON { session_id, stop_reason, ... }
 # Exit 0 = allow exit, Exit 2 = block exit with message
 
-set -euo pipefail
-
-INPUT=$(cat)
-PROJECT_ROOT=$(echo "$INPUT" | jq -r '.cwd // (env.JONGGRANG_PROJECT_ROOT // "")')
-
-if [[ -z "$PROJECT_ROOT" ]]; then
-  exit 0
+# Read JSON from stdin only if it's a pipe (not a terminal)
+if [ -t 0 ]; then
+  INPUT='{}'
+else
+  INPUT=$(cat 2>/dev/null || echo '{}')
 fi
 
-VIOLATIONS=()
+PROJECT_ROOT=$(echo "$INPUT" | jq -r '.cwd // (env.JONGGRANG_PROJECT_ROOT // "")' 2>/dev/null || true)
+
+# Fallback: use git root or pwd when no JSON cwd provided (e.g. manual run)
+if [ -z "$PROJECT_ROOT" ]; then
+  PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+fi
+
+VIOLATION_COUNT=0
+VIOLATION_MSGS=""
 
 # ─── Check 1: Untracked markdown files outside .jonggrang/.output/ ────────────
-# Agents should write reports to .jonggrang/.output/, not scatter them
-UNTRACKED_MD=$(git -C "$PROJECT_ROOT" ls-files --others --exclude-standard 2>/dev/null | grep '\.md$' \
-  | grep -v '\.jonggrang/' | grep -v '\.claude/' | grep -v '\.opencode/' \
+UNTRACKED_MD=$(git -C "$PROJECT_ROOT" ls-files --others --exclude-standard 2>/dev/null \
+  | grep '\.md$' \
+  | grep -v 'node_modules/' | grep -v '\.jonggrang/' | grep -v '\.claude/' | grep -v '\.opencode/' \
   | grep -v 'AGENTS\.md' | grep -v 'CLAUDE\.md' | grep -v 'SKILL\.md' | grep -v 'progress\.txt' \
   | head -10 || true)
 
-if [[ -n "$UNTRACKED_MD" ]]; then
+if [ -n "$UNTRACKED_MD" ]; then
   while IFS= read -r file; do
-    VIOLATIONS+=("Untracked .md outside .jonggrang/.output/: $file")
+    VIOLATION_COUNT=$((VIOLATION_COUNT + 1))
+    VIOLATION_MSGS="${VIOLATION_MSGS}  ✗ Untracked .md outside .jonggrang/.output/: ${file}\n"
   done <<< "$UNTRACKED_MD"
 fi
 
 # ─── Check 2: Feedback loop state — is dirty bit still set? ──────────────────
 FEEDBACK_STATE="$PROJECT_ROOT/.jonggrang/.ephemeral/feedback-loop-state.json"
-if [[ -f "$FEEDBACK_STATE" ]]; then
+if [ -f "$FEEDBACK_STATE" ]; then
   ACTIVE=$(jq -r '.active // false' "$FEEDBACK_STATE" 2>/dev/null || echo "false")
   DIRTY=$(jq -r '.dirty_bit // false' "$FEEDBACK_STATE" 2>/dev/null || echo "false")
-
-  if [[ "$ACTIVE" == "true" && "$DIRTY" == "true" ]]; then
-    VIOLATIONS+=("Feedback loop dirty bit still set — review/testing incomplete")
+  if [ "$ACTIVE" = "true" ] && [ "$DIRTY" = "true" ]; then
+    VIOLATION_COUNT=$((VIOLATION_COUNT + 1))
+    VIOLATION_MSGS="${VIOLATION_MSGS}  ✗ Feedback loop dirty bit still set — review/testing incomplete\n"
   fi
 fi
 
-
 # ─── Report ──────────────────────────────────────────────────────────────────
-if [[ ${#VIOLATIONS[@]} -eq 0 ]]; then
+if [ "$VIOLATION_COUNT" -eq 0 ]; then
   exit 0
 fi
 
 echo "=== QUALITY GATE VIOLATIONS ==="
-for v in "${VIOLATIONS[@]}"; do
-  echo "  ✗ $v"
-done
+printf "%b" "$VIOLATION_MSGS"
 echo ""
 echo "Resolve violations before completing this phase."
-echo "{ \"decision\": \"block\", \"reason\": \"Quality gate: ${#VIOLATIONS[@]} violation(s) found\" }"
+echo "{ \"decision\": \"block\", \"reason\": \"Quality gate: ${VIOLATION_COUNT} violation(s) found\" }"
 exit 2
