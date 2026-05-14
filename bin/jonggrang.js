@@ -2117,6 +2117,184 @@ async function cmdMenu() {
 }
 
 // ============================================================
+// AUTH / PROVIDER COMMANDS
+// ============================================================
+
+// Resolve Pi auth file path: reuse ~/.pi/agent if it exists, else ~/.jonggrang/agent
+function resolveAuthPath() {
+  const os = require('os');
+  const piAgentDir = path.join(os.homedir(), '.pi', 'agent');
+  if (fs.existsSync(piAgentDir)) return undefined; // default → ~/.pi/agent/auth.json
+  return path.join(os.homedir(), '.jonggrang', 'agent', 'auth.json');
+}
+
+const API_KEY_PROVIDERS = [
+  { id: 'anthropic',               name: 'Anthropic' },
+  { id: 'openai',                  name: 'OpenAI' },
+  { id: 'google',                  name: 'Google Gemini' },
+  { id: 'deepseek',                name: 'DeepSeek' },
+  { id: 'mistral',                 name: 'Mistral' },
+  { id: 'groq',                    name: 'Groq' },
+  { id: 'xai',                     name: 'xAI (Grok)' },
+  { id: 'openrouter',              name: 'OpenRouter' },
+  { id: 'azure-openai-responses',  name: 'Azure OpenAI' },
+  { id: 'cloudflare-ai-gateway',   name: 'Cloudflare AI Gateway' },
+  { id: 'fireworks',               name: 'Fireworks AI' },
+  { id: 'together',                name: 'Together AI' },
+  { id: 'huggingface',             name: 'Hugging Face' },
+  { id: 'cerebras',                name: 'Cerebras' },
+];
+
+async function cmdLogin() {
+  const { AuthStorage, LoginDialogComponent, initTheme } = await import('@mariozechner/pi-coding-agent');
+  const { TUI, ProcessTerminal } = await import('@mariozechner/pi-tui');
+  const { runJonggrangTUI } = require('../lib/tui');
+
+  initTheme(); // required by LoginDialogComponent before any themed rendering
+
+  const authPath = resolveAuthPath();
+  const authStorage = authPath ? AuthStorage.create(authPath) : AuthStorage.create();
+
+  const oauthProviders = authStorage.getOAuthProviders();
+
+  const items = [
+    ...oauthProviders.map(p => ({ value: `oauth:${p.id}`, label: p.name, description: 'subscription (OAuth)' })),
+    ...API_KEY_PROVIDERS.map(p => ({ value: `apikey:${p.id}`, label: p.name, description: 'API key' })),
+  ];
+
+  const choice = await runJonggrangTUI(items);
+  if (!choice || choice === 'exit') return;
+
+  if (choice.startsWith('oauth:')) {
+    const providerId = choice.slice(6);
+    const providerName = oauthProviders.find(p => p.id === providerId)?.name || providerId;
+
+    await new Promise((resolve) => {
+      let settled = false;
+      const done = (ok, msg) => {
+        if (settled) return;
+        settled = true;
+        if (ok) console.log(`\n✓ Logged in to ${providerName}`);
+        else logError(`Login failed${msg ? ': ' + msg : ''}`);
+        resolve();
+      };
+
+      const terminal = new ProcessTerminal();
+      const tui = new TUI(terminal);
+
+      const dialog = new LoginDialogComponent(tui, providerId, (success, message) => {
+        tui.stop();
+        done(success, message);
+      });
+
+      tui.addChild(dialog);
+      tui.setFocus(dialog);
+      tui.start();
+
+      authStorage.login(providerId, {
+        onAuth:          (info) => dialog.showAuth(info.url, info.instructions),
+        onPrompt:        async (prompt) => dialog.showPrompt(prompt.message, prompt.placeholder),
+        onProgress:      (msg) => dialog.showProgress(msg),
+        onManualCodeInput: () => dialog.showManualInput('Paste the authorization code:'),
+        signal:          dialog.signal,
+      }).then(() => {
+        tui.stop();
+        done(true);
+      }).catch((err) => {
+        if (!dialog.signal.aborted) {
+          tui.stop();
+          done(false, err.message);
+        } else {
+          tui.stop();
+          resolve(); // user cancelled
+        }
+      });
+    });
+
+  } else if (choice.startsWith('apikey:')) {
+    const providerId = choice.slice(7);
+    const providerName = API_KEY_PROVIDERS.find(p => p.id === providerId)?.name || providerId;
+
+    const key = await text({
+      message: `Enter API key for ${providerName}:`,
+      validate(value) { if (!value || !value.trim()) return 'API key is required.'; },
+    });
+    if (isCancel(key)) { logWarn('Login cancelled.'); return; }
+
+    authStorage.set(providerId, { type: 'api_key', key: key.trim() });
+    console.log(`✓ API key saved for ${providerName}`);
+  }
+}
+
+async function cmdLogout() {
+  const { AuthStorage } = await import('@mariozechner/pi-coding-agent');
+  const { runJonggrangTUI } = require('../lib/tui');
+
+  const authPath = resolveAuthPath();
+  const authStorage = authPath ? AuthStorage.create(authPath) : AuthStorage.create();
+
+  const configured = authStorage.list();
+  if (configured.length === 0) {
+    console.log('No providers configured. Use `jonggrang login` to add one.');
+    return;
+  }
+
+  const items = configured.map(id => {
+    const status = authStorage.getAuthStatus(id);
+    return { value: id, label: id, description: status.source ? `via ${status.source}` : 'configured' };
+  });
+
+  const choice = await runJonggrangTUI(items);
+  if (!choice || choice === 'exit') return;
+
+  authStorage.logout(choice);
+  console.log(`✓ Logged out from ${choice}`);
+}
+
+async function cmdModel() {
+  const { AuthStorage, ModelRegistry } = await import('@mariozechner/pi-coding-agent');
+  const { runJonggrangTUI } = require('../lib/tui');
+
+  const authPath = resolveAuthPath();
+  const authStorage = authPath ? AuthStorage.create(authPath) : AuthStorage.create();
+  const modelRegistry = ModelRegistry.create(authStorage);
+
+  let models = modelRegistry.getAvailable();
+  if (models.length === 0) {
+    console.log('No configured providers found — showing all models. Run `jonggrang login` first.');
+    models = modelRegistry.getAll();
+  }
+  if (models.length === 0) {
+    logError('No models available.');
+    return;
+  }
+
+  const items = models.map(m => ({
+    value: `${m.provider}::${m.id}`,
+    label: m.name || m.id,
+    description: String(m.provider),
+  }));
+
+  const choice = await runJonggrangTUI(items);
+  if (!choice || choice === 'exit') return;
+
+  const sepIdx = choice.indexOf('::');
+  const provider = choice.slice(0, sepIdx);
+  const modelId  = choice.slice(sepIdx + 2);
+
+  if (lib.fileExists(CONFIG_FILE)) {
+    const cfg = lib.readJSON(CONFIG_FILE) || {};
+    cfg.provider = provider;
+    cfg.model = modelId;
+    lib.writeJSON(CONFIG_FILE, cfg);
+    console.log(`✓ Model set to ${modelId} (${provider})`);
+  } else {
+    logWarn('Project not initialized — run `jonggrang init` first to save this selection.');
+    console.log(`  Selected: ${modelId} (${provider})`);
+  }
+}
+
+// ============================================================
 // TASK CLI
 // ============================================================
 
@@ -2473,6 +2651,9 @@ Commands:
   status                  Show pipeline state + task board
   review                  Run code review
   task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
+  login                   Add provider credentials (OAuth subscription or API key)
+  logout                  Remove provider credentials
+  model                   Select AI model for jonggrang engine
   web                     Start web dashboard
   menu                    Interactive menu launcher
   version                 Show version
@@ -2604,6 +2785,15 @@ async function main() {
       break;
     case 'orchestrate':
       await cmdOrchestrate(planArgs);
+      break;
+    case 'login':
+      await cmdLogin();
+      break;
+    case 'logout':
+      await cmdLogout();
+      break;
+    case 'model':
+      await cmdModel();
       break;
     case 'web':
     case 'dashboard':
