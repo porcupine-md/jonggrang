@@ -10,7 +10,7 @@
 //   tool_result          → track modifications (dirty bit)
 //   agent_stop           → feedback loop gate + quality gate + output enforcement
 //
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const path = require("path") as typeof import("path");
 const fs = require("fs") as typeof import("fs");

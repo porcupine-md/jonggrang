@@ -52,7 +52,7 @@ jonggrang work "feature" --deep --yes    # deep mode full pipeline
 - **AI agent** (pick one):
   - [OpenCode](https://opencode.ai/) (default) — `curl -fsSL https://opencode.ai/install | bash`
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — `npm install -g @anthropic-ai/claude-code`
-  - **Jonggrang** (Pi engine, multi-provider) — `npm install -g @mariozechner/pi-coding-agent`
+  - **Jonggrang** (Pi engine, multi-provider) — `npm install -g @earendil-works/pi-coding-agent`
 - [jq](https://jqlang.github.io/jq/) — `brew install jq`
 - git
 
@@ -230,6 +230,31 @@ Runs a comprehensive code review on all changes:
 - Performance patterns
 
 Output goes to `jonggrang-log/review-{timestamp}.md`.
+
+### `jonggrang agent`
+
+Opens a full interactive TUI chat session powered by the Pi engine. Chat with the AI directly — no plan/phase required.
+
+```bash
+jonggrang agent
+```
+
+Inside the chat, use `/` commands to trigger jonggrang workflow operations without leaving the session:
+
+| Command | Description |
+|---------|-------------|
+| `/plan <description>` | Generate `.jonggrang/plan.md` for a feature |
+| `/approve` | Decompose the current plan into tasks |
+| `/work [description]` | Execute the task queue |
+| `/status` | Show the project task board |
+| `/review` | Run a code review |
+| `/login` | Add provider credentials |
+| `/logout` | Remove provider credentials |
+| `/model` | Switch AI model |
+
+All other Pi built-in commands (`/compact`, `/help`, Ctrl+P model cycling, etc.) work as normal.
+
+> Requires the jonggrang engine (`npm install -g @earendil-works/pi-coding-agent`). Run `jonggrang login` first to configure a provider.
 
 ### `jonggrang login`
 

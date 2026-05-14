@@ -137,7 +137,7 @@ function checkDeps() {
         case 'git':      console.log('  Install git:      brew install git'); break;
         case 'opencode':  console.log('  Install opencode:  curl -fsSL https://opencode.ai/install | bash'); break;
         case 'claude':    console.log('  Install claude:    npm install -g @anthropic-ai/claude-code'); break;
-        case 'jonggrang': console.log('  Install jonggrang engine: npm install -g @mariozechner/pi-coding-agent'); break;
+        case 'jonggrang': console.log('  Install jonggrang engine: npm install -g @earendil-works/pi-coding-agent'); break;
         default:         console.log(`  Install ${cmd}`); break;
       }
     }
@@ -811,6 +811,36 @@ function displayPlanBox(planFile) {
   console.log('');
 }
 
+// Ensure the project is initialized. Offers to run `jonggrang init` if not.
+// Returns true if we can proceed, false if the user declined or init failed.
+async function ensureInit() {
+  if (lib.fileExists(CONFIG_FILE)) return true;
+
+  const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
+  if (!isInteractiveTTY) {
+    logError('Project not initialized. Run "jonggrang init" first.');
+    return false;
+  }
+
+  logWarn('Project not initialized (.jonggrang/jonggrang.json not found).');
+  const doInit = await confirm({
+    message: 'Initialize project now?',
+    initialValue: true,
+  });
+  if (isCancel(doInit) || !doInit) {
+    cancel('Run "jonggrang init" first to set up the project.');
+    return false;
+  }
+
+  await cmdInit();
+
+  if (!lib.fileExists(CONFIG_FILE)) {
+    logError('Init did not complete successfully. Please run "jonggrang init" manually.');
+    return false;
+  }
+  return true;
+}
+
 // ── PHASE 1: Generate draft plan.md ───────────────────────────
 // opts.fromWork = true → suppress "run jonggrang work" tail (cmdWork will continue itself)
 async function cmdPlan(args, opts = {}) {
@@ -824,13 +854,22 @@ async function cmdPlan(args, opts = {}) {
     else if (!arg.startsWith('--')) description = arg;
   }
 
-  safeCheckConfig();
+  if (!await ensureInit()) return;
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
   }
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
+
+  // Ask about deep mode when user hasn't specified --deep and a description was given
+  if (description && !deepMode && !autoApprove && isInteractiveTTY) {
+    const useDeep = await confirm({
+      message: 'Use deep mode? (3-phase analysis — richer plan for complex features)',
+      initialValue: false,
+    });
+    if (!isCancel(useDeep)) deepMode = !!useDeep;
+  }
 
   // ── No description → pick from available plans ──────────────
   if (!description) {
@@ -2117,14 +2156,133 @@ async function cmdMenu() {
 }
 
 // ============================================================
+// AGENT CHAT (jonggrang agent)
+// ============================================================
+
+// Descriptions shown in Pi's /help for each registered slash command
+const AGENT_COMMAND_DESCRIPTIONS = {
+  plan:    'Generate a plan  — usage: /plan <description>',
+  approve: 'Approve plan → decompose into tasks',
+  work:    'Execute tasks   — usage: /work [description]',
+  status:  'Show project task board',
+  review:  'Run code review',
+  login:   'Add provider credentials',
+  logout:  'Remove provider credentials',
+  model:   'Select AI model',
+};
+
+// Spawn jonggrang CLI as a subprocess (inherits terminal so output is visible)
+function spawnJonggrang(args) {
+  const { spawnSync } = require('child_process');
+  return spawnSync(process.execPath, [process.argv[1], ...args], { stdio: 'inherit' });
+}
+
+async function cmdAgent() {
+  const os = require('os');
+  const { main, initTheme, ENV_AGENT_DIR } = await import('@earendil-works/pi-coding-agent');
+
+  initTheme();
+
+  // Resolve agentDir: ~/.pi/agent if Pi is installed (~/.pi exists), else ~/.jonggrang/agent
+  // Pi reads the agent dir from ENV_AGENT_DIR env var — no --agent-dir CLI flag exists.
+  const piAgentDir = path.join(os.homedir(), '.pi', 'agent');
+  const jonggrangAgentDir = path.join(os.homedir(), '.jonggrang', 'agent');
+  const piInstalled = fs.existsSync(path.join(os.homedir(), '.pi'));
+  const agentDir = piInstalled ? piAgentDir : jonggrangAgentDir;
+  if (!piInstalled) {
+    process.env[ENV_AGENT_DIR] = agentDir;
+  }
+
+  // Extension factory — registers /plan, /approve, /work, /status, /review, /login, /logout, /model
+  const jonggrangExtension = (pi) => {
+    pi.registerCommand('plan', {
+      description: AGENT_COMMAND_DESCRIPTIONS.plan,
+      handler: async (args, ctx) => {
+        if (!args.trim()) {
+          ctx.ui.notify('Usage: /plan <description>', 'warning');
+          return;
+        }
+        await ctx.waitForIdle();
+        spawnJonggrang(['plan', args.trim()]);
+      },
+    });
+
+    pi.registerCommand('approve', {
+      description: AGENT_COMMAND_DESCRIPTIONS.approve,
+      handler: async (_args, ctx) => {
+        await ctx.waitForIdle();
+        spawnJonggrang(['approve']);
+      },
+    });
+
+    pi.registerCommand('work', {
+      description: AGENT_COMMAND_DESCRIPTIONS.work,
+      handler: async (args, ctx) => {
+        await ctx.waitForIdle();
+        const cmdArgs = ['work', ...(args.trim() ? [args.trim()] : [])];
+        spawnJonggrang(cmdArgs);
+      },
+    });
+
+    pi.registerCommand('status', {
+      description: AGENT_COMMAND_DESCRIPTIONS.status,
+      handler: async (_args, ctx) => {
+        await ctx.waitForIdle();
+        spawnJonggrang(['status']);
+      },
+    });
+
+    pi.registerCommand('review', {
+      description: AGENT_COMMAND_DESCRIPTIONS.review,
+      handler: async (_args, ctx) => {
+        await ctx.waitForIdle();
+        spawnJonggrang(['review']);
+      },
+    });
+
+    pi.registerCommand('login', {
+      description: AGENT_COMMAND_DESCRIPTIONS.login,
+      handler: async (_args, ctx) => {
+        await ctx.waitForIdle();
+        spawnJonggrang(['login']);
+      },
+    });
+
+    pi.registerCommand('logout', {
+      description: AGENT_COMMAND_DESCRIPTIONS.logout,
+      handler: async (_args, ctx) => {
+        await ctx.waitForIdle();
+        spawnJonggrang(['logout']);
+      },
+    });
+
+    pi.registerCommand('model', {
+      description: AGENT_COMMAND_DESCRIPTIONS.model,
+      handler: async (_args, ctx) => {
+        await ctx.waitForIdle();
+        spawnJonggrang(['model']);
+      },
+    });
+
+    // Redirect skills/prompts to .jonggrang/ directories
+    pi.on('resources_discover', async (event) => ({
+      skillPaths:  [`${event.cwd}/.jonggrang/skills`],
+      promptPaths: [`${event.cwd}/.jonggrang/prompts`],
+      themePaths:  [],
+    }));
+  };
+
+  await main([], { extensionFactories: [jonggrangExtension] });
+}
+
+// ============================================================
 // AUTH / PROVIDER COMMANDS
 // ============================================================
 
-// Resolve Pi auth file path: reuse ~/.pi/agent if it exists, else ~/.jonggrang/agent
+// Resolve Pi auth file path: use Pi's default if ~/.pi exists, else ~/.jonggrang/agent/auth.json
 function resolveAuthPath() {
   const os = require('os');
-  const piAgentDir = path.join(os.homedir(), '.pi', 'agent');
-  if (fs.existsSync(piAgentDir)) return undefined; // default → ~/.pi/agent/auth.json
+  if (fs.existsSync(path.join(os.homedir(), '.pi'))) return undefined; // default → ~/.pi/agent/auth.json
   return path.join(os.homedir(), '.jonggrang', 'agent', 'auth.json');
 }
 
@@ -2146,8 +2304,8 @@ const API_KEY_PROVIDERS = [
 ];
 
 async function cmdLogin() {
-  const { AuthStorage, LoginDialogComponent, initTheme } = await import('@mariozechner/pi-coding-agent');
-  const { TUI, ProcessTerminal } = await import('@mariozechner/pi-tui');
+  const { AuthStorage, LoginDialogComponent, initTheme } = await import('@earendil-works/pi-coding-agent');
+  const { TUI, ProcessTerminal } = await import('@earendil-works/pi-tui');
   const { runJonggrangTUI } = require('../lib/tui');
 
   initTheme(); // required by LoginDialogComponent before any themed rendering
@@ -2227,7 +2385,7 @@ async function cmdLogin() {
 }
 
 async function cmdLogout() {
-  const { AuthStorage } = await import('@mariozechner/pi-coding-agent');
+  const { AuthStorage } = await import('@earendil-works/pi-coding-agent');
   const { runJonggrangTUI } = require('../lib/tui');
 
   const authPath = resolveAuthPath();
@@ -2252,7 +2410,7 @@ async function cmdLogout() {
 }
 
 async function cmdModel() {
-  const { AuthStorage, ModelRegistry } = await import('@mariozechner/pi-coding-agent');
+  const { AuthStorage, ModelRegistry } = await import('@earendil-works/pi-coding-agent');
   const { runJonggrangTUI } = require('../lib/tui');
 
   const authPath = resolveAuthPath();
@@ -2651,6 +2809,7 @@ Commands:
   status                  Show pipeline state + task board
   review                  Run code review
   task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
+  agent                   Start interactive chat with the AI agent (Pi TUI)
   login                   Add provider credentials (OAuth subscription or API key)
   logout                  Remove provider credentials
   model                   Select AI model for jonggrang engine
@@ -2785,6 +2944,9 @@ async function main() {
       break;
     case 'orchestrate':
       await cmdOrchestrate(planArgs);
+      break;
+    case 'agent':
+      await cmdAgent();
       break;
     case 'login':
       await cmdLogin();
