@@ -145,7 +145,14 @@ Interactive wizard that sets up your project. Generates:
 - Installs `.jonggrang/extensions/jonggrang.ts` — TypeScript Pi extension with all enforcement hooks
 - Registers extension path in `~/.jonggrang/agent/settings.json`
 - Skills resolve from `.jonggrang/skills/` instead of `.claude/skills/` or `.opencode/skills/`
-- Supports any provider via env var: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, etc.
+- Supports any provider via env var or `jonggrang login`
+
+After init, configure your AI provider:
+
+```bash
+jonggrang login    # add provider credentials (OAuth or API key)
+jonggrang model    # select which model to use
+```
 
 ### `jonggrang plan <description>`
 
@@ -224,9 +231,50 @@ Runs a comprehensive code review on all changes:
 
 Output goes to `jonggrang-log/review-{timestamp}.md`.
 
+### `jonggrang login`
+
+Add provider credentials for the Jonggrang (Pi) engine. Supports OAuth subscriptions and API keys.
+
+```bash
+jonggrang login
+```
+
+A TUI menu lets you pick the provider:
+
+**OAuth subscriptions** (no API key needed — uses your existing subscription):
+- Anthropic Claude Pro/Max
+- GitHub Copilot
+- ChatGPT Plus/Pro (Codex)
+
+**API key providers** (paste your key):
+- Anthropic, OpenAI, Google Gemini, DeepSeek, Mistral, Groq, xAI, OpenRouter, Azure OpenAI, Cloudflare, Fireworks, Together AI, Hugging Face, Cerebras, and more
+
+Credentials are stored in `~/.pi/agent/auth.json` (or `~/.jonggrang/agent/auth.json` if Pi is not installed).
+
+### `jonggrang logout`
+
+Remove stored credentials for a provider.
+
+```bash
+jonggrang logout
+# → shows configured providers → select one to remove
+```
+
+### `jonggrang model`
+
+Select which AI model the Jonggrang engine will use. Shows models available for your configured providers.
+
+```bash
+jonggrang model
+# → TUI list of available models grouped by provider
+# → saves selection to .jonggrang/jonggrang.json
+```
+
+Requires at least one provider configured via `jonggrang login` (or an API key set as an environment variable).
+
 ### Interactive Menu
 
-Run `jonggrang` without arguments (or `jonggrang menu`) to launch an interactive menu.
+Run `jonggrang` without arguments (or `jonggrang menu`) to launch an interactive TUI menu (built on Pi TUI). Falls back to a plain `@clack/prompts` menu if Pi TUI is unavailable.
 
 ---
 
@@ -520,7 +568,9 @@ See `.jonggrang/jonggrang.json` after init:
 
 ```jsonc
 {
-  "tool": "opencode",
+  "tool": "opencode",          // opencode | claude | jonggrang
+  "provider": "anthropic",     // set by jonggrang model (jonggrang tool only)
+  "model": "claude-opus-4-5",  // set by jonggrang model (jonggrang tool only)
   "mode": {
     "autonomy": "balanced"
   },
