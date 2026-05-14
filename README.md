@@ -2,12 +2,9 @@
 
 > AI Development Workflow Orchestrator — from project bootstrap to delivery.
 
-Jonggrang is a CLI tool that orchestrates AI coding agents to handle your development workflow. It supports two modes:
+Jonggrang is a CLI tool that orchestrates AI coding agents to handle your development workflow. It uses a **Work Loop** model — decompose a feature into tasks, implement them one-by-one with a fresh agent per task.
 
-- **Work Loop** — decompose a feature into tasks, implement them one-by-one with a fresh agent per task
-- **Orchestrate** — full 16-phase deterministic pipeline with specialized roles, quality gates, and persistent state across sessions
-
-Supports [OpenCode](https://opencode.ai/) (default) and [Claude Code](https://claude.ai/code) as the AI agent backend.
+Supports three AI agent backends: [OpenCode](https://opencode.ai/), [Claude Code](https://claude.ai/code), and **Jonggrang** (built on [Pi](https://pi.dev/) — multi-provider, TypeScript-extensible).
 
 Inspired by the [Ralph Loop](https://github.com/snarktank/ralph), [Agent Orchestra](https://addyosmani.com/blog/code-agent-orchestra/) (Addy Osmani), and the [collapsed SDLC](https://boristane.com/blog/the-software-development-lifecycle-is-dead/) (Boris Tane).
 
@@ -15,7 +12,7 @@ Inspired by the [Ralph Loop](https://github.com/snarktank/ralph), [Agent Orchest
 
 ## How It Works
 
-### Work Loop (simple)
+### Work Loop
 
 ```
 You describe what you want
@@ -31,7 +28,7 @@ You describe what you want
         |            1. Fresh context (no accumulated confusion)
         |            2. Read AGENTS.md + .jonggrang/progress.txt (project knowledge)
         |            3. Pick highest priority unblocked task
-        |            4. Implement via AI agent (opencode/claude)
+        |            4. Implement via AI agent (opencode/claude/jonggrang)
         |            5. Validate (typecheck, tests, lint)
         |            6. Commit if pass
         |            7. Log learnings
@@ -42,51 +39,20 @@ You describe what you want
 
 **Shorthand options:**
 ```bash
-jonggrang plan "feature" --yes      # plan + auto-approve + tasks in one shot
+jonggrang plan "feature" --yes           # plan + auto-approve + tasks in one shot
 jonggrang plan "feature" --deep          # 3-phase deep analysis → enriched plan (Affected Areas, Risks, Alternatives)
 jonggrang work "feature" --yes           # full pipeline: plan → approve → execute
 jonggrang work "feature" --deep --yes    # deep mode full pipeline
 ```
 
-### Orchestrate (deterministic, 16-phase)
-
-```
-jonggrang orchestrate "Add payment integration"
-        |
-        v
-  Phase 1-2   Setup + Triage (classify work type, skip irrelevant phases)
-        |
-        v
-  Phase 3-4   Codebase Discovery + Skill Discovery
-        |
-        v
-  Phase 5-7   Lead Agent: Complexity → Brainstorming → Architecture Plan
-        |
-        v
-  Phase 8     Developer Agents implement each atomic task
-        |
-        v
-  Phase 9-11  Reviewer Agents: Design check → Domain compliance → Code quality
-        |
-        v
-  Phase 12    Test Lead designs the test strategy
-        |
-        v
-  Phase 13-15 Tester Agents: Execute → Coverage → Test quality
-        |
-        v
-  Phase 16    Completion: commit + PR
-```
-
-State is persisted in `MANIFEST.yaml` — sessions can be interrupted and resumed.
-
 ---
 
 ## Requirements
 
-- **AI agent** (at least one):
+- **AI agent** (pick one):
   - [OpenCode](https://opencode.ai/) (default) — `curl -fsSL https://opencode.ai/install | bash`
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — `npm install -g @anthropic-ai/claude-code`
+  - **Jonggrang** (Pi engine, multi-provider) — `npm install -g @mariozechner/pi-coding-agent`
 - [jq](https://jqlang.github.io/jq/) — `brew install jq`
 - git
 
@@ -126,9 +92,6 @@ jonggrang work                                        # execute tasks
 # 3c. Full pipeline in one command
 jonggrang work "REST API for todo management" --yes   # plan → approve → execute
 
-# 3d. Full deterministic orchestration
-jonggrang orchestrate "REST API for todo management with CRUD and tests"
-
 # 4. Review results
 jonggrang review
 ```
@@ -141,6 +104,9 @@ jonggrang init --name my-app --type api --stack express-typescript --autonomy ba
 
 # With Claude Code
 jonggrang init --name my-app --type api --tool claude --autonomy autonomous --force
+
+# With Jonggrang (Pi engine — supports Anthropic, OpenAI, Gemini, DeepSeek, and more)
+jonggrang init --name my-app --type api --tool jonggrang --autonomy autonomous --force
 ```
 
 ---
@@ -157,6 +123,7 @@ Interactive wizard that sets up your project. Generates:
 - `skills/` — prompt templates filtered by your project type
 - `.claude/settings.json` — Claude Code enforcement hooks (if `--tool claude`)
 - `.opencode/plugins/jonggrang.js` — OpenCode enforcement plugin (if `--tool opencode`)
+- `.jonggrang/extensions/jonggrang.ts` — Jonggrang (Pi) enforcement extension (if `--tool jonggrang`)
 
 **Flags to bypass the wizard:**
 
@@ -168,11 +135,17 @@ Interactive wizard that sets up your project. Generates:
 | `--team-size` | `2-5` | Team size (if team) |
 | `--state` | `new`, `existing` | New or existing project |
 | `--stack` | `nextjs-typescript`, `express-typescript`, `go`, `python-fastapi`, `library-typescript`, `rust`, `python`, `node-typescript` | Tech stack |
-| `--tool` | `opencode`, `claude` | AI agent tool (default: opencode) |
+| `--tool` | `opencode`, `claude`, `jonggrang` | AI agent tool (default: opencode) |
 | `--autonomy` | `supervised`, `balanced`, `autonomous` | Default autonomy mode |
 | `--ci` | `github-actions`, `gitlab-ci`, `none` | CI/CD provider |
 | `--testing` | `vitest`, `jest`, `go-test`, `pytest`, `none` | Test framework |
 | `--force` | — | Overwrite existing config |
+
+**What `--tool jonggrang` sets up:**
+- Installs `.jonggrang/extensions/jonggrang.ts` — TypeScript Pi extension with all enforcement hooks
+- Registers extension path in `~/.jonggrang/agent/settings.json`
+- Skills resolve from `.jonggrang/skills/` instead of `.claude/skills/` or `.opencode/skills/`
+- Supports any provider via env var: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, etc.
 
 ### `jonggrang plan <description>`
 
@@ -219,29 +192,6 @@ jonggrang work --branch feat/auth                 # create/use a branch
 jonggrang work --dry-run                          # show prompts, don't execute
 jonggrang work --debug                            # dump raw JSON from opencode/claude to stderr
 ```
-
-### `jonggrang orchestrate <description>`
-
-Full 16-phase deterministic orchestration. Classifies the work type, activates the appropriate phases, runs the five-role assembly line, and persists state across sessions.
-
-```bash
-jonggrang orchestrate "add Stripe payment integration"
-jonggrang orchestrate --resume                   # resume interrupted session
-jonggrang orchestrate --dry-run "feature"        # preview phases without executing
-jonggrang orchestrate --tool claude "feature"    # force Claude Code backend
-jonggrang orchestrate --mode supervised "feature" # pause at brainstorming phase
-```
-
-**Phase skipping by work type:**
-
-| Work Type | Trigger | Skipped Phases |
-|-----------|---------|----------------|
-| `BUGFIX` | "fix", "bug", "issue", "error" | 5, 6, 7, 9, 12 — no architecture, no brainstorming |
-| `SMALL` | < 100 lines, single concern | 5, 6, 7, 9 — no complexity analysis |
-| `MEDIUM` | Multi-file, some design | None |
-| `LARGE` | New subsystem, architectural | None — all 16 phases |
-
-A bug fix runs ~5 phases. A new subsystem gets all 16.
 
 ### `jonggrang status`
 
@@ -299,6 +249,7 @@ Jonggrang is built on a **Thin Agent / Fat Platform** model. The AI models are s
 ├─────────────────────────────────────────────┤
 │  HOOK LAYER        Deterministic enforcement │
 │  Claude Code hooks · OpenCode plugin        │
+│  Jonggrang extension (.jonggrang/extensions)│
 ├─────────────────────────────────────────────┤
 │  INFRASTRUCTURE    Compaction · Feedback     │
 │  Token gates · Dirty bits · Lock files      │
@@ -377,15 +328,17 @@ Returns: Read skills/library/frontend/debugging-react-hooks/SKILL.md
 
 Hooks enforce quality gates outside the LLM's context. The same rules apply regardless of which AI tool is used:
 
-| Layer | Event | Claude Code | OpenCode | Enforcement |
-|-------|-------|-------------|----------|-------------|
-| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | Block direct edits (agent-first) |
-| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | Block agent spawn if context > 85% |
-| 6 | Post-tool | `PostToolUse` | `tool.execute.after` | Set dirty bit when files modified |
-| 6 | File edit | `PostToolUse` | `file.edited` | Track domain (backend/frontend/testing) |
-| 7 | Sub-stop | `SubagentStop` | `session.updated` | Block exit if output in wrong location |
-| 8 | Stop | `Stop` | `session.idle` | Block exit until review + tests pass |
-| 8 | Stop | `Stop` | `session.idle` | Final quality gate (defense in depth) |
+| Layer | Event | Claude Code | OpenCode | Jonggrang (Pi) | Enforcement |
+|-------|-------|-------------|----------|----------------|-------------|
+| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `tool_call` | Block direct edits (agent-first) |
+| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `tool_call` | Block agent spawn if context > 85% |
+| 6 | Post-tool | `PostToolUse` | `tool.execute.after` | `tool_result` | Set dirty bit when files modified |
+| 6 | File edit | `PostToolUse` | `file.edited` | `tool_result` | Track domain (backend/frontend/testing) |
+| 7 | Sub-stop | `SubagentStop` | `session.updated` | `agent_stop` | Block exit if output in wrong location |
+| 8 | Stop | `Stop` | `session.idle` | `agent_stop` | Block exit until review + tests pass |
+| 8 | Stop | `Stop` | `session.idle` | `agent_stop` | Final quality gate (defense in depth) |
+
+Jonggrang hooks live in `.jonggrang/extensions/jonggrang.ts` (installed automatically by `jonggrang init --tool jonggrang`).
 
 **Feedback Loop (Level 2 enforcement):**
 
@@ -416,6 +369,7 @@ Before phases 3, 8, and 13 (heavy execution), the platform checks context usage:
 
 Claude Code: reads `~/.claude/projects/{hash}/*.jsonl` transcripts.
 OpenCode: refreshes on `session.compacted` event.
+Jonggrang: checks via `before_provider_request` event in Pi extension.
 
 ### Persistent State
 
@@ -447,7 +401,6 @@ OpenCode: refreshes on `session.compacted` event.
 | **autonomous** | Full loop — plans, implements, commits. Human reviews at the end | Well-defined tasks |
 
 ```bash
-jonggrang orchestrate --mode supervised "redesign auth system"
 jonggrang work --mode supervised
 ```
 
@@ -543,9 +496,12 @@ your-project/
 │   └── locks/               # File ownership locks
 ├── .claude/
 │   └── settings.json        # Claude Code enforcement hooks
-└── .opencode/
-    └── plugins/
-        └── jonggrang.js     # OpenCode enforcement plugin
+├── .opencode/
+│   └── plugins/
+│       └── jonggrang.js     # OpenCode enforcement plugin
+└── .jonggrang/
+    └── extensions/
+        └── jonggrang.ts     # Jonggrang (Pi) enforcement extension
 ```
 
 ### AGENTS.md

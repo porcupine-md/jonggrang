@@ -135,8 +135,9 @@ function checkDeps() {
       switch (cmd) {
         case 'jq':       console.log('  Install jq:       brew install jq'); break;
         case 'git':      console.log('  Install git:      brew install git'); break;
-        case 'opencode': console.log('  Install opencode: curl -fsSL https://opencode.ai/install | bash'); break;
-        case 'claude':   console.log('  Install claude:   npm install -g @anthropic-ai/claude-code'); break;
+        case 'opencode':  console.log('  Install opencode:  curl -fsSL https://opencode.ai/install | bash'); break;
+        case 'claude':    console.log('  Install claude:    npm install -g @anthropic-ai/claude-code'); break;
+        case 'jonggrang': console.log('  Install jonggrang engine: npm install -g @mariozechner/pi-coding-agent'); break;
         default:         console.log(`  Install ${cmd}`); break;
       }
     }
@@ -1494,11 +1495,12 @@ async function cmdInit() {
 
     if (!INIT_TOOL) {
       const toolAnswer = await select({
-        message: 'Primary AI agent tool (both Claude Code + OpenCode will be set up)',
+        message: 'Primary AI agent tool',
         initialValue: 'claude',
         options: [
           { value: 'claude',    label: 'Claude Code — primary tool' },
           { value: 'opencode',  label: 'OpenCode    — primary tool' },
+          { value: 'jonggrang', label: 'Jonggrang   — primary tool' },
         ],
       });
       if (isCancel(toolAnswer)) { cancel('Cancelled.'); return; }
@@ -1522,7 +1524,7 @@ async function cmdInit() {
   } else {
     const rl = createRL();
     if (!INIT_NAME)     INIT_NAME     = await ask(rl, 'Project name:',  path.basename(PROJECT_ROOT));
-    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'claude', 'claude|opencode');
+    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'claude', 'claude|opencode|jonggrang');
     if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:',  'autonomous', 'supervised|balanced|autonomous');
     rl.close();
   }

@@ -50,5 +50,8 @@
     "express": "^4.21.2",
     "js-yaml": "^4.1.1",
     "socket.io": "^4.8.1"
+  },
+  "optionalDependencies": {
+    "@mariozechner/pi-coding-agent": "latest"
   }
 }
