@@ -49,9 +49,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "js-yaml": "^4.1.1",
-    "socket.io": "^4.8.1"
-  },
-  "optionalDependencies": {
-    "@mariozechner/pi-coding-agent": "latest"
+    "socket.io": "^4.8.1",
+    "@mariozechner/pi-coding-agent": "^0.73.1"
   }
 }
