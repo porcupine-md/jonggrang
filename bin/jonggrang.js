@@ -1856,7 +1856,8 @@ function cmdWeb() {
 // INTERACTIVE MENU
 // ============================================================
 
-async function cmdMenu() {
+// Fallback menu using @clack/prompts (used when pi-tui is unavailable)
+async function cmdMenuClack() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     cmdHelp();
     return;
@@ -2008,6 +2009,110 @@ async function cmdMenu() {
 
   if (!outroShown) {
     outro('All set. Happy building!');
+  }
+}
+
+// Pi TUI menu loop — rich keyboard-navigable interface
+async function cmdMenuTUI(runJonggrangTUI) {
+  while (true) {
+    const hasPendingPlan = lib.fileExists(PLAN_FILE);
+    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
+
+    const items = [
+      { value: 'init',     label: 'init',      description: 'Initialize project' },
+      { value: 'plan',     label: 'plan',       description: 'Plan a new feature (Phase 1)' },
+      ...(hasArchivedPlans ? [{ value: 'pick-plan', label: 'pick-plan', description: 'Resume an archived plan' }] : []),
+      { value: 'approve',  label: 'approve',    description: `Approve plan — Phase 2${hasPendingPlan ? ' ◀ pending!' : ''}` },
+      { value: 'work',     label: 'work',        description: 'Execute tasks' },
+      { value: 'status',   label: 'status',      description: 'Show project status board' },
+      { value: 'review',   label: 'review',      description: 'Run code review' },
+      { value: 'web',      label: 'web',          description: 'Launch web dashboard' },
+      { value: 'exit',     label: 'exit',         description: 'Exit Jonggrang' },
+    ];
+
+    const choice = await runJonggrangTUI(items);
+    if (!choice || choice === 'exit') break;
+
+    try {
+      switch (choice) {
+        case 'init':
+          await cmdInit();
+          break;
+        case 'plan': {
+          const description = await text({
+            message: 'Feature description (Phase 1 — generates plan.md for review)',
+            validate(value) {
+              if (!value || !value.trim()) return 'Description is required.';
+            },
+          });
+          if (isCancel(description)) { logWarn('Plan cancelled.'); continue; }
+          checkDeps();
+          await cmdPlan([description.trim()]);
+          break;
+        }
+        case 'pick-plan':
+          checkDeps();
+          await cmdPlan([]);
+          break;
+        case 'approve':
+          checkDeps();
+          await cmdApprove([]);
+          break;
+        case 'work':
+          checkDeps();
+          await cmdWork();
+          break;
+        case 'status':
+          cmdStatus();
+          break;
+        case 'review':
+          checkDeps();
+          await cmdReview();
+          break;
+        case 'web': {
+          const portAnswer = await text({
+            message: `Dashboard port (current: ${WEB_PORT})`,
+            initialValue: String(WEB_PORT),
+            validate(value) {
+              if (!value || !value.trim()) return undefined;
+              return /^\d+$/.test(value.trim()) ? undefined : 'Port must be numeric.';
+            },
+          });
+          if (isCancel(portAnswer)) { logWarn('Dashboard launch cancelled.'); continue; }
+          const autoOpen = await confirm({ message: 'Open browser automatically?', initialValue: WEB_OPEN });
+          if (isCancel(autoOpen)) { logWarn('Dashboard launch cancelled.'); continue; }
+          const prevPort = WEB_PORT;
+          const prevOpen = WEB_OPEN;
+          if (portAnswer.trim()) {
+            const parsed = parseInt(portAnswer.trim(), 10);
+            if (!Number.isNaN(parsed)) WEB_PORT = parsed;
+          }
+          WEB_OPEN = !!autoOpen;
+          cmdWeb();
+          WEB_PORT = prevPort;
+          WEB_OPEN = prevOpen;
+          break;
+        }
+        default:
+          logWarn('Unknown option.');
+      }
+    } catch (err) {
+      logError((err && err.message) || String(err));
+    }
+  }
+}
+
+// Entry point: try Pi TUI, fall back to @clack/prompts
+async function cmdMenu() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    cmdHelp();
+    return;
+  }
+  try {
+    const { runJonggrangTUI } = require('../lib/tui');
+    await cmdMenuTUI(runJonggrangTUI);
+  } catch {
+    await cmdMenuClack();
   }
 }
 
