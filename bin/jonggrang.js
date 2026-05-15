@@ -2180,15 +2180,9 @@ async function cmdAgent() {
 
   initTheme();
 
-  // Resolve agentDir: ~/.pi/agent if Pi is installed (~/.pi exists), else ~/.jonggrang/agent
-  // Pi reads the agent dir from ENV_AGENT_DIR env var — no --agent-dir CLI flag exists.
-  const piAgentDir = path.join(os.homedir(), '.pi', 'agent');
-  const jonggrangAgentDir = path.join(os.homedir(), '.jonggrang', 'agent');
-  const piInstalled = fs.existsSync(path.join(os.homedir(), '.pi'));
-  const agentDir = piInstalled ? piAgentDir : jonggrangAgentDir;
-  if (!piInstalled) {
-    process.env[ENV_AGENT_DIR] = agentDir;
-  }
+  // Always use ~/.jonggrang/agent for all Pi data (auth, sessions, etc.)
+  const agentDir = path.join(os.homedir(), '.jonggrang', 'agent');
+  process.env[ENV_AGENT_DIR] = agentDir;
 
   // Suspend Pi TUI, run a jonggrang subprocess, then resume Pi TUI.
   // Uses ctx.ui.custom() to obtain the live TUI instance so we can call
@@ -2280,17 +2274,24 @@ async function cmdAgent() {
 // AUTH / PROVIDER COMMANDS
 // ============================================================
 
-// Resolve Pi auth file path: use Pi's default if ~/.pi exists, else ~/.jonggrang/agent/auth.json
-function resolveAuthPath() {
+function resolveAgentDir() {
   const os = require('os');
-  if (fs.existsSync(path.join(os.homedir(), '.pi'))) return undefined; // default → ~/.pi/agent/auth.json
-  return path.join(os.homedir(), '.jonggrang', 'agent', 'auth.json');
+  return path.join(os.homedir(), '.jonggrang', 'agent');
 }
 
+function resolveAuthPath() {
+  return path.join(resolveAgentDir(), 'auth.json');
+}
+
+async function applyAgentDirEnv() {
+  const { ENV_AGENT_DIR } = await import('@earendil-works/pi-coding-agent');
+  process.env[ENV_AGENT_DIR] = resolveAgentDir();
+}
 const API_KEY_PROVIDERS = [
   { id: 'anthropic',               name: 'Anthropic' },
   { id: 'openai',                  name: 'OpenAI' },
   { id: 'google',                  name: 'Google Gemini' },
+  { id: 'opencode-go',             name: 'OpenCode Go' },
   { id: 'deepseek',                name: 'DeepSeek' },
   { id: 'mistral',                 name: 'Mistral' },
   { id: 'groq',                    name: 'Groq' },
@@ -2298,21 +2299,23 @@ const API_KEY_PROVIDERS = [
   { id: 'openrouter',              name: 'OpenRouter' },
   { id: 'azure-openai-responses',  name: 'Azure OpenAI' },
   { id: 'cloudflare-ai-gateway',   name: 'Cloudflare AI Gateway' },
+  { id: 'cloudflare-workers-ai',   name: 'Cloudflare Workers AI' },
   { id: 'fireworks',               name: 'Fireworks AI' },
-  { id: 'together',                name: 'Together AI' },
   { id: 'huggingface',             name: 'Hugging Face' },
   { id: 'cerebras',                name: 'Cerebras' },
+  { id: 'moonshotai',              name: 'Moonshot AI (Kimi)' },
+  { id: 'kimi-coding',             name: 'Kimi Coding' },
 ];
 
 async function cmdLogin() {
+  await applyAgentDirEnv(); // must be before any Pi import side-effects touch the fs
   const { AuthStorage, LoginDialogComponent, initTheme } = await import('@earendil-works/pi-coding-agent');
   const { TUI, ProcessTerminal } = await import('@earendil-works/pi-tui');
   const { runJonggrangTUI } = require('../lib/tui');
 
-  initTheme(); // required by LoginDialogComponent before any themed rendering
+  initTheme();
 
-  const authPath = resolveAuthPath();
-  const authStorage = authPath ? AuthStorage.create(authPath) : AuthStorage.create();
+  const authStorage = AuthStorage.create(resolveAuthPath());
 
   const oauthProviders = authStorage.getOAuthProviders();
 
@@ -2351,11 +2354,11 @@ async function cmdLogin() {
       tui.start();
 
       authStorage.login(providerId, {
-        onAuth:          (info) => dialog.showAuth(info.url, info.instructions),
-        onPrompt:        async (prompt) => dialog.showPrompt(prompt.message, prompt.placeholder),
-        onProgress:      (msg) => dialog.showProgress(msg),
+        onAuth:            (info) => dialog.showAuth(info.url, info.instructions),
+        onPrompt:          async (prompt) => dialog.showPrompt(prompt.message, prompt.placeholder),
+        onProgress:        (msg) => dialog.showProgress(msg),
         onManualCodeInput: () => dialog.showManualInput('Paste the authorization code:'),
-        signal:          dialog.signal,
+        signal:            dialog.signal,
       }).then(() => {
         tui.stop();
         done(true);
@@ -2365,7 +2368,7 @@ async function cmdLogin() {
           done(false, err.message);
         } else {
           tui.stop();
-          resolve(); // user cancelled
+          resolve();
         }
       });
     });
@@ -2386,11 +2389,11 @@ async function cmdLogin() {
 }
 
 async function cmdLogout() {
+  await applyAgentDirEnv();
   const { AuthStorage } = await import('@earendil-works/pi-coding-agent');
   const { runJonggrangTUI } = require('../lib/tui');
 
-  const authPath = resolveAuthPath();
-  const authStorage = authPath ? AuthStorage.create(authPath) : AuthStorage.create();
+  const authStorage = AuthStorage.create(resolveAuthPath());
 
   const configured = authStorage.list();
   if (configured.length === 0) {
@@ -2411,11 +2414,11 @@ async function cmdLogout() {
 }
 
 async function cmdModel() {
+  await applyAgentDirEnv();
   const { AuthStorage, ModelRegistry } = await import('@earendil-works/pi-coding-agent');
   const { runJonggrangTUI } = require('../lib/tui');
 
-  const authPath = resolveAuthPath();
-  const authStorage = authPath ? AuthStorage.create(authPath) : AuthStorage.create();
+  const authStorage = AuthStorage.create(resolveAuthPath());
   const modelRegistry = ModelRegistry.create(authStorage);
 
   let models = modelRegistry.getAvailable();
@@ -2816,6 +2819,9 @@ Commands:
   model                   Select AI model for jonggrang engine
   web                     Start web dashboard
   menu                    Interactive menu launcher
+  bot-reviewer <sub>      Automated MR review bot
+    bot-reviewer gitlab     Start GitLab MR review bot (polls for new MRs)
+    bot-reviewer settings   Configure token, repos, and Anthropic API key
   version                 Show version
 
   # Backward compat (routes to work):
@@ -2860,7 +2866,9 @@ Examples:
   jonggrang bug convert                     # AI converts open bugs → tasks
   jonggrang bug convert --feature add-hello-endpoint-abc12345
   jonggrang status                          # pipeline + task board
-  jonggrang web                             # visual dashboard`);
+  jonggrang web                             # visual dashboard
+  jonggrang bot-reviewer settings           # configure GitLab token + repos
+  jonggrang bot-reviewer gitlab             # start MR review bot`);
 }
 
 // ============================================================
@@ -2874,9 +2882,15 @@ async function main() {
   const command = providedCommand || (isInteractiveShell ? 'menu' : 'help');
   let rest = providedCommand ? args.slice(1) : [];
 
-  // Task subcommand handles its own flags — bypass global parser
+  // Subcommands that handle their own flags — bypass global parser
   if (command === 'task') {
     cmdTask(rest);
+    return;
+  }
+
+  if (command === 'bot-reviewer') {
+    const { runBotReviewer } = require('../lib/bot-reviewer');
+    await runBotReviewer(rest);
     return;
   }
 
