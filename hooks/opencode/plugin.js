@@ -3,13 +3,16 @@
 // Implements the same enforcement as Claude Code hooks
 // using OpenCode's plugin lifecycle API
 //
-// Events used:
-//   tool.execute.before  → agent-first enforcement + compaction gate
-//   tool.execute.after   → track modifications (dirty bit)
-//   file.edited          → track modifications (dirty bit)
-//   session.idle         → feedback loop gate + quality gate
-//   session.updated      → output enforcement (SubagentStop equivalent)
-//   session.compacted    → refresh compaction state
+// Events used (OpenCode 1.15.0 valid API):
+//   tool.execute.before               → file protection + secret command block + agent-first + compaction gate
+//   tool.execute.after                → track modifications (dirty bit) + output sanitization
+//   experimental.chat.system.transform → inject CLAUDE.md into system prompt
+//   chat.message                      → session role init (first message per session)
+//   experimental.session.compacting   → refresh compaction state on context compaction
+//
+// NOTE: Feedback Loop Gate, Quality Gate, and Output Location Enforcement are
+// Claude Code-only (Stop/SubagentStop bash hooks). OpenCode 1.15.0 has no session-exit
+// hook equivalent — these gates only fire for Claude Code users.
 //
 
 const path = require('path');
@@ -84,6 +87,9 @@ function createPlugin(projectRoot) {
     return 'backend';
   }
 
+  // Track which sessions have already had role init run (first-message guard).
+  const initializedSessions = new Set();
+
   // OpenCode requires id field on the module export so it calls server().
   // The returned object also needs a stub hook key to trigger full plugin recognition.
   const pluginObj = {
@@ -97,33 +103,36 @@ function createPlugin(projectRoot) {
     return {
 
       // ────────────────────────────────────────────────────────────────
-      // LAYER 0: session.created — Inject CLAUDE.md + Session Role Init
-      // Equivalent to Claude Code's auto-loading of CLAUDE.md at session start.
-      // OpenCode natively loads AGENTS.md (project knowledge), but misses the
-      // jonggrang operational protocol that lives in CLAUDE.md. This handler
-      // bridges the gap so both tools have the same starting context.
+      // LAYER 0a: experimental.chat.system.transform — Inject CLAUDE.md
+      // OpenCode natively loads AGENTS.md but not CLAUDE.md. This appends
+      // the jonggrang operational protocol to the system prompt so both
+      // tools start with identical constraints.
+      // API: (input: {sessionID}, output: {system: string}) => Promise<void>
       // ────────────────────────────────────────────────────────────────
-      'session.created': async (input) => {
-        // ── Inject CLAUDE.md content ──────────────────────────────────
+      'experimental.chat.system.transform': async (_input, output) => {
         const claudeMdPath = path.join(projectRoot, 'CLAUDE.md');
-        if (fs.existsSync(claudeMdPath) && context?.session?.addContext) {
-          try {
-            const content = fs.readFileSync(claudeMdPath, 'utf8');
-            await context.session.addContext({
-              type: 'text',
-              title: 'CLAUDE.md — Jonggrang Operational Protocol',
-              content,
-            });
-          } catch (e) {
-            console.error('[jonggrang] session.created: could not inject CLAUDE.md:', e.message);
+        if (!fs.existsSync(claudeMdPath)) return;
+        try {
+          const content = fs.readFileSync(claudeMdPath, 'utf8');
+          if (output && typeof output.system === 'string') {
+            output.system = output.system + '\n\n' + content;
           }
+        } catch (e) {
+          console.error('[jonggrang] chat.system.transform: could not inject CLAUDE.md:', e.message);
         }
+      },
 
-        // ── Session Role Registration (mirrors session-init.sh) ───────
-        // Claim a pending role from the queue so agent-first enforcement
-        // can identify developer/tester sessions (same mechanism as Claude Code).
-        const sessionId = input?.session?.id || input?.id || '';
-        if (!sessionId) return;
+      // ────────────────────────────────────────────────────────────────
+      // LAYER 0b: chat.message — Session Role Init (first message only)
+      // Mirrors session-init.sh (Claude Code UserPromptSubmit hook).
+      // Detects role from the initial prompt text and writes to session-roles.json
+      // so agent-first enforcement can identify developer/tester sessions.
+      // API: (input: {sessionID, ...}, output: {message, parts}) => Promise<void>
+      // ────────────────────────────────────────────────────────────────
+      'chat.message': async (input, _output) => {
+        const sessionId = input?.sessionID || '';
+        if (!sessionId || initializedSessions.has(sessionId)) return;
+        initializedSessions.add(sessionId);
 
         const sessionRolesPath = path.join(projectRoot, '.jonggrang', '.ephemeral', 'session-roles.json');
         let sessionRoles = {};
@@ -133,15 +142,15 @@ function createPlugin(projectRoot) {
           }
         } catch {}
 
-        if (sessionRoles[sessionId]) return; // already registered
+        if (sessionRoles[sessionId]) return; // already registered in a prior run
 
-        // Detect role from session prompt if available
-        const prompt = (input?.prompt || input?.session?.prompt || '').toLowerCase();
+        // Detect role from system/first message text
+        const prompt = (input?.message?.content || '').toLowerCase();
         let role = '';
-        if (/you are a specialized tester|specialized tester/.test(prompt))         role = 'tester';
-        else if (/you are a specialized reviewer|specialized reviewer/.test(prompt)) role = 'reviewer';
-        else if (/you are a test lead|test lead/.test(prompt))                       role = 'test-lead';
-        else if (/you are a specialized lead|specialized lead/.test(prompt))         role = 'lead';
+        if (/you are a specialized tester|specialized tester/.test(prompt))           role = 'tester';
+        else if (/you are a specialized reviewer|specialized reviewer/.test(prompt))  role = 'reviewer';
+        else if (/you are a test lead|test lead/.test(prompt))                        role = 'test-lead';
+        else if (/you are a specialized lead|specialized lead/.test(prompt))          role = 'lead';
         else if (/you are a specialized developer|specialized developer/.test(prompt)) role = 'developer';
 
         // Fallback: claim oldest pending role from queue
@@ -169,7 +178,7 @@ function createPlugin(projectRoot) {
           sessionRoles[sessionId] = role;
           fs.writeFileSync(sessionRolesPath, JSON.stringify(sessionRoles, null, 2));
         } catch (e) {
-          console.error('[jonggrang] session-role registration failed:', e.message);
+          console.error('[jonggrang] chat.message: session-role registration failed:', e.message);
         }
       },
 
@@ -233,7 +242,7 @@ function createPlugin(projectRoot) {
 
           if (registry[domain]) {
             // Check if we ARE the specialized agent (prevent self-blocking).
-            // Read session-roles.json — populated by session.created handler.
+            // Read session-roles.json — populated by chat.message handler.
             const sessionId = input?.session_id || input?.session?.id || '';
             let sessionRole = '';
             if (sessionId) {
@@ -283,132 +292,11 @@ function createPlugin(projectRoot) {
       },
 
       // ────────────────────────────────────────────────────────────────
-      // LAYER 3: file.edited — Track Modifications (file watcher fallback)
+      // LAYER 3: experimental.session.compacting — Refresh Compaction State
+      // OpenCode 1.15.0 fires this when context is being compacted.
+      // API: (input: {sessionID}, output: {context: string[], prompt?: string}) => Promise<void>
       // ────────────────────────────────────────────────────────────────
-      'file.edited': async (input) => {
-        const filePath = input?.path || input?.file || '';
-        if (!filePath) return;
-
-        const domain = detectDomain(filePath);
-        try {
-          fb.setDirtyBit(projectRoot, domain);
-        } catch (e) {
-          console.error('[jonggrang] file.edited dirty bit warning:', e.message);
-        }
-      },
-
-      // ────────────────────────────────────────────────────────────────
-      // LAYER 4: session.idle — Feedback Loop Gate + Quality Gate
-      // Equivalent to Claude Code's Stop hook
-      // ────────────────────────────────────────────────────────────────
-      'session.idle': async (input) => {
-        // ── Feedback Loop Gate ────────────────────────────────────────
-        try {
-          const gate = fb.checkExitGate(projectRoot);
-          if (!gate.allowed) {
-            const stuckCount = gate.stuck_count || 0;
-
-            let message = `FEEDBACK LOOP GATE:\n${gate.reason}\n\n`;
-            message += `To unblock:\n`;
-            message += `  1. Spawn reviewer agent for each modified domain\n`;
-            message += `  2. Spawn tester agent for each modified domain\n`;
-            message += `  3. Both must return PASS status\n`;
-
-            if (stuckCount > 3) {
-              message += `\n=== ESCALATION ADVISOR ===\n`;
-              message += `Agent stuck for ${stuckCount} consecutive attempts.\n`;
-              message += `Hint: Check feedback-loop-state.json — are reviewer/tester agents spawned?\n`;
-            }
-
-            throw new Error(message);
-          }
-        } catch (e) {
-          if (e.message.includes('FEEDBACK LOOP')) throw e;
-          // Other errors — allow exit
-        }
-
-        // ── Quality Gate (Defense in Depth) ──────────────────────────
-        const violations = [];
-
-        // Check untracked .md files
-        try {
-          const { execSync } = require('child_process');
-          const untracked = execSync('git ls-files --others --exclude-standard', {
-            cwd: projectRoot, encoding: 'utf8',
-          }).split('\n').filter(f =>
-            f.endsWith('.md') &&
-            !f.startsWith('.jonggrang/') &&
-            !f.startsWith('.claude/') &&
-            !f.startsWith('.opencode/') &&
-            !f.startsWith('docs/') &&
-            f !== 'AGENTS.md' && f !== 'CLAUDE.md' && f !== 'README.md' &&
-            f !== 'CHANGELOG.md' && f !== 'CONTRIBUTING.md' && f !== 'SKILL.md'
-          );
-
-          for (const f of untracked) {
-            if (f) violations.push(`Untracked .md outside .jonggrang/.output/: ${f}`);
-          }
-        } catch {}
-
-        if (violations.length > 0) {
-          throw new Error(
-            `QUALITY GATE VIOLATIONS:\n` +
-            violations.map(v => `  ✗ ${v}`).join('\n') + '\n' +
-            `\nResolve violations before completing this phase.`
-          );
-        }
-      },
-
-      // ────────────────────────────────────────────────────────────────
-      // LAYER 5: session.updated — Output Location Enforcement
-      // Equivalent to Claude Code's SubagentStop hook
-      // ────────────────────────────────────────────────────────────────
-      'session.updated': async (input) => {
-        // Only enforce when session status changes to 'completed'
-        const status = input?.status || input?.session?.status;
-        if (status !== 'completed') return;
-
-        const violations = [];
-
-        try {
-          const { execSync } = require('child_process');
-          const untracked = execSync('git ls-files --others --exclude-standard', {
-            cwd: projectRoot, encoding: 'utf8',
-          }).split('\n').filter(Boolean);
-
-          const allowedPatterns = [
-            /^\.jonggrang\//,
-            /^\.claude\//,
-            /^\.opencode\//,
-            /^docs\//,
-            /^AGENTS\.md$/,
-            /^CLAUDE\.md$/,
-            /^SKILL\.md$/,
-            /^progress\.txt$/,
-            /^README\.md$/,
-            /^CHANGELOG\.md$/,
-            /^CONTRIBUTING\.md$/,
-          ];
-
-          for (const file of untracked) {
-            if (!file.endsWith('.md')) continue;
-            const allowed = allowedPatterns.some(p => p.test(file));
-            if (!allowed) violations.push(`Unapproved .md file: ${file} (use .jonggrang/.output/)`);
-          }
-        } catch {}
-
-        if (violations.length > 0) {
-          throw new Error(
-            `OUTPUT ENFORCEMENT:\n` +
-            violations.map(v => `  ✗ ${v}`).join('\n')
-          );
-        }
-      },
-
-      // ────────────────────────────────────────────────────────────────
-      // LAYER 6: session.compacted — Refresh Compaction State
-      // ────────────────────────────────────────────────────────────────
-      'session.compacted': async () => {
+      'experimental.session.compacting': async (_input, _output) => {
         try {
           compaction.refreshCompactionState(projectRoot);
         } catch (e) {
