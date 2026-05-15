@@ -66,8 +66,8 @@ function createPlugin(projectRoot) {
     return text
       .replace(/AKIA[0-9A-Z]{16}/g, 'AKIA<REDACTED>')
       .replace(/(aws_secret_access_key\s*=\s*)\S+/gi, '$1<REDACTED>')
-      .replace(/-----BEGIN [A-Z ]*(PRIVATE|CERTIFICATE) KEY-----[^-]*/g, '-----BEGIN <REDACTED>-----')
-      .replace(/(eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+\.)[A-Za-z0-9_-]+/g, '$1<REDACTED>')
+      .replace(/-----BEGIN [A-Z ]*(PRIVATE|CERTIFICATE|EC|OPENSSH) KEY-----/g, '-----BEGIN <REDACTED>-----')
+      .replace(/(eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+\.)[A-Za-z0-9_-]+/g, '$1<REDACTED>')
       .replace(/(postgres:\/\/[^:]+:)[^@]+@/g, '$1<REDACTED>@')
       .replace(/(mongodb:\/\/[^:]+:)[^@]+@/g, '$1<REDACTED>@')
       .replace(/(mysql:\/\/[^:]+:)[^@]+@/g, '$1<REDACTED>@');
