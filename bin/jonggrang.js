@@ -2166,9 +2166,6 @@ const AGENT_COMMAND_DESCRIPTIONS = {
   work:    'Execute tasks   — usage: /work [description]',
   status:  'Show project task board',
   review:  'Run code review',
-  login:   'Add provider credentials',
-  logout:  'Remove provider credentials',
-  model:   'Select AI model',
 };
 
 // Spawn jonggrang CLI as a subprocess (inherits terminal so output is visible)
@@ -2193,7 +2190,31 @@ async function cmdAgent() {
     process.env[ENV_AGENT_DIR] = agentDir;
   }
 
-  // Extension factory — registers /plan, /approve, /work, /status, /review, /login, /logout, /model
+  // Suspend Pi TUI, run a jonggrang subprocess, then resume Pi TUI.
+  // Uses ctx.ui.custom() to obtain the live TUI instance so we can call
+  // tui.stop() (exits raw mode, removes stdin listeners) before handing the
+  // terminal to the subprocess, and tui.start() (re-enters raw mode, redraws)
+  // after the subprocess exits.  Ctrl+C during the subprocess exits normally;
+  // once tui.start() fires, Pi resumes as if nothing happened.
+  function suspendTUIAndRun(ctx, spawnArgs) {
+    return ctx.ui.custom((tui, _theme, _keybindings, done) => {
+      // Schedule work AFTER this factory returns so Pi can register the overlay
+      // first — calling done() before returning the component causes Pi to leave
+      // the overlay stack in an inconsistent state.
+      setImmediate(() => {
+        tui.stop();
+        try {
+          spawnJonggrang(spawnArgs);
+        } finally {
+          tui.start();
+        }
+        done(undefined);
+      });
+      return { render: () => [], invalidate: () => {} };
+    });
+  }
+
+  // Extension factory — registers /plan, /approve, /work, /status, /review
   const jonggrangExtension = (pi) => {
     pi.registerCommand('plan', {
       description: AGENT_COMMAND_DESCRIPTIONS.plan,
@@ -2203,7 +2224,7 @@ async function cmdAgent() {
           return;
         }
         await ctx.waitForIdle();
-        spawnJonggrang(['plan', args.trim()]);
+        await suspendTUIAndRun(ctx, ['plan', args.trim()]);
       },
     });
 
@@ -2211,7 +2232,7 @@ async function cmdAgent() {
       description: AGENT_COMMAND_DESCRIPTIONS.approve,
       handler: async (_args, ctx) => {
         await ctx.waitForIdle();
-        spawnJonggrang(['approve']);
+        await suspendTUIAndRun(ctx, ['approve']);
       },
     });
 
@@ -2219,8 +2240,7 @@ async function cmdAgent() {
       description: AGENT_COMMAND_DESCRIPTIONS.work,
       handler: async (args, ctx) => {
         await ctx.waitForIdle();
-        const cmdArgs = ['work', ...(args.trim() ? [args.trim()] : [])];
-        spawnJonggrang(cmdArgs);
+        await suspendTUIAndRun(ctx, ['work', ...(args.trim() ? [args.trim()] : [])]);
       },
     });
 
@@ -2228,7 +2248,7 @@ async function cmdAgent() {
       description: AGENT_COMMAND_DESCRIPTIONS.status,
       handler: async (_args, ctx) => {
         await ctx.waitForIdle();
-        spawnJonggrang(['status']);
+        await suspendTUIAndRun(ctx, ['status']);
       },
     });
 
@@ -2236,40 +2256,21 @@ async function cmdAgent() {
       description: AGENT_COMMAND_DESCRIPTIONS.review,
       handler: async (_args, ctx) => {
         await ctx.waitForIdle();
-        spawnJonggrang(['review']);
+        await suspendTUIAndRun(ctx, ['review']);
       },
     });
 
-    pi.registerCommand('login', {
-      description: AGENT_COMMAND_DESCRIPTIONS.login,
-      handler: async (_args, ctx) => {
-        await ctx.waitForIdle();
-        spawnJonggrang(['login']);
-      },
+    // Redirect skills/prompts to .jonggrang/ directories (only if they exist)
+    pi.on('resources_discover', async (event) => {
+      const cwd = event.cwd || process.cwd();
+      const skillsPath  = path.join(cwd, '.jonggrang', 'skills');
+      const promptsPath = path.join(cwd, '.jonggrang', 'prompts');
+      return {
+        skillPaths:  fs.existsSync(skillsPath)  ? [skillsPath]  : [],
+        promptPaths: fs.existsSync(promptsPath) ? [promptsPath] : [],
+        themePaths:  [],
+      };
     });
-
-    pi.registerCommand('logout', {
-      description: AGENT_COMMAND_DESCRIPTIONS.logout,
-      handler: async (_args, ctx) => {
-        await ctx.waitForIdle();
-        spawnJonggrang(['logout']);
-      },
-    });
-
-    pi.registerCommand('model', {
-      description: AGENT_COMMAND_DESCRIPTIONS.model,
-      handler: async (_args, ctx) => {
-        await ctx.waitForIdle();
-        spawnJonggrang(['model']);
-      },
-    });
-
-    // Redirect skills/prompts to .jonggrang/ directories
-    pi.on('resources_discover', async (event) => ({
-      skillPaths:  [`${event.cwd}/.jonggrang/skills`],
-      promptPaths: [`${event.cwd}/.jonggrang/prompts`],
-      themePaths:  [],
-    }));
   };
 
   await main([], { extensionFactories: [jonggrangExtension] });
