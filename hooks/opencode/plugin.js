@@ -25,6 +25,54 @@ function createPlugin(projectRoot) {
   const fb = require(path.join(jonggrangLib, 'feedback.js'));
   const compaction = require(path.join(jonggrangLib, 'compaction.js'));
 
+  // Sensitive file patterns — mirrors block-sensitive-files.sh
+  function isSensitiveFile(filePath) {
+    if (!filePath) return false;
+    if (/\.example$/i.test(filePath)) return false; // always allow
+    if (/(^|\/)\.env(\.[^/]+)?$|(^|\/)orcinus(\.[^/]+)?$/i.test(filePath)) {
+      // .env / orcinus — allowed only if in .gitignore
+      try {
+        const { execSync } = require('child_process');
+        execSync(`git check-ignore -q "${filePath}"`, { cwd: projectRoot, stdio: 'ignore' });
+        return false; // in .gitignore — allowed
+      } catch {
+        return true; // not in .gitignore — block
+      }
+    }
+    const sensitivePatterns = [
+      /\.pem$/i, /\.key$/i, /(^|\/)id_rsa/i, /id_ed25519/i, /id_dsa/i,
+      /\bcredentials\b/i, /\.pfx$/i, /\.p12$/i, /\.crt$/i, /\.cer$/i,
+      /\.pkcs12$/i, /\.jks$/i, /\.keystore$/i, /(^|\/)\.ssh\//i, /authorized_keys/i,
+    ];
+    return sensitivePatterns.some(p => p.test(filePath));
+  }
+
+  // Blocked bash command patterns — mirrors block-secret-commands.sh
+  function isSecretCommand(command) {
+    if (!command) return false;
+    if (/^(env|printenv|set)(\s|$)/.test(command)) return true;
+    if (/^export [A-Za-z_][A-Za-z0-9_]*=[^$\(]/.test(command)) return true;
+    if (/aws (configure list|sts get-session-token)/.test(command)) return true;
+    if (/gh auth (token|status)/.test(command)) return true;
+    if (/kubectl config view/.test(command) && !/--minify/.test(command)) return true;
+    if (/cat .*(credentials|\.pem|\.key$|id_rsa|id_ed25519|id_dsa)/i.test(command)) return true;
+    if (/echo \$[A-Za-z_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD)/i.test(command)) return true;
+    return false;
+  }
+
+  // Redact secrets from a string — mirrors sanitize-output.sh
+  function sanitizeSecrets(text) {
+    if (!text || typeof text !== 'string') return text;
+    return text
+      .replace(/AKIA[0-9A-Z]{16}/g, 'AKIA<REDACTED>')
+      .replace(/(aws_secret_access_key\s*=\s*)\S+/gi, '$1<REDACTED>')
+      .replace(/-----BEGIN [A-Z ]*(PRIVATE|CERTIFICATE) KEY-----[^-]*/g, '-----BEGIN <REDACTED>-----')
+      .replace(/(eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+\.)[A-Za-z0-9_-]+/g, '$1<REDACTED>')
+      .replace(/(postgres:\/\/[^:]+:)[^@]+@/g, '$1<REDACTED>@')
+      .replace(/(mongodb:\/\/[^:]+:)[^@]+@/g, '$1<REDACTED>@')
+      .replace(/(mysql:\/\/[^:]+:)[^@]+@/g, '$1<REDACTED>@');
+  }
+
   // Domain detection from file path
   function detectDomain(filePath) {
     if (!filePath) return 'backend';
@@ -121,7 +169,26 @@ function createPlugin(projectRoot) {
       // ────────────────────────────────────────────────────────────────
       'tool.execute.before': async (input) => {
         const toolName = input?.tool?.name || '';
-        const filePath = input?.tool?.input?.file_path || '';
+        const filePath = input?.tool?.input?.file_path || input?.tool?.input?.path || '';
+        const command  = input?.tool?.input?.command || '';
+
+        // ── File Protection (mirrors block-sensitive-files.sh) ───────
+        const isFileOp = /read_file|edit_file|write_file|Read|Edit|Write|Glob|Grep/i.test(toolName);
+        if (isFileOp && filePath && isSensitiveFile(filePath)) {
+          throw new Error(
+            `FILE PROTECTION: Akses ke '${filePath}' diblokir — file sensitif.\n` +
+            `Gunakan secret manager atau wrapper yang sesuai.`
+          );
+        }
+
+        // ── Secret Command Block (mirrors block-secret-commands.sh) ──
+        const isShellOp = /bash|shell|run_command|exec/i.test(toolName);
+        if (isShellOp && command && isSecretCommand(command)) {
+          throw new Error(
+            `SECRET COMMAND BLOCKED: Command '${command}' berpotensi membongkar secret.\n` +
+            `Gunakan 'run-with-secrets <profile> <cmd>' untuk akses kredensial.`
+          );
+        }
 
         // ── Compaction Gate (Task = agent spawning) ─────────────────
         if (toolName === 'Task' || toolName === 'spawn_agent') {
@@ -182,13 +249,20 @@ function createPlugin(projectRoot) {
         const toolName = input?.tool?.name || '';
         const filePath = input?.tool?.input?.file_path || '';
 
+        // ── Output Sanitization (mirrors sanitize-output.sh) ─────────
+        if (output && typeof output.content === 'string') {
+          output.content = sanitizeSecrets(output.content);
+        } else if (output && typeof output === 'string') {
+          output = sanitizeSecrets(output);
+        }
+
+        // ── Track Modifications (Dirty Bit) ──────────────────────────
         if (toolName === 'edit_file' || toolName === 'write_file' ||
             toolName === 'Edit'      || toolName === 'Write') {
           const domain = detectDomain(filePath);
           try {
             fb.setDirtyBit(projectRoot, domain);
           } catch (e) {
-            // Non-critical — log and continue
             console.error('[jonggrang] track-modifications warning:', e.message);
           }
         }
