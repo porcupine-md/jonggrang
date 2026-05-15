@@ -84,7 +84,16 @@ function createPlugin(projectRoot) {
     return 'backend';
   }
 
-  return async (context) => {
+  // OpenCode requires id field on the module export so it calls server().
+  // The returned object also needs a stub hook key to trigger full plugin recognition.
+  const pluginObj = {
+    id: 'jonggrang',
+    server: null, // set below
+    // Stub: presence of this key triggers OpenCode to call server()
+    'tool.execute.before': async (_input, _output) => {},
+  };
+
+  pluginObj.server = async (context) => {
     return {
 
       // ────────────────────────────────────────────────────────────────
@@ -166,11 +175,13 @@ function createPlugin(projectRoot) {
 
       // ────────────────────────────────────────────────────────────────
       // LAYER 1: tool.execute.before — Agent-First + Compaction Gate
+      // OpenCode API: input.tool = string (name), output.args = tool arguments
       // ────────────────────────────────────────────────────────────────
-      'tool.execute.before': async (input) => {
-        const toolName = input?.tool?.name || '';
-        const filePath = input?.tool?.input?.file_path || input?.tool?.input?.path || '';
-        const command  = input?.tool?.input?.command || '';
+      'tool.execute.before': async (input, output) => {
+        const toolName = input?.tool || '';
+        // OpenCode uses camelCase args (filePath, not file_path)
+        const filePath = output?.args?.filePath || output?.args?.file_path || output?.args?.path || '';
+        const command  = output?.args?.command || output?.args?.cmd || '';
 
         // ── File Protection (mirrors block-sensitive-files.sh) ───────
         // Cover all known OpenCode and Claude Code tool name variants for file ops
@@ -246,16 +257,17 @@ function createPlugin(projectRoot) {
 
       // ────────────────────────────────────────────────────────────────
       // LAYER 2: tool.execute.after — Track Modifications (Dirty Bit)
+      // OpenCode API: input.tool = string, input.args = tool args, output.output = result text
       // ────────────────────────────────────────────────────────────────
       'tool.execute.after': async (input, output) => {
-        const toolName = input?.tool?.name || '';
-        const filePath = input?.tool?.input?.file_path || '';
+        const toolName = input?.tool || '';
+        // OpenCode uses camelCase args in tool.execute.after input
+        const filePath = input?.args?.filePath || input?.args?.file_path || '';
 
         // ── Output Sanitization (mirrors sanitize-output.sh) ─────────
-        if (output && typeof output.content === 'string') {
-          output.content = sanitizeSecrets(output.content);
-        } else if (output && typeof output === 'string') {
-          output = sanitizeSecrets(output);
+        // OpenCode API: output.output is the tool result string
+        if (output && typeof output.output === 'string') {
+          output.output = sanitizeSecrets(output.output);
         }
 
         // ── Track Modifications (Dirty Bit) ──────────────────────────
@@ -406,6 +418,8 @@ function createPlugin(projectRoot) {
 
     };
   };
+
+  return pluginObj;
 }
 
 module.exports = { createPlugin };
