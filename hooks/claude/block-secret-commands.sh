@@ -31,7 +31,7 @@ SEGMENTS=$(printf '%s' "$NORMALIZED" | awk '{
 }')
 
 READERS='(cat|head|tail|less|more|xxd|od|hexdump|strings|awk|sed|cp|mv|tar|zip|base64|openssl|grep|rg|fgrep|egrep|nl|tac|view|vim|vi|nano|emacs|code|subl)'
-SECRETPATH='(credentials|\.pem(\s|$)|\.key(\s|$)|id_rsa|id_ed25519|id_dsa|\.ssh/|\.aws/credentials|authorized_keys)'
+SECRETPATH='(credentials|\.pem(\s|$)|\.key(\s|$)|id_rsa|id_ed25519|id_ecdsa|id_ed25519_sk|id_ecdsa_sk|id_dsa|identity|ssh_host_.*_key|\.ssh/|\.aws/credentials|authorized_keys)'
 
 while IFS= read -r seg; do
   # Trim whitespace and strip a leading `(bash|sh|zsh|dash) -c '...'` wrapper.

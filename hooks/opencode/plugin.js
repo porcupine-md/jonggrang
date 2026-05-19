@@ -43,7 +43,8 @@ function createPlugin(projectRoot) {
       if (/\.example$/i.test(p)) return 'allow';
       if (/(^|\/)\.env(\.[^/]+)?$|(^|\/)orcinus(\.[^/]+)?$/i.test(p)) return 'env';
       const sensitivePatterns = [
-        /\.pem$/i, /\.key$/i, /(^|\/)id_rsa/i, /id_ed25519/i, /id_dsa/i,
+        /\.pem$/i, /\.key$/i, /(^|\/)id_rsa/i, /id_ed25519/i, /id_ecdsa/i,
+        /id_ed25519_sk/i, /id_ecdsa_sk/i, /id_dsa/i, /(^|\/)identity/i, /ssh_host_.*_key/i,
         /\bcredentials\b/i, /\.pfx$/i, /\.p12$/i, /\.crt$/i, /\.cer$/i,
         /\.pkcs12$/i, /\.jks$/i, /\.keystore$/i, /(^|\/)\.ssh\//i, /authorized_keys/i,
       ];
@@ -82,7 +83,7 @@ function createPlugin(projectRoot) {
       .filter(Boolean);
 
     const READERS = '(?:cat|head|tail|less|more|xxd|od|hexdump|strings|awk|sed|cp|mv|tar|zip|base64|openssl|grep|rg|fgrep|egrep|nl|tac|view|vim|vi|nano|emacs|code|subl)';
-    const SECRETPATH = '(credentials|\\.pem(\\s|$)|\\.key(\\s|$)|id_rsa|id_ed25519|id_dsa|\\.ssh/|\\.aws/credentials|authorized_keys)';
+    const SECRETPATH = '(credentials|\\.pem(\\s|$)|\\.key(\\s|$)|id_rsa|id_ed25519|id_ecdsa|id_ed25519_sk|id_ecdsa_sk|id_dsa|identity|ssh_host_.*_key|\\.ssh/|\\.aws/credentials|authorized_keys)';
 
     for (const seg of segments) {
       if (/^(env|printenv|set)(\s|$)/.test(seg)) return true;
