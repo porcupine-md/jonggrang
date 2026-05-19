@@ -1,6 +1,6 @@
 {
   "name": "jonggrang",
-  "version": "0.4.1",
+  "version": "0.5.2",
   "description": "Deterministic AI orchestration platform — 16-phase workflow engine for autonomous software development",
   "license": "MIT",
   "main": "server.js",
@@ -37,7 +37,7 @@
     "dev:server": "node server.js",
     "dev:client": "cd client && npm run dev",
     "dev": "npm run dev:server & npm run dev:client",
-    "build": "cd client && npm install && npm run build",
+    "build": "cd client && npm run build",
     "install:all": "npm install && cd client && npm install",
     "check": "bash scripts/check.sh",
     "check:quick": "bash scripts/check.sh --quick",
