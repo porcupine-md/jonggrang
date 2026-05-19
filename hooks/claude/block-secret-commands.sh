@@ -1,6 +1,11 @@
 #!/bin/bash
 # Block Bash commands that could expose secrets to LLM context
 # PreToolUse hook — matcher: Bash
+#
+# Defense-in-depth: catches naive and chained forms (`; env`, `&& printenv`,
+# `bash -c env`, `$(env)`). Not airtight — `eval`, base64-decode-then-exec,
+# or other obfuscation can slip through. Pair with output sanitization and
+# PreToolUse file blocks.
 
 set -euo pipefail
 
@@ -14,34 +19,56 @@ deny() {
   exit 2
 }
 
-# ── env / printenv / set (dump all env vars) ─────────────────────────────────
-echo "$COMMAND" | grep -qE '^(env|printenv|set)([[:space:]]|$)' \
-  && deny "DENIED: Command '$COMMAND' membuang semua env vars ke LLM context. Gunakan 'run-with-secrets <profile> <cmd>' untuk akses kredensial."
+# Lift command-substitution `$(...)` and backtick contents onto their own lines
+# so `echo $(env)` and `echo \`env\`` get checked, not just the outer command.
+# Then split on chain operators ( ; && || | ) so each piped/chained segment is
+# inspected individually.
+NORMALIZED=$(printf '%s' "$COMMAND" \
+  | perl -pe 's/\$\(([^)]*)\)/\n$1\n/g; s/`([^`]*)`/\n$1\n/g; s/[()]/ /g' 2>/dev/null \
+  || printf '%s' "$COMMAND" | sed -E 's/\$\(/ /g; s/[`()]/ /g')
+SEGMENTS=$(printf '%s' "$NORMALIZED" | awk '{
+  gsub(/&&/, "\n"); gsub(/\|\|/, "\n"); gsub(/;/, "\n"); gsub(/\|/, "\n"); print
+}')
 
-# ── export with literal value (not from subshell/variable) ───────────────────
-echo "$COMMAND" | grep -qE '^export [A-Za-z_][A-Za-z0-9_]*=[^\$\(]' \
-  && deny "DENIED: Command '$COMMAND' mungkin meng-export literal secret. Gunakan referensi dari secret manager."
+READERS='(cat|head|tail|less|more|xxd|od|hexdump|strings|awk|sed|cp|mv|tar|zip|base64|openssl|grep|rg|fgrep|egrep|nl|tac|view|vim|vi|nano|emacs|code|subl)'
+SECRETPATH='(credentials|\.pem(\s|$)|\.key(\s|$)|id_rsa|id_ed25519|id_dsa|\.ssh/|\.aws/credentials|authorized_keys)'
 
-# ── AWS credential commands ───────────────────────────────────────────────────
-echo "$COMMAND" | grep -qE 'aws (configure list|sts get-session-token)' \
-  && deny "DENIED: Command '$COMMAND' dapat membongkar AWS credentials. Gunakan 'run-with-secrets <profile> <cmd>'."
+while IFS= read -r seg; do
+  # Trim whitespace and strip a leading `(bash|sh|zsh|dash) -c '...'` wrapper.
+  seg=$(printf '%s' "$seg" | sed -E "s/^[[:space:]]+//; s/[[:space:]]+$//; s/^(bash|sh|zsh|dash)[[:space:]]+-c[[:space:]]+['\"]?//; s/^['\"]+//")
+  [ -z "$seg" ] && continue
 
-# ── GitHub CLI token dump ─────────────────────────────────────────────────────
-echo "$COMMAND" | grep -qE 'gh auth (token|status)' \
-  && deny "DENIED: Command '$COMMAND' dapat membongkar GitHub token. Gunakan 'run-with-secrets <profile> <cmd>'."
+  # ── env / printenv / set (dump all env vars) ─────────────────────────
+  echo "$seg" | grep -qE '^(env|printenv|set)([[:space:]]|$)' \
+    && deny "DENIED: '$seg' membuang semua env vars ke LLM context. Gunakan 'run-with-secrets <profile> <cmd>' untuk akses kredensial."
 
-# ── kubectl config view without --minify ─────────────────────────────────────
-if echo "$COMMAND" | grep -qE 'kubectl config view'; then
-  echo "$COMMAND" | grep -q '\-\-minify' \
-    || deny "DENIED: 'kubectl config view' tanpa --minify dapat membongkar semua kubeconfig. Tambahkan flag --minify."
-fi
+  # ── export with literal value (not from subshell/variable) ───────────
+  echo "$seg" | grep -qE '^export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=[^$]' \
+    && deny "DENIED: '$seg' mungkin meng-export literal secret. Gunakan referensi dari secret manager."
 
-# ── cat of sensitive files ────────────────────────────────────────────────────
-echo "$COMMAND" | grep -qiE 'cat .*(credentials|\.pem|\.key$|id_rsa|id_ed25519|id_dsa)' \
-  && deny "DENIED: Command '$COMMAND' membaca file sensitif. Gunakan secret manager atau wrapper yang sesuai."
+  # ── AWS credential commands ──────────────────────────────────────────
+  echo "$seg" | grep -qE '\baws[[:space:]]+(configure[[:space:]]+list|sts[[:space:]]+get-session-token)\b' \
+    && deny "DENIED: '$seg' dapat membongkar AWS credentials. Gunakan 'run-with-secrets <profile> <cmd>'."
 
-# ── echo of secret env vars ──────────────────────────────────────────────────
-echo "$COMMAND" | grep -qiE 'echo \$[A-Za-z_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD)' \
-  && deny "DENIED: Command '$COMMAND' mencetak nilai secret ke output. Jangan expose secret ke LLM context."
+  # ── GitHub CLI token dump ────────────────────────────────────────────
+  echo "$seg" | grep -qE '\bgh[[:space:]]+auth[[:space:]]+(token|status)\b' \
+    && deny "DENIED: '$seg' dapat membongkar GitHub token. Gunakan 'run-with-secrets <profile> <cmd>'."
+
+  # ── kubectl config view without --minify ─────────────────────────────
+  if echo "$seg" | grep -qE '\bkubectl[[:space:]]+config[[:space:]]+view\b'; then
+    echo "$seg" | grep -q '\-\-minify' \
+      || deny "DENIED: 'kubectl config view' tanpa --minify dapat membongkar semua kubeconfig. Tambahkan flag --minify."
+  fi
+
+  # ── Any reader-like command targeting a sensitive path ──────────────
+  if echo "$seg" | grep -qiE "\\b${READERS}\\b.*${SECRETPATH}"; then
+    deny "DENIED: '$seg' membaca file sensitif. Gunakan secret manager atau wrapper yang sesuai."
+  fi
+
+  # ── echo of secret env vars ──────────────────────────────────────────
+  echo "$seg" | grep -qiE 'echo[[:space:]]+\$[A-Za-z_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD)' \
+    && deny "DENIED: '$seg' mencetak nilai secret ke output. Jangan expose secret ke LLM context."
+
+done <<< "$SEGMENTS"
 
 exit 0

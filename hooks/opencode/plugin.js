@@ -31,35 +31,68 @@ function createPlugin(projectRoot) {
   // Sensitive file patterns — mirrors block-sensitive-files.sh
   function isSensitiveFile(filePath) {
     if (!filePath) return false;
-    if (/\.example$/i.test(filePath)) return false; // always allow
-    if (/(^|\/)\.env(\.[^/]+)?$|(^|\/)orcinus(\.[^/]+)?$/i.test(filePath)) {
-      // .env / orcinus — allowed only if in .gitignore
+
+    // Canonicalize: resolve symlinks so /tmp/innocent → ~/.ssh/id_rsa can't bypass.
+    // Falls back to the original path if resolution fails (file may not exist yet on Write).
+    let resolved = filePath;
+    try {
+      resolved = fs.realpathSync(path.resolve(projectRoot, filePath));
+    } catch { /* keep original */ }
+
+    const check = (p) => {
+      if (/\.example$/i.test(p)) return 'allow';
+      if (/(^|\/)\.env(\.[^/]+)?$|(^|\/)orcinus(\.[^/]+)?$/i.test(p)) return 'env';
+      const sensitivePatterns = [
+        /\.pem$/i, /\.key$/i, /(^|\/)id_rsa/i, /id_ed25519/i, /id_dsa/i,
+        /\bcredentials\b/i, /\.pfx$/i, /\.p12$/i, /\.crt$/i, /\.cer$/i,
+        /\.pkcs12$/i, /\.jks$/i, /\.keystore$/i, /(^|\/)\.ssh\//i, /authorized_keys/i,
+      ];
+      return sensitivePatterns.some(rx => rx.test(p)) ? 'block' : 'pass';
+    };
+
+    // Block if EITHER the requested path OR its resolved target is sensitive.
+    const verdicts = [check(filePath), check(resolved)];
+    if (verdicts.includes('block')) return true;
+    if (verdicts.includes('env')) {
+      // .env / orcinus — allowed only if in .gitignore (use execFileSync to avoid shell injection)
       try {
-        const { execSync } = require('child_process');
-        execSync(`git check-ignore -q "${filePath}"`, { cwd: projectRoot, stdio: 'ignore' });
+        const { execFileSync } = require('child_process');
+        execFileSync('git', ['check-ignore', '-q', '--', filePath], { cwd: projectRoot, stdio: 'ignore' });
         return false; // in .gitignore — allowed
       } catch {
         return true; // not in .gitignore — block
       }
     }
-    const sensitivePatterns = [
-      /\.pem$/i, /\.key$/i, /(^|\/)id_rsa/i, /id_ed25519/i, /id_dsa/i,
-      /\bcredentials\b/i, /\.pfx$/i, /\.p12$/i, /\.crt$/i, /\.cer$/i,
-      /\.pkcs12$/i, /\.jks$/i, /\.keystore$/i, /(^|\/)\.ssh\//i, /authorized_keys/i,
-    ];
-    return sensitivePatterns.some(p => p.test(filePath));
+    return false;
   }
 
   // Blocked bash command patterns — mirrors block-secret-commands.sh
+  // Splits on common chain/subshell delimiters so `; env`, `&& env`, `$(env)` don't bypass.
   function isSecretCommand(command) {
     if (!command) return false;
-    if (/^(env|printenv|set)(\s|$)/.test(command)) return true;
-    if (/^export [A-Za-z_][A-Za-z0-9_]*=[^$\(]/.test(command)) return true;
-    if (/aws (configure list|sts get-session-token)/.test(command)) return true;
-    if (/gh auth (token|status)/.test(command)) return true;
-    if (/kubectl config view/.test(command) && !/--minify/.test(command)) return true;
-    if (/cat .*(credentials|\.pem|\.key$|id_rsa|id_ed25519|id_dsa)/i.test(command)) return true;
-    if (/echo \$[A-Za-z_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD)/i.test(command)) return true;
+    // Lift command-substitution and backtick contents into their own segments
+    // so `echo $(env)` and `echo \`env\`` are checked, not just the outer command.
+    const lifted = command
+      .replace(/\$\(([^)]*)\)/g, '\n$1\n')
+      .replace(/`([^`]*)`/g, '\n$1\n')
+      .replace(/[()]/g, ' ');
+    const segments = lifted
+      .split(/&&|\|\||;|\||\n/)
+      .map(s => s.trim().replace(/^(bash|sh|zsh|dash)\s+-c\s+['"]?/, '').replace(/^["']/, ''))
+      .filter(Boolean);
+
+    const READERS = '(?:cat|head|tail|less|more|xxd|od|hexdump|strings|awk|sed|cp|mv|tar|zip|base64|openssl|grep|rg|fgrep|egrep|nl|tac|view|vim|vi|nano|emacs|code|subl)';
+    const SECRETPATH = '(credentials|\\.pem(\\s|$)|\\.key(\\s|$)|id_rsa|id_ed25519|id_dsa|\\.ssh/|\\.aws/credentials|authorized_keys)';
+
+    for (const seg of segments) {
+      if (/^(env|printenv|set)(\s|$)/.test(seg)) return true;
+      if (/^export\s+[A-Za-z_][A-Za-z0-9_]*=[^$]/.test(seg)) return true;
+      if (/\baws\s+(configure\s+list|sts\s+get-session-token)\b/.test(seg)) return true;
+      if (/\bgh\s+auth\s+(token|status)\b/.test(seg)) return true;
+      if (/\bkubectl\s+config\s+view\b/.test(seg) && !/--minify/.test(seg)) return true;
+      if (new RegExp(`\\b${READERS}\\b.*${SECRETPATH}`, 'i').test(seg)) return true;
+      if (/\becho\s+\$[A-Za-z_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD)/i.test(seg)) return true;
+    }
     return false;
   }
 
@@ -67,13 +100,15 @@ function createPlugin(projectRoot) {
   function sanitizeSecrets(text) {
     if (!text || typeof text !== 'string') return text;
     return text
-      .replace(/AKIA[0-9A-Z]{16}/g, 'AKIA<REDACTED>')
+      .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, 'AWS_KEY<REDACTED>')
       .replace(/(aws_secret_access_key\s*=\s*)\S+/gi, '$1<REDACTED>')
+      .replace(/(aws_access_key_id\s*=\s*)\S+/gi, '$1<REDACTED>')
       .replace(/-----BEGIN [A-Z ]*(PRIVATE|CERTIFICATE|EC|OPENSSH) KEY-----/g, '-----BEGIN <REDACTED>-----')
       .replace(/(eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+\.)[A-Za-z0-9_-]+/g, '$1<REDACTED>')
-      .replace(/(postgres:\/\/[^:]+:)[^@]+@/g, '$1<REDACTED>@')
-      .replace(/(mongodb:\/\/[^:]+:)[^@]+@/g, '$1<REDACTED>@')
-      .replace(/(mysql:\/\/[^:]+:)[^@]+@/g, '$1<REDACTED>@');
+      .replace(/(postgres(?:ql)?:\/\/[^:\s]+:)[^@\s]+@/g, '$1<REDACTED>@')
+      .replace(/(mongodb(?:\+srv)?:\/\/[^:\s]+:)[^@\s]+@/g, '$1<REDACTED>@')
+      .replace(/(mysql:\/\/[^:\s]+:)[^@\s]+@/g, '$1<REDACTED>@')
+      .replace(/(redis:\/\/[^:\s]+:)[^@\s]+@/g, '$1<REDACTED>@');
   }
 
   // Domain detection from file path
