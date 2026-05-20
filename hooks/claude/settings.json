@@ -35,6 +35,24 @@
             "command": "bash \"JONGGRANG_HOOKS_DIR/agent-first.sh\""
           }
         ]
+      },
+      {
+        "matcher": "Read|Edit|Write|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/block-sensitive-files.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/block-secret-commands.sh\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -55,6 +73,15 @@
             "command": "bash \"JONGGRANG_HOOKS_DIR/task-skill-enforcement.sh\""
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/sanitize-output.sh\""
+          }
+        ]
       }
     ],
     "SubagentStop": [
@@ -63,6 +90,10 @@
           {
             "type": "command",
             "command": "bash \"JONGGRANG_HOOKS_DIR/output-enforcement.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/secret-final-check.sh\""
           }
         ]
       }
