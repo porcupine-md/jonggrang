@@ -13,15 +13,28 @@ const feedback = require('./lib/feedback');
 
 const app = express();
 const server = http.createServer(app);
+
+//  ── TRUSTED ORIGINS ───────────────────────────────────────
+const TRUSTED_ORIGINS = ['localhost', '127.0.0.1', '::1', '.local'];
+function isOriginTrusted(origin) {
+    if (!origin) return true; // same-origin requests
+    try {
+        const host = new URL(origin).hostname;
+        return TRUSTED_ORIGINS.some(t =>
+            t.startsWith('.') ? host.endsWith(t) || host === t.slice(1) : host === t
+        );
+    } catch { return false; }
+}
+
 const io = new Server(server, {
     cors: {
-        origin: '*',
+        origin: (origin, cb) => cb(null, isOriginTrusted(origin)),
         methods: ['GET', 'POST']
     }
 });
 
-app.use(cors());
-app.use(express.json());
+app.use(cors({ origin: (origin, cb) => cb(null, isOriginTrusted(origin)) }));
+app.use(express.json({ limit: '1mb' }));  // prevent oversized JSON body attacks
 
 // Jonggrang files
 const PROJECT_ROOT = process.env.JONGGRANG_PROJECT_ROOT || path.resolve(__dirname, '..');
@@ -560,19 +573,26 @@ app.post('/api/jonggrang/groups/:id/review', (req, res) => {
     res.json({ success: true });
 });
 
+// ── Input sanitisation helper ──────────────────────────────
+function sanitizeGitRef(ref) {
+    // Allow: alphanumeric, /, -, ., _ (common git ref characters)
+    return String(ref).replace(/[^a-zA-Z0-9/\-._]/g, '').slice(0, 255);
+}
+
 app.get('/api/jonggrang/groups/:id/diff', (req, res) => {
     const group = groupProcesses.get(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found', diff: '', files: [] });
 
     try {
-        const base = group.baseSha || 'HEAD';
+        const base = sanitizeGitRef(group.baseSha || 'HEAD');
+        const branch = sanitizeGitRef(group.branch);
         const diff = require('child_process').execSync(
-            `git diff ${base}...${group.branch}`,
-            { cwd: PROJECT_ROOT, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
+            `git diff ${base}...${branch}`,
+            { cwd: PROJECT_ROOT, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, timeout: 15000 }
         );
         const files = require('child_process').execSync(
-            `git diff ${base}...${group.branch} --name-only`,
-            { cwd: PROJECT_ROOT, encoding: 'utf8' }
+            `git diff ${base}...${branch} --name-only`,
+            { cwd: PROJECT_ROOT, encoding: 'utf8', timeout: 15000 }
         ).trim().split('\n').filter(Boolean);
         res.json({ diff, files });
     } catch (err) {
@@ -830,10 +850,16 @@ app.get('/api/jonggrang/manifests', (req, res) => {
 // --- Orchestration: get specific manifest ---
 app.get('/api/jonggrang/manifests/:featureId', (req, res) => {
     try {
-        const manifestPath = orchestration.getManifestPath(PROJECT_ROOT, req.params.featureId);
+        // Sanitise featureId to prevent path traversal
+        const featureId = req.params.featureId.replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 100);
+        const manifestPath = orchestration.getManifestPath(PROJECT_ROOT, featureId);
+        // Ensure manifestPath is within project root
+        if (!manifestPath.startsWith(path.resolve(PROJECT_ROOT))) {
+            return res.status(403).json({ error: 'Invalid feature ID' });
+        }
         const manifest = orchestration.readManifest(manifestPath);
         if (!manifest) return res.status(404).json({ error: 'Manifest not found' });
-        res.json({ featureId: req.params.featureId, manifest, manifestPath });
+        res.json({ featureId, manifest, manifestPath });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -887,12 +913,31 @@ app.delete('/api/jonggrang/feedback-state', (req, res) => {
 const distPath = path.join(__dirname, 'client', 'dist');
 app.use(express.static(distPath));
 
-// Fallback for SPA routing requests
+// ── Global API error handler ───────────────────────────────
+app.use('/api', (err, req, res, _next) => {
+    console.error(`[jonggrang:api:error] ${req.method} ${req.path}:`, err.message);
+    res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+});
+
+// Fallback for SPA routing requests (only non-API routes)
 app.get('*', (req, res) => {
+    if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'API endpoint not found' });
+    }
     if (fs.existsSync(path.join(distPath, 'index.html'))) {
         res.sendFile(path.join(distPath, 'index.html'));
     } else {
-        res.status(404).send('Please run "npm run build" first to generate the frontend build files.');
+        // Auto-trigger build if dist is missing (informative but non-blocking)
+        console.error('[jonggrang] Frontend build missing. Run: npm run build');
+        res.status(503).type('text/html').send(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Jonggrang — Build Required</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#05060a;color:#f4f4f5;}</style></head>
+<body><div style="text-align:center;max-width:480px">
+<h1>🎭 Jonggrang</h1>
+<p style="color:#9ca3af">Frontend build files missing.</p>
+<pre style="background:#16171f;padding:12px;border-radius:8px;color:#38bdf8;font-size:13px">npm run build</pre>
+<p style="color:#4b5563;font-size:13px">Then restart with <code style="color:#10b981">npm start</code></p>
+</div></body></html>`);
     }
 });
 
@@ -923,10 +968,63 @@ if (portEnv !== undefined) {
     }
     envPort = parsedPort;
 }
+
+// ── Global error handlers ──────────────────────────────────
+process.on('uncaughtException', (err) => {
+    console.error('[jonggrang:uncaught]', err.message);
+    // Don't exit — let the server keep running for dashboard use
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[jonggrang:unhandledRejection]', reason);
+});
+
+// ── Cleanup orphaned child processes on exit ───────────────
+function cleanupAllProcesses() {
+    if (jonggrangProcess && !jonggrangProcess.killed) {
+        try { jonggrangProcess.kill('SIGKILL'); } catch {}
+    }
+    for (const [, group] of groupProcesses) {
+        if (group.process && !group.process.killed) {
+            try { group.process.kill('SIGKILL'); } catch {}
+        }
+    }
+}
+process.on('SIGINT', () => { cleanupAllProcesses(); process.exit(0); });
+process.on('SIGTERM', () => { cleanupAllProcesses(); process.exit(0); });
+
+// ── Rate limiter (simple in-memory, per-IP) ────────────────
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60_000;   // 1 minute
+const RATE_LIMIT_MAX = 200;          // max requests per minute
+app.use((req, res, next) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const entry = rateLimitMap.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+    if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + RATE_LIMIT_WINDOW; }
+    entry.count++;
+    rateLimitMap.set(ip, entry);
+    if (entry.count > RATE_LIMIT_MAX) {
+        return res.status(429).json({ error: 'Too many requests. Slow down.' });
+    }
+    next();
+});
+// Clear stale rate limit entries every 5 minutes
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of rateLimitMap) {
+        if (now > entry.resetAt) rateLimitMap.delete(ip);
+    }
+}, 300_000).unref();
+
 (async () => {
-    const PORT = envPort !== null ? envPort : await findAvailablePort(7777, 7999);
-    server.listen(PORT, () => {
-        console.log(`Jonggrang dashboard on http://localhost:${PORT}`);
-        console.log(`Project root: ${PROJECT_ROOT}`);
-    });
+    try {
+        const PORT = envPort !== null ? envPort : await findAvailablePort(7777, 7999);
+        server.listen(PORT, () => {
+            console.log(`Jonggrang dashboard on http://localhost:${PORT}`);
+            console.log(`Project root: ${PROJECT_ROOT}`);
+        });
+    } catch (err) {
+        console.error(`[jonggrang] Failed to start server: ${err.message}`);
+        process.exit(1);
+    }
 })();
