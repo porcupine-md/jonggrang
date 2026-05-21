@@ -1794,8 +1794,17 @@ function cmdWeb() {
     process.exit(1);
   }
 
-  // Check if node_modules exists in web dir
-  if (!lib.fileExists(path.join(WEB_DIR, 'node_modules'))) {
+  // Check if server dependencies are loadable.
+  // Using require.resolve instead of checking node_modules directory presence so that
+  // globally installed packages (where deps are hoisted to the global node_modules,
+  // not a nested node_modules inside the package dir) are handled correctly.
+  let needsInstall = false;
+  try {
+    require.resolve('express', { paths: [WEB_DIR] });
+  } catch {
+    needsInstall = true;
+  }
+  if (needsInstall) {
     logInfo('Installing web dependencies...');
     execSync('npm install', { cwd: WEB_DIR, stdio: 'inherit' });
   }
