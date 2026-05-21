@@ -1794,19 +1794,24 @@ function cmdWeb() {
     process.exit(1);
   }
 
-  // Check if server dependencies are loadable.
-  // Using require.resolve instead of checking node_modules directory presence so that
-  // globally installed packages (where deps are hoisted to the global node_modules,
-  // not a nested node_modules inside the package dir) are handled correctly.
-  let needsInstall = false;
-  try {
-    require.resolve('express', { paths: [WEB_DIR] });
-  } catch {
-    needsInstall = true;
-  }
-  if (needsInstall) {
+  // Check if server dependencies are installed.
+  // We check for express as the canonical indicator — if it's missing, run npm install.
+  // Prefer fs.existsSync over require.resolve: the latter can fail spuriously under
+  // global installs with symlinks, custom prefixes, or cached resolution failures.
+  const expressIndex = path.join(WEB_DIR, 'node_modules', 'express', 'index.js');
+  if (!lib.fileExists(expressIndex)) {
     logInfo('Installing web dependencies...');
-    execSync('npm install', { cwd: WEB_DIR, stdio: 'inherit' });
+    try {
+      execSync('npm install --production', { cwd: WEB_DIR, stdio: 'inherit' });
+    } catch {
+      logError('npm install failed. Try running manually: cd "' + WEB_DIR + '" && npm install');
+      process.exit(1);
+    }
+    // Verify after install
+    if (!lib.fileExists(expressIndex)) {
+      logError('express still missing after npm install. Check: ' + WEB_DIR);
+      process.exit(1);
+    }
   }
 
   // Check if client build exists
@@ -1815,13 +1820,29 @@ function cmdWeb() {
   const distPath = path.join(clientDir, 'dist', 'index.html');
   if (!lib.fileExists(distPath)) {
     if (!lib.fileExists(clientPackageJson)) {
-      logError('Frontend build assets are missing and source files are unavailable in this installation.');
+      logError('client/package.json not found. Frontend cannot be built.');
       logInfo('Reinstall with: npm install -g jonggrang@latest');
       process.exit(1);
     }
 
+    // Ensure client dependencies are installed before building
+    const clientModules = path.join(clientDir, 'node_modules', '.package-lock.json');
+    if (!lib.fileExists(clientModules)) {
+      logInfo('Installing client dependencies...');
+      try {
+        execSync('npm install', { cwd: clientDir, stdio: 'inherit' });
+      } catch {
+        logError('npm install failed in client/. Try running manually.');
+        process.exit(1);
+      }
+    }
     logInfo('Building frontend...');
-    execSync('npm run build', { cwd: clientDir, stdio: 'inherit' });
+    try {
+      execSync('npm run build', { cwd: clientDir, stdio: 'inherit' });
+    } catch {
+      logError('Frontend build failed. Check client/ for errors.');
+      process.exit(1);
+    }
   }
 
   logHeader('JONGGRANG Web Dashboard');
