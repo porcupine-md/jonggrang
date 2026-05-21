@@ -1810,10 +1810,18 @@ function cmdWeb() {
   }
 
   // Check if client build exists
-  const distPath = path.join(WEB_DIR, 'client', 'dist', 'index.html');
+  const clientDir = path.join(WEB_DIR, 'client');
+  const clientPackageJson = path.join(clientDir, 'package.json');
+  const distPath = path.join(clientDir, 'dist', 'index.html');
   if (!lib.fileExists(distPath)) {
+    if (!lib.fileExists(clientPackageJson)) {
+      logError('Frontend build assets are missing and source files are unavailable in this installation.');
+      logInfo('Reinstall with: npm install -g jonggrang@latest');
+      process.exit(1);
+    }
+
     logInfo('Building frontend...');
-    execSync('npm run build', { cwd: WEB_DIR, stdio: 'inherit' });
+    execSync('npm run build', { cwd: clientDir, stdio: 'inherit' });
   }
 
   logHeader('JONGGRANG Web Dashboard');
