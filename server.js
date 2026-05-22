@@ -5,7 +5,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const chokidar = require('chokidar');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const lib = require('./lib/jonggrang');
 const orchestration = require('./lib/orchestration');
 const compaction = require('./lib/compaction');
@@ -586,11 +586,11 @@ app.get('/api/jonggrang/groups/:id/diff', (req, res) => {
     try {
         const base = sanitizeGitRef(group.baseSha || 'HEAD');
         const branch = sanitizeGitRef(group.branch);
-        const diff = require('child_process').execSync(
+        const diff = execSync(
             `git diff ${base}...${branch}`,
             { cwd: PROJECT_ROOT, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, timeout: 15000 }
         );
-        const files = require('child_process').execSync(
+        const files = execSync(
             `git diff ${base}...${branch} --name-only`,
             { cwd: PROJECT_ROOT, encoding: 'utf8', timeout: 15000 }
         ).trim().split('\n').filter(Boolean);
@@ -963,7 +963,7 @@ const portEnv = process.env.PORT;
 let envPort = null;
 if (portEnv !== undefined) {
     const parsedPort = Number(portEnv);
-    if (!Number.isFinite(parsedPort) || !Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65535) {
+    if (!Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65535) {
         throw new Error(`Invalid PORT environment variable: ${portEnv}`);
     }
     envPort = parsedPort;
