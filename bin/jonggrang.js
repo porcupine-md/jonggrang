@@ -5,8 +5,9 @@
 //
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { spawn, execSync } = require('child_process');
+const { spawn, spawnSync, execSync } = require('child_process');
 const readline = require('readline');
 const { intro, outro, select, confirm, text, isCancel, cancel, spinner } = require('@clack/prompts');
 
@@ -139,7 +140,6 @@ function checkDeps() {
       ];
       // Also check the global npm root (handles nvm paths like ~/.nvm/versions/node/vX.Y.Z/lib/node_modules)
       try {
-        const { execSync } = require('child_process');
         const globalRoot = execSync('npm root -g', { encoding: 'utf8', timeout: 3000 }).trim();
         if (globalRoot) searchPaths.push(globalRoot);
       } catch {}
@@ -2235,12 +2235,10 @@ const AGENT_COMMAND_DESCRIPTIONS = {
 
 // Spawn jonggrang CLI as a subprocess (inherits terminal so output is visible)
 function spawnJonggrang(args) {
-  const { spawnSync } = require('child_process');
   return spawnSync(process.execPath, [process.argv[1], ...args], { stdio: 'inherit' });
 }
 
 async function cmdAgent() {
-  const os = require('os');
   const { main, initTheme, ENV_AGENT_DIR } = await import('@earendil-works/pi-coding-agent');
 
   initTheme();
@@ -2340,7 +2338,6 @@ async function cmdAgent() {
 // ============================================================
 
 function resolveAgentDir() {
-  const os = require('os');
   return path.join(os.homedir(), '.jonggrang', 'agent');
 }
 
