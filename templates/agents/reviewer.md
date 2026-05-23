@@ -54,7 +54,7 @@ Depends on which phase you're called for:
 - [ ] DRY — no duplicated logic
 - [ ] Error cases handled
 - [ ] **Clarity check:** No comments that restate obvious code
-- [ ] **Conciseness check:** Function names are precise not verbose; no redundant abstractions
+- [ ] **Conciseness check:** Function names are precise, not verbose; no redundant abstractions
 - [ ] **No nested ternaries** — prefer switch or if/else for multiple conditions
 - [ ] **Single responsibility** — functions don't mix unrelated concerns
 
