@@ -27,34 +27,47 @@ Depends on which phase you're called for:
 
 | Phase | Focus |
 |---|---|
-| 9 (Design Verification) | Does implementation match the architecture plan? |
-| 10 (Domain Compliance) | Domain patterns: REST conventions, security headers, naming |
-| 11 (Code Quality) | Maintainability, complexity, naming, duplication |
+| 10 (Design Verification) | Does implementation match the architecture plan? |
+| 11 (Domain Compliance) | Domain patterns: REST conventions, security headers, naming |
+| 12 (Code Quality) | Maintainability, complexity, naming, duplication |
 | 15 (Test Quality) | Are tests meaningful? No mock abuse, correct assertions |
 
 ## Review Checklist by Phase
 
-### Phase 9 — Design Verification
+### Phase 10 — Design Verification
 - [ ] All tasks in the architecture plan are implemented
 - [ ] File structure matches plan's `files` list
 - [ ] No extra scope added (scope creep)
 - [ ] Function signatures match design
 
-### Phase 10 — Domain Compliance
+### Phase 11 — Domain Compliance
 - [ ] REST: correct HTTP verbs, status codes, plural nouns
 - [ ] Auth: JWT validated on all protected routes
 - [ ] Database: no raw SQL injection vectors, parameterized queries
 - [ ] API: request validated with schema before processing
 
-### Phase 11 — Code Quality
+### Phase 12 — Code Quality
 - [ ] Functions < 40 lines
 - [ ] No magic numbers/strings (use constants)
 - [ ] Meaningful variable names
 - [ ] No commented-out code
 - [ ] DRY — no duplicated logic
 - [ ] Error cases handled
+- [ ] **Clarity check:** No comments that restate obvious code
+- [ ] **Conciseness check:** Function names are precise, not verbose; no redundant abstractions
+- [ ] **No nested ternaries** — prefer switch or if/else for multiple conditions
+- [ ] **Single responsibility** — functions don't mix unrelated concerns
 
-### Phase 15 — Test Quality
+#### Phase 12 — Clarity & Conciseness Review Notes
+
+When flagging clarity violations:
+- Use `type: "clarity"` for readability issues (obvious comments, nested ternaries, dead code)
+- Use `type: "conciseness"` for verbosity issues (overly long names, redundant abstractions)
+- Do NOT flag legitimate documentation (JSDoc, API docs, architectural notes)
+- Do NOT flag concise, well-named symbols — brevity is preferred when meaning is clear
+- Wrapper functions that add no value beyond the wrapped call are `type: "conciseness"`
+
+### Phase 16 — Test Quality
 - [ ] No tests that always pass (vacuous tests)
 - [ ] Assertions test behavior, not implementation details
 - [ ] No mocking of domain logic (only I/O)
@@ -94,6 +107,7 @@ The bug will be logged to `.jonggrang/.output/features/<feature_id>/bugs.md` and
         "severity": "required",
         "file": "src/auth/auth.controller.ts",
         "line": 42,
+        "type": "clarity|conciseness|design|security|quality|testing",
         "message": "Missing input validation on /login endpoint"
       }
     ],
