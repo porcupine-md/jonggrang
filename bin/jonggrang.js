@@ -5,8 +5,9 @@
 //
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { spawn, execSync } = require('child_process');
+const { spawn, spawnSync, execSync } = require('child_process');
 const readline = require('readline');
 const { intro, outro, select, confirm, text, isCancel, cancel, spinner } = require('@clack/prompts');
 
@@ -50,10 +51,12 @@ const SKILLS_DIR    = paths.skillsDir;
 
 const JONGGRANG_VERSION = require('../package.json').version;
 
+const DEFAULT_TOOL = 'jonggrang';
+
 // Defaults (can be overridden by flags/env)
 let MAX_ITERATIONS = parseInt(process.env.JONGGRANG_MAX_ITERATIONS || '0', 10);
 let MODE = process.env.JONGGRANG_MODE || 'autonomous';
-let TOOL = process.env.JONGGRANG_TOOL || 'opencode';
+let TOOL = process.env.JONGGRANG_TOOL || DEFAULT_TOOL;
 let TOOL_SET = false;
 let TASK_ID = '';
 let BRANCH = '';
@@ -126,7 +129,31 @@ function checkDeps() {
   for (const cmd of ['jq', 'git']) {
     if (!commandExists(cmd)) missing.push(cmd);
   }
-  if (!commandExists(TOOL)) missing.push(TOOL);
+  // Tool-specific checks: opencode & claude need a CLI binary; jonggrang needs the Pi SDK
+  if (TOOL === 'jonggrang') {
+    let found = false;
+    try {
+      const { createRequire } = require('module');
+      const req = createRequire(path.join(PROJECT_ROOT, 'package.json'));
+      const searchPaths = [
+        ...(req.resolve.paths('@earendil-works/pi-coding-agent') || []),
+      ];
+      // Also check the global npm root (handles nvm paths like ~/.nvm/versions/node/vX.Y.Z/lib/node_modules)
+      try {
+        const globalRoot = execSync('npm root -g', { encoding: 'utf8', timeout: 3000 }).trim();
+        if (globalRoot) searchPaths.push(globalRoot);
+      } catch {}
+      for (const p of searchPaths) {
+        if (lib.fileExists(path.join(p, '@earendil-works', 'pi-coding-agent', 'package.json'))) {
+          found = true;
+          break;
+        }
+      }
+    } catch { /* ignore — fall through to not found */ }
+    if (!found) missing.push('@earendil-works/pi-coding-agent');
+  } else {
+    if (!commandExists(TOOL)) missing.push(TOOL);
+  }
 
   if (missing.length > 0) {
     logError(`Missing dependencies: ${missing.join(', ')}`);
@@ -137,7 +164,7 @@ function checkDeps() {
         case 'git':      console.log('  Install git:      brew install git'); break;
         case 'opencode':  console.log('  Install opencode:  curl -fsSL https://opencode.ai/install | bash'); break;
         case 'claude':    console.log('  Install claude:    npm install -g @anthropic-ai/claude-code'); break;
-        case 'jonggrang': console.log('  Install jonggrang engine: npm install -g @earendil-works/pi-coding-agent'); break;
+        case '@earendil-works/pi-coding-agent': console.log('  Install Pi SDK:  npm install -g @earendil-works/pi-coding-agent'); break;
         default:         console.log(`  Install ${cmd}`); break;
       }
     }
@@ -419,7 +446,7 @@ async function cmdWork(descriptionParts = []) {
   safeCheckConfig();
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
-    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
   if (MODE === 'autonomous') {
     MODE = lib.readConfig(CONFIG_FILE, 'mode.autonomy', 'autonomous');
@@ -726,7 +753,7 @@ async function cmdReview() {
   safeCheckConfig();
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
-    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
 
   logHeader('JONGGRANG Review');
@@ -857,7 +884,7 @@ async function cmdPlan(args, opts = {}) {
   if (!await ensureInit()) return;
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
-    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
@@ -1114,7 +1141,7 @@ async function cmdApprove(args, opts = {}) {
   safeCheckConfig();
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
-    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
 
   const planContent = fs.readFileSync(PLAN_FILE, 'utf8');
@@ -1286,7 +1313,7 @@ async function cmdBug(args) {
   safeCheckConfig();
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
-    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
@@ -1535,11 +1562,11 @@ async function cmdInit() {
     if (!INIT_TOOL) {
       const toolAnswer = await select({
         message: 'Primary AI agent tool',
-        initialValue: 'claude',
+        initialValue: 'jonggrang',
         options: [
+          { value: 'jonggrang', label: 'Jonggrang   — primary tool (Recommended)' },
           { value: 'claude',    label: 'Claude Code — primary tool' },
           { value: 'opencode',  label: 'OpenCode    — primary tool' },
-          { value: 'jonggrang', label: 'Jonggrang   — primary tool' },
         ],
       });
       if (isCancel(toolAnswer)) { cancel('Cancelled.'); return; }
@@ -1563,7 +1590,7 @@ async function cmdInit() {
   } else {
     const rl = createRL();
     if (!INIT_NAME)     INIT_NAME     = await ask(rl, 'Project name:',  path.basename(PROJECT_ROOT));
-    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'claude', 'claude|opencode|jonggrang');
+    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'jonggrang', 'jonggrang|claude|opencode');
     if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:',  'autonomous', 'supervised|balanced|autonomous');
     rl.close();
   }
@@ -1715,7 +1742,7 @@ async function cmdOrchestrate(descriptionParts) {
 }
 
 async function runOrchestrationLoop(featureId, manifest, manifestPath) {
-  const activeTool = TOOL || lib.readConfig(CONFIG_FILE, '.tool', 'opencode');
+  const activeTool = TOOL || lib.readConfig(CONFIG_FILE, '.tool', DEFAULT_TOOL);
   const activeMode = MODE || lib.readConfig(CONFIG_FILE, '.mode.autonomy', 'autonomous');
 
   for (const phaseNum of manifest.active_phases) {
@@ -2208,12 +2235,10 @@ const AGENT_COMMAND_DESCRIPTIONS = {
 
 // Spawn jonggrang CLI as a subprocess (inherits terminal so output is visible)
 function spawnJonggrang(args) {
-  const { spawnSync } = require('child_process');
   return spawnSync(process.execPath, [process.argv[1], ...args], { stdio: 'inherit' });
 }
 
 async function cmdAgent() {
-  const os = require('os');
   const { main, initTheme, ENV_AGENT_DIR } = await import('@earendil-works/pi-coding-agent');
 
   initTheme();
@@ -2313,7 +2338,6 @@ async function cmdAgent() {
 // ============================================================
 
 function resolveAgentDir() {
-  const os = require('os');
   return path.join(os.homedir(), '.jonggrang', 'agent');
 }
 
@@ -2873,7 +2897,7 @@ Work type auto-detection:
 
 Init flags (bypass wizard):
   --name <name>           Project name
-  --tool <tool>           claude | opencode (default: claude) — both tools always set up
+  --tool <tool>           jonggrang | claude | opencode (default: jonggrang) — all tools always set up
   --autonomy <mode>       supervised | balanced | autonomous
   --force                 Overwrite existing jonggrang.json
   (stack, type, testing, ci are auto-detected from the project)
