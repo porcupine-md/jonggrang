@@ -1798,7 +1798,15 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     }
 
     // ── Build phase prompt ────────────────────────────────────────
-    const phaseContext = orchestration.buildPhaseContext(manifest, phaseNum);
+    let phaseContext;
+    if (phaseNum === orchestration.SIMPLIFY_PHASE) {
+      // Phase 9 (simplification) uses specialized prompt with file scope
+      phaseContext = orchestration.buildSimplifyPrompt(manifest, PROJECT_ROOT);
+    } else {
+      // All other phases use generic phase context
+      phaseContext = orchestration.buildPhaseContext(manifest, phaseNum);
+    }
+    
     const agentsContent = lib.fileExists(paths.agentsFile)
       ? fs.readFileSync(paths.agentsFile, 'utf8') : '';
     const progressContent = lib.fileExists(paths.progressFile)
