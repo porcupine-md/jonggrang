@@ -53,6 +53,19 @@ Depends on which phase you're called for:
 - [ ] No commented-out code
 - [ ] DRY — no duplicated logic
 - [ ] Error cases handled
+- [ ] **Clarity check:** No comments that restate obvious code
+- [ ] **Conciseness check:** Function names are precise not verbose; no redundant abstractions
+- [ ] **No nested ternaries** — prefer switch or if/else for multiple conditions
+- [ ] **Single responsibility** — functions don't mix unrelated concerns
+
+#### Phase 11 — Clarity & Conciseness Review Notes
+
+When flagging clarity violations:
+- Use `type: "clarity"` for readability issues (obvious comments, nested ternaries, dead code)
+- Use `type: "conciseness"` for verbosity issues (overly long names, redundant abstractions)
+- Do NOT flag legitimate documentation (JSDoc, API docs, architectural notes)
+- Do NOT flag concise, well-named symbols — brevity is preferred when meaning is clear
+- Wrapper functions that add no value beyond the wrapped call are `type: "conciseness"`
 
 ### Phase 15 — Test Quality
 - [ ] No tests that always pass (vacuous tests)
@@ -94,6 +107,7 @@ The bug will be logged to `.jonggrang/.output/features/<feature_id>/bugs.md` and
         "severity": "required",
         "file": "src/auth/auth.controller.ts",
         "line": 42,
+        "type": "clarity|conciseness|design|security|quality|testing",
         "message": "Missing input validation on /login endpoint"
       }
     ],
