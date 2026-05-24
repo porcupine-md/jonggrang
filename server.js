@@ -10,6 +10,8 @@ const lib = require('./lib/jonggrang');
 const orchestration = require('./lib/orchestration');
 const compaction = require('./lib/compaction');
 const feedback = require('./lib/feedback');
+const webState = require('./lib/web-state');
+const webRunners = require('./lib/web-runners');
 
 const app = express();
 const server = http.createServer(app);
@@ -906,6 +908,456 @@ app.delete('/api/jonggrang/feedback-state', (req, res) => {
         res.json({ cleared: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+});
+
+// ============================================================
+// MULTI-PROJECT WEB WRAPPER
+// ============================================================
+
+// Per-project chokidar watchers: projectId -> Watcher
+const projectWatchers = new Map();
+
+function startProjectWatcher(project) {
+    if (projectWatchers.has(project.id)) return;
+    const jonggrangDir = path.join(project.path, '.jonggrang');
+    try { fs.mkdirSync(jonggrangDir, { recursive: true }); } catch {}
+    const watcher = chokidar.watch(jonggrangDir, { ignoreInitial: true, depth: 3 });
+
+    const emit = () => {
+        try {
+            const planPath = path.join(project.path, '.jonggrang', 'plan.md');
+            const tasksPath = path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
+
+            const state = webState.deriveState(project.path);
+            io.to(`project:${project.id}`).emit('state', { project_id: project.id, state });
+
+            if (fs.existsSync(planPath)) {
+                const content = fs.readFileSync(planPath, 'utf-8');
+                const mtime = fs.statSync(planPath).mtimeMs;
+                io.to(`project:${project.id}`).emit('plan.content', { project_id: project.id, content, mtime });
+            } else {
+                io.to(`project:${project.id}`).emit('plan.deleted', { project_id: project.id });
+            }
+
+            if (fs.existsSync(tasksPath)) {
+                const data = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'));
+                io.to(`project:${project.id}`).emit('tasks.update', { project_id: project.id, tasks: data.tasks || [] });
+            }
+        } catch {}
+    };
+
+    watcher.on('add', emit).on('change', emit).on('unlink', emit);
+    projectWatchers.set(project.id, watcher);
+}
+
+function stopProjectWatcher(projectId) {
+    const w = projectWatchers.get(projectId);
+    if (w) { w.close(); projectWatchers.delete(projectId); }
+}
+
+// Helper: spawn jonggrang for a specific project
+function spawnForProject(project, args, extraEnv = {}) {
+    const nodeCli = path.join(__dirname, 'bin', 'jonggrang.js');
+    return spawn('node', [nodeCli, ...args], {
+        cwd: project.path,
+        env: {
+            ...process.env,
+            JONGGRANG_HOME,
+            JONGGRANG_PROJECT_ROOT: project.path,
+            JONGGRANG_MODE: 'autonomous',
+            NO_UPDATE_NOTIFIER: '1',
+            FORCE_COLOR: '0',
+            ...extraEnv,
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+    });
+}
+
+// Helper: wire subprocess logs to socket.io room
+function wireProjectProcess(projectId, child, command) {
+    io.to(`project:${projectId}`).emit('process.started', { project_id: projectId, command, pid: child.pid });
+    let seq = 0;
+    const logLine = (stream) => (data) => {
+        const lines = data.toString().split(/\r?\n/).filter(l => l.trim());
+        for (const line of lines) {
+            io.to(`project:${projectId}`).emit('process.log', { project_id: projectId, stream, line, raw: line, seq: seq++ });
+        }
+    };
+    child.stdout.on('data', logLine('stdout'));
+    child.stderr.on('data', logLine('stderr'));
+    child.on('close', (code, signal) => {
+        io.to(`project:${projectId}`).emit('process.exited', { project_id: projectId, code, signal });
+        // Emit derived state after process exits
+        try {
+            const project = webState.getProject(projectId);
+            if (project) {
+                const state = webState.deriveState(project.path);
+                io.to(`project:${projectId}`).emit('state', { project_id: projectId, state });
+            }
+        } catch {}
+    });
+}
+
+// Socket.io: project subscription (rooms)
+io.on('connection', (socket) => {
+    socket.on('subscribe', ({ project_id }) => {
+        if (!project_id) return;
+        socket.join(`project:${project_id}`);
+        try {
+            const project = webState.getProject(project_id);
+            if (!project) return;
+            const state = webState.deriveState(project.path);
+            const tasksPath = path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
+            const planPath = path.join(project.path, '.jonggrang', 'plan.md');
+            let tasks = [];
+            if (fs.existsSync(tasksPath)) {
+                tasks = JSON.parse(fs.readFileSync(tasksPath, 'utf-8')).tasks || [];
+            }
+            let planContent = null;
+            let planMtime = null;
+            if (fs.existsSync(planPath)) {
+                planContent = fs.readFileSync(planPath, 'utf-8');
+                planMtime = fs.statSync(planPath).mtimeMs;
+            }
+            socket.emit('subscribed', {
+                project_id,
+                snapshot: { state, tasks, plan_exists: !!planContent, plan_content: planContent, plan_mtime: planMtime },
+            });
+        } catch (err) {
+            socket.emit('error', { code: 'SUBSCRIBE_ERROR', message: err.message });
+        }
+    });
+
+    socket.on('unsubscribe', ({ project_id }) => {
+        if (project_id) socket.leave(`project:${project_id}`);
+    });
+});
+
+// Start watchers for all existing ready projects
+for (const project of webState.listProjects()) {
+    if (project.init_status === 'ready' || project.init_status === 'imported') {
+        startProjectWatcher(project);
+    }
+}
+
+// ── WORKSPACE ─────────────────────────────────────────────────
+app.get('/api/workspace', (req, res) => {
+    try {
+        const workspace_path = webState.getWorkspacePath();
+        const projects = webState.listProjects();
+        res.json({ path: workspace_path, project_count: projects.length });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.patch('/api/workspace', (req, res) => {
+    const { path: newPath } = req.body || {};
+    if (!newPath) return res.status(400).json({ error: 'path required' });
+    try {
+        const resolved = webState.setWorkspacePath(newPath);
+        res.json({ path: resolved });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── PROJECTS: LIST + DETAIL ───────────────────────────────────
+app.get('/api/projects', (req, res) => {
+    try {
+        const projects = webState.listProjects().map(p => ({
+            ...p,
+            derived_state: webState.deriveState(p.path),
+        }));
+        res.json({ projects });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/projects/:id', (req, res) => {
+    try {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
+        res.json({ ...project, derived_state: webState.deriveState(project.path) });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── PROJECTS: IMPORT ─────────────────────────────────────────
+app.post('/api/projects/import', async (req, res) => {
+    const { name, source } = req.body || {};
+    if (!name || !source) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'name and source required' } });
+    if (!['git', 'local', 'fresh'].includes(source.type)) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'source.type must be git|local|fresh' } });
+    }
+
+    const workspacePath = webState.getWorkspacePath();
+    try { fs.mkdirSync(workspacePath, { recursive: true }); } catch {}
+
+    // Name collision check
+    const existing = webState.listProjects().find(p => p.name === name);
+    if (existing) return res.status(409).json({ error: { code: 'NAME_COLLISION', message: `Project "${name}" already exists` } });
+
+    const id = webState.generateId('proj');
+    const targetPath = source.type === 'local' && source.link_mode === 'reference'
+        ? path.resolve(source.path)
+        : path.join(workspacePath, name);
+
+    const record = {
+        id,
+        name,
+        path: targetPath,
+        source,
+        init_status: 'importing',
+        lanes: { main: { id: 'main', path: targetPath, branch: 'main', is_main: true } },
+        created_at: new Date().toISOString(),
+        last_opened_at: new Date().toISOString(),
+    };
+    webState.createProject(record);
+
+    res.status(202).json({ id, job_id: id });
+
+    // Async import
+    setImmediate(async () => {
+        try {
+            io.to(`project:${id}`).emit('import.progress', { project_id: id, phase: 'prepare', message: 'Preparing project...' });
+
+            if (source.type === 'git') {
+                const gitArgs = ['clone', '--progress', source.url, targetPath];
+                if (source.ref) gitArgs.push('--branch', source.ref);
+                const child = spawn('git', gitArgs, {
+                    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                });
+                await new Promise((resolve, reject) => {
+                    child.stderr.on('data', d => {
+                        const msg = d.toString().trim();
+                        io.to(`project:${id}`).emit('import.progress', { project_id: id, phase: 'clone', message: msg });
+                    });
+                    child.on('close', code => code === 0 ? resolve() : reject(new Error(`git clone failed (${code})`)));
+                });
+            } else if (source.type === 'fresh') {
+                fs.mkdirSync(targetPath, { recursive: true });
+                if (source.git_init !== false) {
+                    await new Promise((res2, rej) => {
+                        const g = spawn('git', ['init'], { cwd: targetPath, stdio: 'pipe' });
+                        g.on('close', c => c === 0 ? res2() : rej(new Error('git init failed')));
+                    });
+                }
+            }
+            // local reference: targetPath already exists, nothing to do
+
+            const detected = webState.detectStack(targetPath);
+            webState.updateProject(id, { init_status: 'imported' });
+            io.to(`project:${id}`).emit('import.done', { project_id: id, detected });
+            startProjectWatcher(webState.getProject(id));
+        } catch (err) {
+            webState.updateProject(id, { init_status: 'error', init_error: err.message });
+            io.to(`project:${id}`).emit('import.error', { project_id: id, message: err.message });
+        }
+    });
+});
+
+// ── PROJECTS: INIT ────────────────────────────────────────────
+app.post('/api/projects/:id/init', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+    if (!['imported', 'error'].includes(project.init_status)) {
+        return res.status(409).json({ error: { code: 'ALREADY_INITIALIZED', message: 'Project not in importable state' } });
+    }
+
+    const { type = 'api', stack = 'node-typescript', tool = 'claude', autonomy = 'autonomous' } = req.body || {};
+    const initArgs = [
+        'init', '--force',
+        '--name', project.name,
+        '--type', type,
+        '--stack', stack,
+        '--tool', tool,
+        '--autonomy', autonomy,
+        '--state', fs.existsSync(path.join(project.path, '.git')) ? 'existing' : 'new',
+    ];
+
+    webState.updateProject(project.id, { init_status: 'initializing' });
+    res.status(202).json({ job_id: project.id });
+
+    const child = spawnForProject(project, initArgs);
+    wireProjectProcess(project.id, child, 'init');
+    child.on('close', (code) => {
+        if (code === 0) {
+            webState.updateProject(project.id, { init_status: 'ready' });
+            io.to(`project:${project.id}`).emit('init.done', { project_id: project.id });
+            startProjectWatcher(webState.getProject(project.id));
+        } else {
+            webState.updateProject(project.id, { init_status: 'error', init_error: `Exit code ${code}` });
+        }
+    });
+});
+
+// ── PROJECTS: DELETE ──────────────────────────────────────────
+app.delete('/api/projects/:id', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+    stopProjectWatcher(project.id);
+    webState.deleteProject(project.id);
+
+    if (req.query.delete_files === 'true') {
+        try { fs.rmSync(project.path, { recursive: true, force: true }); } catch {}
+    }
+    res.status(204).send();
+});
+
+// ── PLAN ──────────────────────────────────────────────────────
+app.get('/api/projects/:id/plan', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+    const planPath = path.join(project.path, '.jonggrang', 'plan.md');
+    if (!fs.existsSync(planPath)) return res.json({ exists: false });
+    try {
+        const content = fs.readFileSync(planPath, 'utf-8');
+        const mtime = fs.statSync(planPath).mtimeMs;
+        res.json({ exists: true, content, mtime });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/projects/:id/plan', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+    const { description, deep } = req.body || {};
+    if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
+
+    const args = ['plan', description, ...(deep ? ['--deep'] : [])];
+    const child = spawnForProject(project, args);
+    wireProjectProcess(project.id, child, 'plan');
+    res.status(202).json({ job_id: project.id });
+});
+
+app.put('/api/projects/:id/plan', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+    const { content, mtime } = req.body || {};
+    if (content === undefined) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'content required' } });
+
+    const planPath = path.join(project.path, '.jonggrang', 'plan.md');
+
+    // Optimistic concurrency: check mtime if provided
+    if (mtime && fs.existsSync(planPath)) {
+        const currentMtime = fs.statSync(planPath).mtimeMs;
+        if (Math.abs(currentMtime - mtime) > 1000) {
+            return res.status(409).json({ error: { code: 'PLAN_MTIME_MISMATCH', message: 'Plan was modified externally' } });
+        }
+    }
+
+    try {
+        fs.mkdirSync(path.dirname(planPath), { recursive: true });
+        fs.writeFileSync(planPath, content, 'utf-8');
+        const newMtime = fs.statSync(planPath).mtimeMs;
+        res.json({ mtime: newMtime });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/projects/:id/plan', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+    const planPath = path.join(project.path, '.jonggrang', 'plan.md');
+    try {
+        if (fs.existsSync(planPath)) fs.unlinkSync(planPath);
+        res.status(204).send();
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── APPROVE ───────────────────────────────────────────────────
+app.post('/api/projects/:id/approve', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+    const planPath = path.join(project.path, '.jonggrang', 'plan.md');
+    if (!fs.existsSync(planPath)) {
+        return res.status(422).json({ error: { code: 'PLAN_NOT_FOUND', message: 'No plan.md found. Generate a plan first.' } });
+    }
+
+    const child = spawnForProject(project, ['approve']);
+    wireProjectProcess(project.id, child, 'approve');
+    res.status(202).json({ job_id: project.id });
+});
+
+// ── TASKS ─────────────────────────────────────────────────────
+app.get('/api/projects/:id/tasks', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+    const tasksPath = path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
+    if (!fs.existsSync(tasksPath)) return res.json({ tasks: [] });
+    try {
+        const data = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'));
+        res.json({ tasks: data.tasks || [] });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── WORK ──────────────────────────────────────────────────────
+const activeWork = new Map(); // projectId -> child process
+
+app.post('/api/projects/:id/work', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+    if (activeWork.has(project.id)) {
+        return res.status(409).json({ error: { code: 'PROCESS_ALREADY_RUNNING', message: 'A work process is already running' } });
+    }
+
+    const { task_id } = req.body || {};
+    const args = ['work', ...(task_id ? ['--task', task_id] : [])];
+    const child = spawnForProject(project, args);
+    activeWork.set(project.id, child);
+
+    wireProjectProcess(project.id, child, 'work');
+
+    child.on('close', () => activeWork.delete(project.id));
+    res.status(202).json({ job_id: project.id });
+});
+
+app.post('/api/projects/:id/cancel', (req, res) => {
+    const child = activeWork.get(req.params.id);
+    if (!child) return res.json({ cancelled: false, message: 'No process running' });
+    try {
+        child.kill('SIGTERM');
+        setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
+        res.json({ cancelled: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/projects/:id/process', (req, res) => {
+    const child = activeWork.get(req.params.id);
+    res.json({ running: !!child, pid: child?.pid || null });
+});
+
+// ── LOGS ──────────────────────────────────────────────────────
+app.get('/api/projects/:id/progress', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+    const progressPath = path.join(project.path, '.jonggrang', 'progress.txt');
+    if (!fs.existsSync(progressPath)) return res.json({ content: '' });
+    try {
+        res.json({ content: fs.readFileSync(progressPath, 'utf-8') });
+    } catch {
+        res.json({ content: '' });
     }
 });
 
