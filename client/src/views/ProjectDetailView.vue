@@ -16,6 +16,7 @@
         </RouterLink>
         <RouterLink :to="`/projects/${id}/tasks`" class="snav-link">📋 Tasks</RouterLink>
         <RouterLink :to="`/projects/${id}/logs`" class="snav-link">📟 Logs</RouterLink>
+        <RouterLink :to="`/projects/${id}/changelog`" class="snav-link">📜 Changelog</RouterLink>
       </nav>
       <div class="sidebar-meta">
         <div class="meta-row"><span>Status</span><span>{{ project.init_status }}</span></div>

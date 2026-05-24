@@ -8,40 +8,6 @@ module.exports = function(deps) {
     const { io, PROJECT_ROOT, orchestration } = deps;
     const router = Router();
 
-    router.post('/orchestrate', async (req, res) => {
-        const { description, workType, tool, mode } = req.body || {};
-        if (!description) return res.status(400).json({ error: 'description required' });
-
-        try {
-            const detectedWorkType = workType || orchestration.classifyWorkType(description);
-            const featureId = orchestration.generateFeatureId(description);
-            const { manifest, manifestPath } = orchestration.createManifest(
-                PROJECT_ROOT, featureId, description, detectedWorkType
-            );
-
-            const child = spawn('node', [
-                path.join(__dirname, '..', '..', 'bin', 'jonggrang.js'),
-                'orchestrate', description,
-                '--tool', tool || 'opencode',
-                '--mode', mode || 'autonomous',
-            ], {
-                cwd: PROJECT_ROOT,
-                env: { ...process.env, JONGGRANG_PROJECT_ROOT: PROJECT_ROOT },
-                stdio: ['ignore', 'pipe', 'pipe'],
-            });
-
-            child.stdout.on('data', d => io.emit('log', { stream: 'stdout', data: d.toString() }));
-            child.stderr.on('data', d => io.emit('log', { stream: 'stderr', data: d.toString() }));
-            child.on('close', code => {
-                io.emit('orchestration_complete', { featureId, exitCode: code });
-            });
-
-            res.json({ featureId, manifestPath, workType: detectedWorkType, activePhases: manifest.active_phases });
-        } catch (err) {
-            res.status(500).json({ error: err.message });
-        }
-    });
-
     router.post('/orchestrate/resume', async (req, res) => {
         const { featureId } = req.body || {};
         try {

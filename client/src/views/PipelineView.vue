@@ -37,6 +37,7 @@
     <div v-if="tab === 'phases'" class="pv-body pv-body--phases">
       <PhaseTimeline />
     </div>
+
   </div>
 </template>
 
@@ -58,7 +59,6 @@ const planContent = ref('');
 const planMeta = ref(null);
 const planState = ref(null);
 const loading = ref(false);
-
 const renderedPlan = computed(() => {
   try { return marked.parse(planContent.value || ''); } catch { return planContent.value; }
 });
@@ -101,7 +101,6 @@ onMounted(async () => {
     manifest.fetch(projectId.value),
   ]);
 
-  // Update plan content live if it's still a draft
   const socket = ws.socket;
   if (socket) {
     socket.on('plan.content', ({ project_id, content }) => {
@@ -111,7 +110,6 @@ onMounted(async () => {
     });
     socket.on('plan.deleted', ({ project_id }) => {
       if (project_id !== projectId.value) return;
-      // Plan was archived — reload to get archived version
       loadPlan();
     });
   }

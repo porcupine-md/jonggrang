@@ -1,7 +1,7 @@
 'use strict';
 
 module.exports = function register(app, io, ctx) {
-    const { PROJECT_ROOT, JONGGRANG_HOME, lib, orchestration, compaction, feedback, paths } = ctx;
+    const { PROJECT_ROOT, JONGGRANG_HOME, lib, orchestration, compaction, paths } = ctx;
 
     const fs = require('fs');
     const path = require('path');
@@ -134,7 +134,6 @@ module.exports = function register(app, io, ctx) {
         lib,
         orchestration,
         compaction,
-        feedback,
         paths,
         state,
         groupProcesses,
@@ -146,17 +145,12 @@ module.exports = function register(app, io, ctx) {
 
     // ── Mount sub-routers ─────────────────────────────────────────
 
-    app.use('/api/jonggrang', require('./status')(deps));
     app.use('/api/jonggrang', require('./tasks')(deps));
     app.use('/api/jonggrang', require('./work')(deps));
     app.use('/api/jonggrang', require('./plan')(deps));
-    app.use('/api/jonggrang', require('./approve')(deps));
     app.use('/api/jonggrang', require('./review')(deps));
-    app.use('/api/jonggrang', require('./parallel')(deps));
-    app.use('/api/jonggrang', require('./admin')(deps));
     app.use('/api/jonggrang', require('./orchestrate')(deps));
     app.use('/api/jonggrang', require('./compaction')(deps));
-    app.use('/api/jonggrang', require('./feedback')(deps));
 
     // ── Cleanup ───────────────────────────────────────────────────
 

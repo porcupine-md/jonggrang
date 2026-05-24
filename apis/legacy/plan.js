@@ -1,10 +1,9 @@
 'use strict';
 
 const { Router } = require('express');
-const fs = require('fs');
 
 module.exports = function(deps) {
-    const { io, lib, paths, spawnJonggrang, emitPlanUpdate } = deps;
+    const { io, paths, spawnJonggrang } = deps;
     const router = Router();
 
     router.post('/plan', (req, res) => {
@@ -26,40 +25,6 @@ module.exports = function(deps) {
         });
 
         res.json({ success: true, message: 'Plan Phase 1 started' });
-    });
-
-    router.get('/plan/content', (req, res) => {
-        if (!lib.fileExists(paths.planFile)) {
-            return res.json({ exists: false, content: '' });
-        }
-        try {
-            const content = fs.readFileSync(paths.planFile, 'utf8');
-            res.json({ exists: true, content });
-        } catch (err) {
-            res.status(500).json({ error: err.message });
-        }
-    });
-
-    router.put('/plan/content', (req, res) => {
-        const { content } = req.body;
-        if (content === undefined) return res.status(400).json({ error: 'content required' });
-        try {
-            fs.writeFileSync(paths.planFile, content, 'utf8');
-            emitPlanUpdate();
-            res.json({ success: true });
-        } catch (err) {
-            res.status(500).json({ error: err.message });
-        }
-    });
-
-    router.delete('/plan/content', (req, res) => {
-        try {
-            if (lib.fileExists(paths.planFile)) fs.unlinkSync(paths.planFile);
-            emitPlanUpdate();
-            res.json({ success: true });
-        } catch (err) {
-            res.status(500).json({ error: err.message });
-        }
     });
 
     return router;

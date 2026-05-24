@@ -83,6 +83,12 @@ module.exports = function register(app, io, ctx) {
                         io.to(`project:${project.id}`).emit('manifest.updated', { project_id: project.id, manifest });
                     } catch {}
                 }
+                if (changedPath && changedPath.endsWith('progress.txt')) {
+                    try {
+                        const content = fs.readFileSync(changedPath, 'utf-8');
+                        io.to(`project:${project.id}`).emit('progress.update', { project_id: project.id, content });
+                    } catch {}
+                }
             } catch {}
         };
 
@@ -173,7 +179,6 @@ module.exports = function register(app, io, ctx) {
     app.use('/api/projects', require('./approve')(deps));
     app.use('/api/projects', require('./tasks')(deps));
     app.use('/api/projects', require('./work')(deps));
-    app.use('/api/projects', require('./progress')(deps));
 
     // ── Cleanup ───────────────────────────────────────────────────
 

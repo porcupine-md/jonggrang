@@ -12,6 +12,7 @@ const routes = [
       { path: 'pipeline', component: () => import('../views/PipelineView.vue') },
       { path: 'tasks', component: () => import('../components/kanban/KanbanBoard.vue') },
       { path: 'logs', component: () => import('../components/log/LogStream.vue') },
+      { path: 'changelog', component: () => import('../views/ChangelogView.vue') },
     ],
   },
   { path: '/settings', component: () => import('../views/SettingsView.vue') },
