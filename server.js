@@ -1398,8 +1398,10 @@ app.post('/api/projects/:id/work', (req, res) => {
         return res.status(409).json({ error: { code: 'PROCESS_ALREADY_RUNNING', message: 'A work process is already running' } });
     }
 
-    const { task_id } = req.body || {};
-    const args = ['work', ...(task_id ? ['--task', task_id] : [])];
+    const { task_id, resume } = req.body || {};
+    const args = ['work'];
+    if (resume) args.push('--resume');
+    else if (task_id) args.push('--task', task_id);
     const child = spawnForProject(project, args);
     activeWork.set(project.id, child);
 

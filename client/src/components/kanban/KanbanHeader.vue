@@ -20,7 +20,7 @@
         class="btn btn--primary btn--sm"
         :disabled="working"
         @click="startWork"
-      >▶ Start Work</button>
+      >{{ isInterrupted ? '↺ Resume Work' : '▶ Start Work' }}</button>
       <button
         v-if="proc.isRunning && proc.running?.command === 'work'"
         class="btn btn--danger btn--sm"
@@ -45,11 +45,20 @@ const working = ref(false);
 const project = computed(() => projects.byId[props.projectId]);
 const state = computed(() => project.value?.derived_state?.state || 'idle');
 const canWork = computed(() => ['tasks_pending', 'working', 'done'].includes(state.value) || tasks.tasks.length > 0);
+// Interrupted = some tasks are in_progress but no process is running (crashed/stopped)
+const isInterrupted = computed(() =>
+  state.value === 'working' && !proc.isRunning
+);
 
 async function startWork() {
   working.value = true;
   try {
-    await fetch(`/api/projects/${props.projectId}/work`, { method: 'POST' });
+    const body = isInterrupted.value ? { resume: true } : {};
+    await fetch(`/api/projects/${props.projectId}/work`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
   } catch {}
   working.value = false;
 }

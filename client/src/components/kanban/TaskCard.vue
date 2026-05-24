@@ -13,15 +13,36 @@
     </div>
     <div v-if="preview && task.status === 'in_progress'" class="card-preview">↳ {{ preview }}</div>
     <div v-if="task.status === 'failed' && task.error" class="card-error">! {{ task.error }}</div>
+    <div v-if="task.status === 'blocked'" class="card-blocked-actions" @click.stop>
+      <button class="btn-resume" :disabled="resuming" @click="resumeTask">
+        {{ resuming ? '...' : '↺ Resume' }}
+      </button>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onUnmounted } from 'vue';
+import { useRoute } from 'vue-router';
 import { useProcessStore } from '../../stores/process.js';
 
 const props = defineProps({ task: Object });
 defineEmits(['click']);
+
+const route = useRoute();
+const resuming = ref(false);
+
+async function resumeTask() {
+  resuming.value = true;
+  try {
+    await fetch(`/api/projects/${route.params.id}/work`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: props.task.id }),
+    });
+  } catch {}
+  resuming.value = false;
+}
 
 const proc = useProcessStore();
 const now = ref(Date.now());
@@ -76,4 +97,12 @@ const preview = computed(() => proc.taskLogPreview(props.task.id));
 .card-files { font-size: 10px; color: #4b5563; font-family: monospace; margin-top: 4px; }
 .card-preview { font-size: 10px; color: #6b7280; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-error { font-size: 10px; color: #ef4444; margin-top: 4px; }
+.card-blocked-actions { margin-top: 8px; }
+.btn-resume {
+  font-size: 10px; padding: 3px 10px; border-radius: 4px;
+  background: #1e1f2a; border: 1px solid #4b5563; color: #9ca3af;
+  cursor: pointer; transition: all 0.15s;
+}
+.btn-resume:hover:not(:disabled) { background: #2d2f3e; color: #e4e4e7; border-color: #6b7280; }
+.btn-resume:disabled { opacity: 0.5; cursor: default; }
 </style>
