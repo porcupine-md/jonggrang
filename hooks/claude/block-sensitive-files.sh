@@ -37,7 +37,7 @@ if echo "$FILE_PATH" | grep -qE '(^|/)(\.env(\.[^/]+)?|orcinus(\.[^/]+)?)$'; the
   if git check-ignore -q -- "$FILE_PATH" 2>/dev/null; then
     exit 0
   else
-    deny "DENIED: '$FILE_PATH' diblokir karena belum ada di .gitignore. Tambahkan ke .gitignore sebelum akses (SOP Section 4.1)."
+    deny "DENIED: '$FILE_PATH' is blocked — not in .gitignore. Add it to .gitignore before accessing (SOP Section 4.1)."
   fi
 fi
 
@@ -70,7 +70,7 @@ for pattern in "${SENSITIVE_PATTERNS[@]}"; do
   for candidate in "$FILE_PATH" "$RESOLVED_PATH" "$GLOB_PATTERN"; do
     [ -z "$candidate" ] && continue
     if echo "$candidate" | grep -qiE "$pattern"; then
-      deny "DENIED: Akses ke '$candidate' diblokir — file sensitif (pattern: $pattern). Gunakan secret manager atau wrapper yang sesuai."
+      deny "DENIED: Access to '$candidate' is blocked — sensitive file (pattern: $pattern). Use a secret manager or an appropriate wrapper instead."
     fi
   done
 done

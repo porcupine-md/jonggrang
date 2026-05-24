@@ -196,7 +196,7 @@ export default function (pi: ExtensionAPI) {
         if (isSensitiveFile(candidate, projectRoot)) {
           return {
             block: true,
-            reason: `FILE PROTECTION: Akses ke '${candidate}' diblokir — file sensitif.\nGunakan secret manager atau wrapper yang sesuai.`,
+            reason: `FILE PROTECTION: Access to '${candidate}' is blocked — sensitive file.\nUse a secret manager or an appropriate wrapper instead.`,
           };
         }
       }
@@ -206,7 +206,7 @@ export default function (pi: ExtensionAPI) {
     if (toolName === "bash" && isSecretCommand(command)) {
       return {
         block: true,
-        reason: `SECRET COMMAND BLOCKED: Command berpotensi membongkar secret.\nGunakan 'run-with-secrets <profile> <cmd>' untuk akses kredensial.`,
+        reason: `SECRET COMMAND BLOCKED: Command may expose secrets.\nUse 'run-with-secrets <profile> <cmd>' to access credentials safely.`,
       };
     }
 
@@ -335,7 +335,7 @@ export default function (pi: ExtensionAPI) {
             if (leaked) {
               return {
                 block: true,
-                reason: `BLOCKED: Secret terdeteksi di file yang dimodifikasi. Hapus secret dan ganti dengan referensi ke secret manager sebelum menyelesaikan task.\nTemuan: ${leaked}`,
+                reason: `BLOCKED: Secret detected in modified files. Remove the secret and replace it with a secret manager reference before completing the task.\nFindings: ${leaked}`,
               };
             }
           } finally {
@@ -343,7 +343,7 @@ export default function (pi: ExtensionAPI) {
           }
         } catch (e: any) {
           if (e.message && e.message.includes("BLOCKED:")) throw e;
-          console.error("[jonggrang] WARNING: trufflehog tidak tersedia — secret scan dilewati.");
+          console.error("[jonggrang] WARNING: trufflehog not available — secret scan skipped.");
         }
       }
     } catch (e: any) {

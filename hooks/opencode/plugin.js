@@ -233,8 +233,8 @@ function createPlugin(projectRoot) {
         const isFileOp = /^(read_file|edit_file|write_file|glob|grep|view_file|cat|Read|Edit|Write|Glob|Grep|str_replace_editor)$/i.test(toolName);
         if (isFileOp && filePath && isSensitiveFile(filePath)) {
           throw new Error(
-            `FILE PROTECTION: Akses ke '${filePath}' diblokir — file sensitif.\n` +
-            `Gunakan secret manager atau wrapper yang sesuai.`
+            `FILE PROTECTION: Access to '${filePath}' is blocked — sensitive file.\n` +
+            `Use a secret manager or an appropriate wrapper instead.`
           );
         }
 
@@ -243,8 +243,8 @@ function createPlugin(projectRoot) {
         const isShellOp = /^(bash|Bash|shell|run_bash|run_command|execute|exec|terminal|computer)$/i.test(toolName);
         if (isShellOp && command && isSecretCommand(command)) {
           throw new Error(
-            `SECRET COMMAND BLOCKED: Command '${command}' berpotensi membongkar secret.\n` +
-            `Gunakan 'run-with-secrets <profile> <cmd>' untuk akses kredensial.`
+            `SECRET COMMAND BLOCKED: Command '${command}' may expose secrets.\n` +
+            `Use 'run-with-secrets <profile> <cmd>' to access credentials safely.`
           );
         }
 

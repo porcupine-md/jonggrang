@@ -40,34 +40,34 @@ while IFS= read -r seg; do
 
   # ── env / printenv / set (dump all env vars) ─────────────────────────
   echo "$seg" | grep -qE '^(env|printenv|set)([[:space:]]|$)' \
-    && deny "DENIED: '$seg' membuang semua env vars ke LLM context. Gunakan 'run-with-secrets <profile> <cmd>' untuk akses kredensial."
+    && deny "DENIED: '$seg' dumps all env vars into LLM context. Use 'run-with-secrets <profile> <cmd>' to access credentials safely."
 
   # ── export with literal value (not from subshell/variable) ───────────
   echo "$seg" | grep -qE '^export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=[^$]' \
-    && deny "DENIED: '$seg' mungkin meng-export literal secret. Gunakan referensi dari secret manager."
+    && deny "DENIED: '$seg' may export a literal secret. Use a secret manager reference instead."
 
   # ── AWS credential commands ──────────────────────────────────────────
   echo "$seg" | grep -qE '\baws[[:space:]]+(configure[[:space:]]+list|sts[[:space:]]+get-session-token)\b' \
-    && deny "DENIED: '$seg' dapat membongkar AWS credentials. Gunakan 'run-with-secrets <profile> <cmd>'."
+    && deny "DENIED: '$seg' may expose AWS credentials. Use 'run-with-secrets <profile> <cmd>'."
 
   # ── GitHub CLI token dump ────────────────────────────────────────────
   echo "$seg" | grep -qE '\bgh[[:space:]]+auth[[:space:]]+(token|status)\b' \
-    && deny "DENIED: '$seg' dapat membongkar GitHub token. Gunakan 'run-with-secrets <profile> <cmd>'."
+    && deny "DENIED: '$seg' may expose GitHub token. Use 'run-with-secrets <profile> <cmd>'."
 
   # ── kubectl config view without --minify ─────────────────────────────
   if echo "$seg" | grep -qE '\bkubectl[[:space:]]+config[[:space:]]+view\b'; then
     echo "$seg" | grep -q '\-\-minify' \
-      || deny "DENIED: 'kubectl config view' tanpa --minify dapat membongkar semua kubeconfig. Tambahkan flag --minify."
+      || deny "DENIED: 'kubectl config view' without --minify may expose all kubeconfig data. Add the --minify flag."
   fi
 
   # ── Any reader-like command targeting a sensitive path ──────────────
   if echo "$seg" | grep -qiE "\\b${READERS}\\b.*${SECRETPATH}"; then
-    deny "DENIED: '$seg' membaca file sensitif. Gunakan secret manager atau wrapper yang sesuai."
+    deny "DENIED: '$seg' reads a sensitive file. Use a secret manager or an appropriate wrapper instead."
   fi
 
   # ── echo of secret env vars ──────────────────────────────────────────
   echo "$seg" | grep -qiE 'echo[[:space:]]+\$[A-Za-z_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD)' \
-    && deny "DENIED: '$seg' mencetak nilai secret ke output. Jangan expose secret ke LLM context."
+    && deny "DENIED: '$seg' prints a secret value to output. Do not expose secrets to LLM context."
 
 done <<< "$SEGMENTS"
 
