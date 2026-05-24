@@ -8,7 +8,7 @@
 //   resources_discover   → redirect skill/prompt discovery to .jonggrang/
 //   tool_call            → file protection + secret command block + agent-first + compaction gate + task role claim
 //   tool_result          → track modifications (dirty bit) + output sanitization
-//   agent_stop           → secret final check + feedback loop gate + quality gate + output enforcement
+//   agent_end            → secret final check + feedback loop gate + quality gate + output enforcement
 //
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -104,9 +104,9 @@ function writeJsonSafe(filePath: string, data: any): void {
 }
 
 export default function (pi: ExtensionAPI) {
-  // Resolve projectRoot from the extension's location:
-  // installed at <projectRoot>/.jonggrang/extensions/jonggrang.ts → ../../.. = projectRoot
-  const projectRoot = path.resolve(__dirname, "..", "..", "..");
+  // projectRoot = cwd where `jonggrang agent` is invoked.
+  // Do NOT use __dirname — the extension is loaded via --extension flag, not from a fixed install path.
+  const projectRoot = process.cwd();
   const jonggrangLib = (() => {
     // Try npm package first, then fall back to co-located lib/
     try {
@@ -168,30 +168,34 @@ export default function (pi: ExtensionAPI) {
   // Adds .jonggrang/skills and .jonggrang/prompts to Pi's discovery paths.
   // This avoids needing a full custom ResourceLoader.
   pi.on("resources_discover", async (event) => {
-    const cwd = (event as any).cwd || projectRoot;
+    const cwd = event.cwd || projectRoot;
+    const skillsPath  = path.join(cwd, ".jonggrang", "skills");
+    const promptsPath = path.join(cwd, ".jonggrang", "prompts");
     return {
-      skillPaths: [path.join(cwd, ".jonggrang", "skills")],
-      promptPaths: [path.join(cwd, ".jonggrang", "prompts")],
-      themePaths: [],
+      skillPaths:  fs.existsSync(skillsPath)  ? [skillsPath]  : [],
+      promptPaths: fs.existsSync(promptsPath) ? [promptsPath] : [],
+      themePaths:  [],
     };
   });
 
   // ── LAYER 2: tool_call → fileProtection + secretCommandBlock + agentFirst + compactionGate + taskRoleClaim ─
+  // event.toolName is the Pi API property (lowercase: "read", "edit", "write", "bash", "grep", "find", "ls")
+  // Return { block: true, reason? } to block — this is ToolCallEventResult, NOT { action: "block" }
   pi.on("tool_call", (event, ctx) => {
-    const toolName = (event as any).tool || "";
-    const input = (event as any).input || {};
-    const filePath = input.file_path || input.path || "";
-    const command = input.command || input.cmd || "";
-    const globPattern = input.pattern || input.glob || "";
+    const toolName = event.toolName || "";
+    const input = event.input || {};
+    const filePath = (input.file_path as string) || (input.path as string) || "";
+    const command = (input.command as string) || (input.cmd as string) || "";
+    const globPattern = (input.pattern as string) || (input.glob as string) || "";
 
     // ── File Protection (mirrors block-sensitive-files.sh) ─────────────────
-    const isFileOp = /^(Read|Edit|Write|Glob|Grep|read_file|edit_file|write_file|view_file|str_replace_editor)$/i.test(toolName);
+    const isFileOp = /^(read|edit|write|grep|find|ls)$/.test(toolName);
     if (isFileOp) {
       const candidates = [filePath, globPattern].filter(Boolean);
       for (const candidate of candidates) {
         if (isSensitiveFile(candidate, projectRoot)) {
           return {
-            action: "block",
+            block: true,
             reason: `FILE PROTECTION: Akses ke '${candidate}' diblokir — file sensitif.\nGunakan secret manager atau wrapper yang sesuai.`,
           };
         }
@@ -199,10 +203,9 @@ export default function (pi: ExtensionAPI) {
     }
 
     // ── Secret Command Block (mirrors block-secret-commands.sh) ────────────
-    const isShellOp = /^(Bash|bash|shell|run_bash|run_command|execute|exec|terminal)$/i.test(toolName);
-    if (isShellOp && isSecretCommand(command)) {
+    if (toolName === "bash" && isSecretCommand(command)) {
       return {
-        action: "block",
+        block: true,
         reason: `SECRET COMMAND BLOCKED: Command berpotensi membongkar secret.\nGunakan 'run-with-secrets <profile> <cmd>' untuk akses kredensial.`,
       };
     }
@@ -214,7 +217,7 @@ export default function (pi: ExtensionAPI) {
         const gate = compaction.checkCompactionGate(projectRoot);
         if (gate.status === "block") {
           return {
-            action: "block",
+            block: true,
             reason: `COMPACTION GATE BLOCKED: ${gate.message}\nRun /compact before spawning new agents.`,
           };
         }
@@ -223,7 +226,7 @@ export default function (pi: ExtensionAPI) {
 
     // ── Task Role Claim (queue role for upcoming sub-agent) ────────────────
     if (toolName === "Task") {
-      const taskPrompt = (input.prompt || input.description || "").toLowerCase();
+      const taskPrompt = ((input.prompt as string) || (input.description as string) || "").toLowerCase();
       let expectedRole = "";
       if (/tester/.test(taskPrompt))         expectedRole = "tester";
       else if (/reviewer/.test(taskPrompt))  expectedRole = "reviewer";
@@ -242,8 +245,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     // ── Agent-First Enforcement (blocks direct edits from orchestrator) ────
-    if (toolName === "Edit" || toolName === "Write" ||
-        toolName === "edit_file" || toolName === "write_file") {
+    if (toolName === "edit" || toolName === "write") {
       const agentsRegistry = path.join(projectRoot, ".jonggrang", ".output", "agents-registry.json");
       if (!fs.existsSync(agentsRegistry)) return;
 
@@ -260,7 +262,7 @@ export default function (pi: ExtensionAPI) {
         }
         if (sessionRole !== "developer" && sessionRole !== "tester") {
           return {
-            action: "block",
+            block: true,
             reason: `AGENT-FIRST ENFORCEMENT: Cannot edit ${filePath} directly.\nA '${domain}' specialist is registered. Spawn '${domain}-developer' agent instead.`,
           };
         }
@@ -269,25 +271,28 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── LAYER 3: tool_result → outputSanitization + trackModifications ──────
+  // event.toolName is the Pi API property; event.content is (TextContent | ImageContent)[]
+  // ToolResultEventResult: { content?, details?, isError? } — no additionalContext field
   pi.on("tool_result", (event) => {
-    const toolName = (event as any).tool || "";
-    const input = (event as any).input || {};
-    const output = (event as any).output || (event as any).result || "";
-    const filePath = input.file_path || input.path || "";
+    const toolName = event.toolName || "";
+    const input = event.input || {};
+    const filePath = (input.file_path as string) || (input.path as string) || "";
 
     // ── Output Sanitization (mirrors sanitize-output.sh) ─────────────────
-    const outputStr = typeof output === "string" ? output : JSON.stringify(output);
+    const rawContent = event.content ?? [];
+    const outputStr = rawContent
+      .map((c) => (c.type === "text" ? c.text : ""))
+      .join("");
     const sanitized = sanitizeSecrets(outputStr);
-    let hookReturn: Record<string, any> | undefined;
+    let hookReturn: import("@earendil-works/pi-coding-agent").ToolResultEventResult | undefined;
     if (sanitized !== outputStr) {
       hookReturn = {
-        additionalContext: `⚠ SECRET LEAK DETECTED in tool output. DO NOT repeat the raw secret values, do NOT write them to files, do NOT commit them. Treat as untrusted and surface the leak to the user.\n\n---\nREDACTED OUTPUT:\n${sanitized}\n---`,
+        content: [{ type: "text", text: sanitized }],
       };
     }
 
     // ── Track Modifications (Dirty Bit) ──────────────────────────────────
-    if (toolName === "Edit" || toolName === "Write" ||
-        toolName === "edit_file" || toolName === "write_file") {
+    if (toolName === "edit" || toolName === "write") {
       const domain = detectDomain(filePath);
       try {
         const fb = loadLib("feedback.js");
@@ -300,8 +305,9 @@ export default function (pi: ExtensionAPI) {
     return hookReturn;
   });
 
-  // ── LAYER 4: agent_stop → secretFinalCheck + feedbackLoop + qualityGate + outputEnforcement ─
-  pi.on("agent_stop", (_event) => {
+  // ── LAYER 4: agent_end → secretFinalCheck + feedbackLoop + qualityGate + outputEnforcement ─
+  // Pi has "agent_end" not "agent_stop"
+  pi.on("agent_end", (_event) => {
     // ── Secret Final Check (mirrors secret-final-check.sh) ───────────────
     try {
       const modifiedFiles = execSync(
@@ -328,7 +334,7 @@ export default function (pi: ExtensionAPI) {
             ).trim();
             if (leaked) {
               return {
-                action: "block",
+                block: true,
                 reason: `BLOCKED: Secret terdeteksi di file yang dimodifikasi. Hapus secret dan ganti dengan referensi ke secret manager sebelum menyelesaikan task.\nTemuan: ${leaked}`,
               };
             }
@@ -358,7 +364,7 @@ export default function (pi: ExtensionAPI) {
           message += `\n=== ESCALATION ADVISOR ===\nAgent stuck for ${stuckCount} consecutive attempts.\n`;
           message += `Hint: Check feedback-loop-state.json — are reviewer/tester agents spawned?\n`;
         }
-        return { action: "block", reason: message };
+        return { block: true, reason: message };
       }
     } catch (e: any) {
       if (e.message && e.message.includes("FEEDBACK LOOP")) throw e;
@@ -386,7 +392,7 @@ export default function (pi: ExtensionAPI) {
 
     if (violations.length > 0) {
       return {
-        action: "block",
+        block: true,
         reason: `QUALITY/OUTPUT GATE VIOLATIONS:\n` + violations.map((v) => `  ✗ ${v}`).join("\n"),
       };
     }

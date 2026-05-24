@@ -1,6 +1,6 @@
 ---
 name: iterating-to-completion
-description: Prevents premature exit and infinite loops. Three mechanisms: Completion Promises, Scratchpads, Loop Detection.
+description: "Prevents premature exit and infinite loops. Three mechanisms: Completion Promises, Scratchpads, Loop Detection."
 type: orchestrate
 tier: core
 trigger: "keep iterating, don't exit early, loop until done, completion signal, stuck detection"

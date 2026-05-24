@@ -1623,7 +1623,7 @@ async function cmdInit() {
 
   logSuccess('Generated .jonggrang/jonggrang-tasks.json');
   logSuccess('Generated .jonggrang/progress.txt');
-  logSuccess(`Copied ${result.skillCount} skill templates`);
+  logSuccess(`Copied ${result.skillCount} skill templates → .claude/skills, .opencode/skills, .jonggrang/skills`);
 
   // ── Install hooks for the selected tool ──────────────────────
   try {
@@ -2463,7 +2463,12 @@ async function cmdAgent() {
 
   };
 
-  await main([], { extensionFactories: [jonggrangExtension] });
+  // Load the security+workflow extension via --extension so Pi's jiti loader
+  // transpiles the .ts file and wires all hooks (tool_call, tool_result, agent_end, etc.)
+  const extPath = path.join(__dirname, '..', 'hooks', 'pi', 'jonggrang-extension.ts');
+  const extArgs = fs.existsSync(extPath) ? ['--extension', extPath] : [];
+
+  await main(extArgs, { extensionFactories: [jonggrangExtension] });
 }
 
 // ============================================================
