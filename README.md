@@ -120,10 +120,10 @@ Interactive wizard that sets up your project. Generates:
 - `AGENTS.md` — project knowledge for AI agents (human-curated)
 - `.jonggrang/jonggrang-tasks.json` — task board
 - `.jonggrang/progress.txt` — append-only learnings log
-- `skills/` — prompt templates filtered by your project type
-- `.claude/settings.json` — Claude Code enforcement hooks (if `--tool claude`)
-- `.opencode/plugins/jonggrang.js` — OpenCode enforcement plugin (if `--tool opencode`)
-- `.jonggrang/extensions/jonggrang.ts` — Jonggrang (Pi) enforcement extension (if `--tool jonggrang`)
+- `.claude/skills/`, `.opencode/skills/`, `.jonggrang/skills/` — prompt templates filtered by your project type
+- `.claude/settings.json` — Claude Code enforcement hooks
+- `.opencode/plugins/jonggrang.js` — OpenCode enforcement plugin
+- `.jonggrang/extensions/jonggrang.ts` — Jonggrang (Pi) enforcement extension
 
 **Flags to bypass the wizard:**
 
@@ -142,9 +142,9 @@ Interactive wizard that sets up your project. Generates:
 | `--force` | — | Overwrite existing config |
 
 **What `--tool jonggrang` sets up:**
-- Installs `.jonggrang/extensions/jonggrang.ts` — TypeScript Pi extension with all enforcement hooks
-- Registers extension path in `~/.jonggrang/agent/settings.json`
-- Skills resolve from `.jonggrang/skills/` instead of `.claude/skills/` or `.opencode/skills/`
+- Installs `.jonggrang/extensions/jonggrang.ts` — TypeScript Pi extension with full enforcement hooks (file protection, secret blocking, output sanitization, feedback loop, quality gates)
+- Skills copied to `.jonggrang/skills/` for Pi agent discovery
+- Global config at `~/.jonggrang/settings.json`, project config at `.jonggrang/jonggrang.json`
 - Supports any provider via env var or `jonggrang login`
 
 After init, configure your AI provider:
@@ -248,11 +248,14 @@ Inside the chat, use `/` commands to trigger jonggrang workflow operations witho
 | `/work [description]` | Execute the task queue |
 | `/status` | Show the project task board |
 | `/review` | Run a code review |
+| `/config` | Open Jonggrang settings (autonomy mode, agent tool) |
 | `/login` | Add provider credentials |
 | `/logout` | Remove provider credentials |
 | `/model` | Switch AI model |
 
 All other Pi built-in commands (`/compact`, `/help`, Ctrl+P model cycling, etc.) work as normal.
+
+Security hooks (`hooks/pi/jonggrang-extension.ts`) are loaded automatically on every `jonggrang agent` session — no manual installation needed. The extension blocks access to `.env` and credential files, intercepts secret-leaking bash commands, sanitizes sensitive output, and enforces the feedback loop gate.
 
 > Requires the jonggrang engine (`npm install -g @earendil-works/pi-coding-agent`). Run `jonggrang login` first to configure a provider.
 
@@ -274,7 +277,7 @@ A TUI menu lets you pick the provider:
 **API key providers** (paste your key):
 - Anthropic, OpenAI, Google Gemini, DeepSeek, Mistral, Groq, xAI, OpenRouter, Azure OpenAI, Cloudflare, Fireworks, Together AI, Hugging Face, Cerebras, and more
 
-Credentials are stored in `~/.pi/agent/auth.json` (or `~/.jonggrang/agent/auth.json` if Pi is not installed).
+Credentials are stored in `~/.jonggrang/agent/auth.json`.
 
 ### `jonggrang logout`
 
@@ -299,7 +302,7 @@ Requires at least one provider configured via `jonggrang login` (or an API key s
 
 ### Interactive Menu
 
-Run `jonggrang` without arguments (or `jonggrang menu`) to launch an interactive TUI menu (built on Pi TUI). Falls back to a plain `@clack/prompts` menu if Pi TUI is unavailable.
+Run `jonggrang` without arguments (or `jonggrang menu`) to launch a full-screen TUI menu built on Pi TUI. Displays live project status (pending plan, task progress) in the header and lets you navigate with keyboard. Falls back to a plain `@clack/prompts` menu if Pi TUI is unavailable.
 
 ---
 
@@ -407,11 +410,11 @@ Hooks enforce quality gates outside the LLM's context. The same rules apply rega
 | 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `tool_call` | Block agent spawn if context > 85% |
 | 6 | Post-tool | `PostToolUse` | `tool.execute.after` | `tool_result` | Set dirty bit when files modified |
 | 6 | File edit | `PostToolUse` | `file.edited` | `tool_result` | Track domain (backend/frontend/testing) |
-| 7 | Sub-stop | `SubagentStop` | `session.updated` | `agent_stop` | Block exit if output in wrong location |
-| 8 | Stop | `Stop` | `session.idle` | `agent_stop` | Block exit until review + tests pass |
-| 8 | Stop | `Stop` | `session.idle` | `agent_stop` | Final quality gate (defense in depth) |
+| 7 | Sub-stop | `SubagentStop` | `session.updated` | `agent_end` | Block exit if output in wrong location |
+| 8 | Stop | `Stop` | `session.idle` | `agent_end` | Block exit until review + tests pass |
+| 8 | Stop | `Stop` | `session.idle` | `agent_end` | Final quality gate (defense in depth) |
 
-Jonggrang hooks live in `.jonggrang/extensions/jonggrang.ts` (installed automatically by `jonggrang init --tool jonggrang`).
+Jonggrang hooks live in `hooks/pi/jonggrang-extension.ts` and are loaded automatically via `--extension` on every `jonggrang agent` invocation — no separate installation step required.
 
 **Feedback Loop (Level 2 enforcement):**
 
@@ -568,11 +571,14 @@ your-project/
 │   ├── .ephemeral/          # Runtime state (feedback loop, compaction)
 │   └── locks/               # File ownership locks
 ├── .claude/
-│   └── settings.json        # Claude Code enforcement hooks
+│   ├── settings.json        # Claude Code enforcement hooks
+│   └── skills/              # Skills for Claude Code agent
 ├── .opencode/
-│   └── plugins/
-│       └── jonggrang.js     # OpenCode enforcement plugin
+│   ├── plugins/
+│   │   └── jonggrang.js     # OpenCode enforcement plugin
+│   └── skills/              # Skills for OpenCode agent
 └── .jonggrang/
+    ├── skills/              # Skills for Jonggrang (Pi) agent
     └── extensions/
         └── jonggrang.ts     # Jonggrang (Pi) enforcement extension
 ```
@@ -588,6 +594,15 @@ Append-only log written by the agent after each task. Captures learnings and pre
 ---
 
 ## Configuration
+
+Jonggrang uses a **two-layer settings** system:
+
+| Layer | File | Scope |
+|-------|------|-------|
+| Global | `~/.jonggrang/settings.json` | User-wide defaults |
+| Project | `.jonggrang/jonggrang.json` | Project overrides (wins over global) |
+
+Edit via `/config` inside `jonggrang agent`, or directly in the files.
 
 See `.jonggrang/jonggrang.json` after init:
 
