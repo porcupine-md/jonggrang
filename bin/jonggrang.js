@@ -134,9 +134,11 @@ function checkDeps() {
     let found = false;
     try {
       const { createRequire } = require('module');
-      const req = createRequire(path.join(PROJECT_ROOT, 'package.json'));
+      const req     = createRequire(path.join(PROJECT_ROOT, 'package.json'));
+      const reqSelf = createRequire(__filename);
       const searchPaths = [
         ...(req.resolve.paths('@earendil-works/pi-coding-agent') || []),
+        ...(reqSelf.resolve.paths('@earendil-works/pi-coding-agent') || []),
       ];
       // Also check the global npm root (handles nvm paths like ~/.nvm/versions/node/vX.Y.Z/lib/node_modules)
       try {
