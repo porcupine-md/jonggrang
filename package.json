@@ -21,6 +21,7 @@
     "jonggrang": "./bin/jonggrang.js"
   },
   "files": [
+    "apis",
     "bin",
     "lib",
     "client/dist",
