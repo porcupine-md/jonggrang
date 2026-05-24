@@ -13,7 +13,7 @@ module.exports = function(deps) {
             return res.status(409).json({ error: { code: 'ALREADY_INITIALIZED', message: 'Project not in importable state' } });
         }
 
-        const { type = 'api', stack = 'node-typescript', tool = 'claude', autonomy = 'autonomous' } = req.body || {};
+        const { type = 'api', stack = 'node-typescript', tool = 'opencode', autonomy = 'autonomous' } = req.body || {};
         const initArgs = [
             'init', '--force',
             '--name', project.name,

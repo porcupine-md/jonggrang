@@ -27,9 +27,9 @@
       <div class="form-group">
         <label>AI Tool</label>
         <select v-model="form.tool">
-          <option value="claude">Claude Code</option>
           <option value="opencode">OpenCode</option>
-          <option value="both">Both</option>
+          <option value="claude">Claude Code</option>
+          <option value="jonggrang">Jonggrang (Pi)</option>
         </select>
       </div>
       <div class="form-group">
@@ -73,7 +73,7 @@ const initLog = ref([]);
 const form = ref({
   type: 'api',
   stack: 'node-typescript',
-  tool: 'claude',
+  tool: 'opencode',
   autonomy: 'autonomous',
 });
 
