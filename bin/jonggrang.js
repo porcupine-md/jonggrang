@@ -2216,15 +2216,87 @@ async function cmdMenuTUI(runJonggrangTUI) {
   }
 }
 
-// Entry point: try Pi TUI, fall back to @clack/prompts
+// Full-screen TUI menu — persistent session, plan input handled inline
+async function cmdMenuFull(runJonggrangApp) {
+  while (true) {
+    const hasPendingPlan = lib.fileExists(PLAN_FILE);
+    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
+
+    const items = [
+      { value: 'init',     label: 'init',    description: 'Initialize project' },
+      { value: 'plan',     label: 'plan',    description: 'Plan a new feature (Phase 1)' },
+      ...(hasArchivedPlans ? [{ value: 'pick-plan', label: 'pick-plan', description: 'Resume archived plan' }] : []),
+      { value: 'approve',  label: 'approve', description: `Approve plan — Phase 2${hasPendingPlan ? ' ◀ pending!' : ''}` },
+      { value: 'work',     label: 'work',    description: 'Execute tasks' },
+      { value: 'status',   label: 'status',  description: 'Show project status' },
+      { value: 'review',   label: 'review',  description: 'Run code review' },
+      { value: 'agent',    label: 'agent',   description: 'Chat with AI agent (Pi)' },
+      { value: 'web',      label: 'web',     description: 'Launch web dashboard' },
+      { value: 'exit',     label: 'exit',    description: 'Exit Jonggrang' },
+    ];
+
+    const result = await runJonggrangApp({ items, planFile: PLAN_FILE, tasksFile: TASKS_FILE });
+    if (!result || !result.choice || result.choice === 'exit') break;
+
+    try {
+      switch (result.choice) {
+        case 'init':
+          await cmdInit();
+          break;
+        case 'plan': {
+          const description = result.planDescription;
+          if (!description) { logWarn('Plan cancelled.'); continue; }
+          checkDeps();
+          await cmdPlan([description]);
+          break;
+        }
+        case 'pick-plan':
+          checkDeps();
+          await cmdPlan([]);
+          break;
+        case 'approve':
+          checkDeps();
+          await cmdApprove([]);
+          break;
+        case 'work':
+          checkDeps();
+          await cmdWork();
+          break;
+        case 'status':
+          cmdStatus();
+          break;
+        case 'review':
+          checkDeps();
+          await cmdReview();
+          break;
+        case 'agent':
+          await cmdAgent();
+          break;
+        case 'web':
+          cmdWeb();
+          break;
+        default:
+          logWarn('Unknown option.');
+      }
+    } catch (err) {
+      logError((err && err.message) || String(err));
+    }
+  }
+}
+
+// Entry point: try full Pi TUI, fall back to legacy TUI loop, then @clack/prompts
 async function cmdMenu() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     cmdHelp();
     return;
   }
   try {
-    const { runJonggrangTUI } = require('../lib/tui');
-    await cmdMenuTUI(runJonggrangTUI);
+    const { runJonggrangApp, runJonggrangTUI } = require('../lib/tui');
+    if (runJonggrangApp) {
+      await cmdMenuFull(runJonggrangApp);
+    } else {
+      await cmdMenuTUI(runJonggrangTUI);
+    }
   } catch {
     await cmdMenuClack();
   }
@@ -2249,13 +2321,12 @@ function spawnJonggrang(args) {
 }
 
 async function cmdAgent() {
-  const { main, initTheme, ENV_AGENT_DIR } = await import('@earendil-works/pi-coding-agent');
+  // Must set BEFORE import + initTheme() — initTheme() calls getCustomThemesDir()
+  // → getAgentDir() which reads the env var. Setting it after would fall back to ~/.pi/agent.
+  applyAgentDirEnv();
 
+  const { main, initTheme } = await import('@earendil-works/pi-coding-agent');
   initTheme();
-
-  // Always use ~/.jonggrang/agent for all Pi data (auth, sessions, etc.)
-  const agentDir = path.join(os.homedir(), '.jonggrang', 'agent');
-  process.env[ENV_AGENT_DIR] = agentDir;
 
   // Suspend Pi TUI, run a jonggrang subprocess, then resume Pi TUI.
   // Uses ctx.ui.custom() to obtain the live TUI instance so we can call
@@ -2327,6 +2398,57 @@ async function cmdAgent() {
       },
     });
 
+    // /config — Jonggrang settings TUI
+    // Reads: ~/.jonggrang/settings.json (global) merged with .jonggrang/jonggrang.json (project)
+    // Saves: project fields → .jonggrang/jonggrang.json, global fields → ~/.jonggrang/settings.json
+    pi.registerCommand('config', {
+      description: 'Configure Jonggrang settings (global ▸ ~/.jonggrang/settings.json, project ▸ .jonggrang/jonggrang.json)',
+      handler: async (_args, ctx) => {
+        const { SettingsList } = await import('@earendil-works/pi-tui');
+        const { getSettingsListTheme } = await import('@earendil-works/pi-coding-agent');
+        const jonggrangSettings = require('../lib/settings');
+
+        const cwd = ctx.cwd || process.cwd();
+        const merged = jonggrangSettings.loadMerged(cwd);
+
+        const items = [
+          {
+            id: 'tool',
+            label: 'Agent tool',
+            description: 'AI agent used to execute tasks (project scope)',
+            currentValue: merged.tool,
+            values: ['jonggrang', 'claude', 'opencode'],
+          },
+          {
+            id: 'autonomy',
+            label: 'Autonomy mode',
+            description: 'How much the agent asks before acting (project scope)',
+            currentValue: merged.autonomy,
+            values: ['autonomous', 'balanced', 'supervised'],
+          },
+        ];
+
+        await ctx.ui.custom((_tui, _theme, _kb, done) => {
+          const settingsList = new SettingsList(
+            items,
+            Math.min(items.length + 3, 12),
+            getSettingsListTheme(),
+            (id, newValue) => {
+              jonggrangSettings.saveProjectField(cwd, id, newValue);
+              ctx.ui.notify(`${id} = ${newValue}  (saved → .jonggrang/jonggrang.json)`, 'info');
+            },
+            () => done(undefined),
+          );
+
+          return {
+            render:      (w) => settingsList.render(w),
+            invalidate:  ()  => settingsList.invalidate(),
+            handleInput: (d) => settingsList.handleInput(d),
+          };
+        });
+      },
+    });
+
     // Redirect skills/prompts to .jonggrang/ directories (only if they exist)
     pi.on('resources_discover', async (event) => {
       const cwd = event.cwd || process.cwd();
@@ -2338,6 +2460,7 @@ async function cmdAgent() {
         themePaths:  [],
       };
     });
+
   };
 
   await main([], { extensionFactories: [jonggrangExtension] });
@@ -2355,9 +2478,21 @@ function resolveAuthPath() {
   return path.join(resolveAgentDir(), 'auth.json');
 }
 
-async function applyAgentDirEnv() {
-  const { ENV_AGENT_DIR } = await import('@earendil-works/pi-coding-agent');
-  process.env[ENV_AGENT_DIR] = resolveAgentDir();
+// ENV_AGENT_DIR is not re-exported from @earendil-works/pi-coding-agent's index.
+// Derive it from Pi's package.json: APP_NAME = piConfig.name || "pi",
+// ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`.
+function getPiAgentDirEnvVar() {
+  try {
+    const piPkg = require('@earendil-works/pi-coding-agent/package.json');
+    const appName = (piPkg.piConfig && piPkg.piConfig.name) || 'pi';
+    return `${appName.toUpperCase()}_CODING_AGENT_DIR`;
+  } catch {
+    return 'PI_CODING_AGENT_DIR';
+  }
+}
+
+function applyAgentDirEnv() {
+  process.env[getPiAgentDirEnvVar()] = resolveAgentDir();
 }
 const API_KEY_PROVIDERS = [
   { id: 'anthropic',               name: 'Anthropic' },
@@ -2380,7 +2515,7 @@ const API_KEY_PROVIDERS = [
 ];
 
 async function cmdLogin() {
-  await applyAgentDirEnv(); // must be before any Pi import side-effects touch the fs
+  applyAgentDirEnv(); // must be before any Pi import side-effects touch the fs
   const { AuthStorage, LoginDialogComponent, initTheme } = await import('@earendil-works/pi-coding-agent');
   const { TUI, ProcessTerminal } = await import('@earendil-works/pi-tui');
   const { runJonggrangTUI } = require('../lib/tui');
@@ -2461,7 +2596,7 @@ async function cmdLogin() {
 }
 
 async function cmdLogout() {
-  await applyAgentDirEnv();
+  applyAgentDirEnv();
   const { AuthStorage } = await import('@earendil-works/pi-coding-agent');
   const { runJonggrangTUI } = require('../lib/tui');
 
@@ -2486,7 +2621,7 @@ async function cmdLogout() {
 }
 
 async function cmdModel() {
-  await applyAgentDirEnv();
+  applyAgentDirEnv();
   const { AuthStorage, ModelRegistry } = await import('@earendil-works/pi-coding-agent');
   const { runJonggrangTUI } = require('../lib/tui');
 
