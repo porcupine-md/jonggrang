@@ -924,7 +924,7 @@ function startProjectWatcher(project) {
     try { fs.mkdirSync(jonggrangDir, { recursive: true }); } catch {}
     const watcher = chokidar.watch(jonggrangDir, { ignoreInitial: true, depth: 3 });
 
-    const emit = () => {
+    const emit = (changedPath) => {
         try {
             const planPath = path.join(project.path, '.jonggrang', 'plan.md');
             const tasksPath = path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
@@ -943,6 +943,15 @@ function startProjectWatcher(project) {
             if (fs.existsSync(tasksPath)) {
                 const data = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'));
                 io.to(`project:${project.id}`).emit('tasks.update', { project_id: project.id, tasks: data.tasks || [] });
+            }
+
+            // Emit manifest update when a MANIFEST.yaml changes
+            if (changedPath && changedPath.endsWith('MANIFEST.yaml')) {
+                try {
+                    const orchestration = require('./lib/orchestration');
+                    const manifest = orchestration.readManifest(changedPath);
+                    io.to(`project:${project.id}`).emit('manifest.updated', { project_id: project.id, manifest });
+                } catch {}
             }
         } catch {}
     };
@@ -1215,15 +1224,57 @@ app.get('/api/projects/:id/plan', (req, res) => {
     const project = webState.getProject(req.params.id);
     if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
+    // 1. Active draft plan
     const planPath = path.join(project.path, '.jonggrang', 'plan.md');
-    if (!fs.existsSync(planPath)) return res.json({ exists: false });
-    try {
-        const content = fs.readFileSync(planPath, 'utf-8');
-        const mtime = fs.statSync(planPath).mtimeMs;
-        res.json({ exists: true, content, mtime });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+    if (fs.existsSync(planPath)) {
+        try {
+            const content = fs.readFileSync(planPath, 'utf-8');
+            const mtime = fs.statSync(planPath).mtimeMs;
+            return res.json({ exists: true, state: 'draft', content, mtime });
+        } catch (err) {
+            return res.status(500).json({ error: err.message });
+        }
     }
+
+    // 2. Archived plan from latest feature output dir
+    try {
+        const featuresDir = path.join(project.path, '.jonggrang', '.output', 'features');
+        if (!fs.existsSync(featuresDir)) return res.json({ exists: false });
+
+        const featureDirs = fs.readdirSync(featuresDir)
+            .map(name => ({ name, mtime: fs.statSync(path.join(featuresDir, name)).mtimeMs }))
+            .sort((a, b) => b.mtime - a.mtime);
+
+        for (const { name } of featureDirs) {
+            const archivedPlan = path.join(featuresDir, name, 'plan.md');
+            if (fs.existsSync(archivedPlan)) {
+                const content = fs.readFileSync(archivedPlan, 'utf-8');
+                const mtime = fs.statSync(archivedPlan).mtimeMs;
+
+                // Try to read MANIFEST for work_type / status
+                let manifest = null;
+                try {
+                    const orchestration = require('./lib/orchestration');
+                    const mPath = path.join(featuresDir, name, 'MANIFEST.yaml');
+                    if (fs.existsSync(mPath)) manifest = orchestration.readManifest(mPath);
+                } catch {}
+
+                return res.json({
+                    exists: true,
+                    state: manifest?.status === 'done' ? 'archived_done' : 'archived',
+                    content,
+                    mtime,
+                    feature_id: name,
+                    work_type: manifest?.work_type || null,
+                    manifest_status: manifest?.status || null,
+                });
+            }
+        }
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+
+    res.json({ exists: false });
 });
 
 app.post('/api/projects/:id/plan', (req, res) => {
@@ -1274,6 +1325,33 @@ app.delete('/api/projects/:id/plan', (req, res) => {
     try {
         if (fs.existsSync(planPath)) fs.unlinkSync(planPath);
         res.status(204).send();
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ── MANIFEST ──────────────────────────────────────────────────
+app.get('/api/projects/:id/manifest', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+    try {
+        const orchestration = require('./lib/orchestration');
+        const featuresDir = path.join(project.path, '.jonggrang', '.output', 'features');
+        if (!fs.existsSync(featuresDir)) return res.status(404).json({ error: { code: 'NO_MANIFEST', message: 'No manifest found' } });
+
+        const featureDirs = fs.readdirSync(featuresDir)
+            .map(name => ({ name, mtime: fs.statSync(path.join(featuresDir, name)).mtimeMs }))
+            .sort((a, b) => b.mtime - a.mtime);
+
+        for (const { name } of featureDirs) {
+            const mPath = path.join(featuresDir, name, 'MANIFEST.yaml');
+            if (fs.existsSync(mPath)) {
+                const manifest = orchestration.readManifest(mPath);
+                return res.json(manifest);
+            }
+        }
+        res.status(404).json({ error: { code: 'NO_MANIFEST', message: 'No manifest found' } });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

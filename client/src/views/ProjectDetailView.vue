@@ -10,6 +10,10 @@
       </div>
       <nav class="sidebar-nav">
         <RouterLink :to="`/projects/${id}/plan`" class="snav-link">📝 Plan</RouterLink>
+        <RouterLink :to="`/projects/${id}/pipeline`" class="snav-link">
+          🔀 Pipeline
+          <span v-if="manifest.data" class="snav-chip">{{ pipelineProgress }}</span>
+        </RouterLink>
         <RouterLink :to="`/projects/${id}/tasks`" class="snav-link">📋 Tasks</RouterLink>
         <RouterLink :to="`/projects/${id}/logs`" class="snav-link">📟 Logs</RouterLink>
       </nav>
@@ -54,6 +58,7 @@ import { RouterLink, RouterView, useRoute } from 'vue-router';
 import { useProjectsStore } from '../stores/projects.js';
 import { useTasksStore } from '../stores/tasks.js';
 import { useWsStore } from '../stores/ws.js';
+import { useManifestStore } from '../stores/manifest.js';
 import InitWizard from '../components/project/InitWizard.vue';
 
 const route = useRoute();
@@ -64,8 +69,15 @@ const ws = useWsStore();
 const loading = ref(false);
 const showInit = ref(false);
 
+const manifest = useManifestStore();
 const project = computed(() => projects.byId[id.value] || null);
 const derivedState = computed(() => project.value?.derived_state);
+const pipelineProgress = computed(() => {
+  if (!manifest.data) return '';
+  const done = manifest.phases.filter(p => p.status === 'completed').length;
+  const active = manifest.phases.filter(p => p.status !== 'skipped').length;
+  return `${done}/${active}`;
+});
 
 const stateLabel = computed(() => {
   const s = derivedState.value?.state;
@@ -79,6 +91,7 @@ onMounted(async () => {
     tasks.setProject(id.value);
     await tasks.fetchTasks(id.value);
     ws.subscribe(id.value);
+    manifest.fetch(id.value);
   } catch {}
   loading.value = false;
 });
@@ -124,6 +137,7 @@ async function onInitDone() {
 }
 .snav-link:hover { background: #1e1f2a; color: #e4e4e7; }
 .snav-link.router-link-active { background: #1a1a2e; color: #a78bfa; }
+.snav-chip { font-size: 10px; background: #1e1f2a; color: #6b7280; padding: 1px 5px; border-radius: 8px; margin-left: auto; }
 
 .sidebar-meta { padding: 12px 16px; margin-top: auto; border-top: 1px solid #1e1f2a; }
 .meta-row { display: flex; justify-content: space-between; font-size: 11px; color: #4b5563; margin-bottom: 6px; gap: 8px; }

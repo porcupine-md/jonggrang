@@ -4,6 +4,7 @@ import { io } from 'socket.io-client';
 import { useProjectsStore } from './projects.js';
 import { useTasksStore } from './tasks.js';
 import { useProcessStore } from './process.js';
+import { useManifestStore } from './manifest.js';
 
 export const useWsStore = defineStore('ws', () => {
   const socket = ref(null);
@@ -83,6 +84,11 @@ export const useWsStore = defineStore('ws', () => {
     s.on('init.done', ({ project_id }) => {
       useProjectsStore().updateInitStatus(project_id, 'ready');
       useProjectsStore().fetchOne(project_id);
+    });
+
+    s.on('manifest.updated', ({ project_id, manifest }) => {
+      const mStore = useManifestStore();
+      if (mStore.projectId === project_id) mStore.update(manifest);
     });
 
     socket.value = s;

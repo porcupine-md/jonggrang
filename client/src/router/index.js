@@ -9,6 +9,7 @@ const routes = [
     children: [
       { path: '', redirect: to => ({ path: `/projects/${to.params.id}/plan` }) },
       { path: 'plan', component: () => import('../components/plan/PlanView.vue') },
+      { path: 'pipeline', component: () => import('../views/PipelineView.vue') },
       { path: 'tasks', component: () => import('../components/kanban/KanbanBoard.vue') },
       { path: 'logs', component: () => import('../components/log/LogStream.vue') },
     ],

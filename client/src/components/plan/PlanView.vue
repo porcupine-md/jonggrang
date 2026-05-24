@@ -56,22 +56,30 @@
       </div>
     </div>
 
-    <!-- tasks_pending or done: redirect hint -->
-    <div v-else-if="state === 'tasks_pending' || state === 'done'" class="plan-empty">
-      <div class="plan-empty-icon">{{ state === 'done' ? '✅' : '📋' }}</div>
-      <div class="plan-empty-title">{{ state === 'done' ? 'All tasks done!' : 'Tasks are ready' }}</div>
-      <div class="plan-empty-desc">
-        {{ state === 'done' ? 'All tasks completed.' : 'Go to the Tasks tab to run the work loop.' }}
+    <!-- tasks_pending / done / working: show form to plan next feature -->
+    <div v-else-if="state === 'tasks_pending' || state === 'done' || state === 'working'" class="plan-empty">
+      <div class="plan-empty-icon">{{ state === 'done' ? '✅' : state === 'working' ? '⚙️' : '📋' }}</div>
+      <div class="plan-empty-title">{{ state === 'done' ? 'Feature done' : state === 'working' ? 'Work in progress' : 'Tasks ready' }}</div>
+      <div class="plan-empty-desc">Plan the next feature while current tasks run.</div>
+      <RouterLink :to="`/projects/${projectId}/tasks`" class="btn btn--secondary" style="margin-top:12px;margin-bottom:20px">View Tasks →</RouterLink>
+      <div class="plan-form" style="text-align:left">
+        <textarea
+          v-model="description"
+          placeholder="Describe the next feature to plan..."
+          rows="3"
+          @keydown.ctrl.enter="generatePlan"
+        ></textarea>
+        <div class="plan-form-footer">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;">
+            <input type="checkbox" v-model="deep" style="width:auto" />
+            Deep analysis
+          </label>
+          <button class="btn btn--primary" :disabled="!description.trim() || generating" @click="generatePlan">
+            {{ generating ? 'Generating...' : '✨ Generate Plan' }}
+          </button>
+        </div>
+        <div v-if="genError" class="error-text">{{ genError }}</div>
       </div>
-      <RouterLink :to="`/projects/${projectId}/tasks`" class="btn btn--primary" style="margin-top:16px">View Tasks</RouterLink>
-      <button class="btn btn--secondary" style="margin-top:8px" @click="startNewPlan">Start new plan</button>
-    </div>
-
-    <!-- working -->
-    <div v-else-if="state === 'working'" class="plan-empty">
-      <div class="plan-empty-icon spinning">⚙️</div>
-      <div class="plan-empty-title">Work in progress...</div>
-      <RouterLink :to="`/projects/${projectId}/tasks`" class="btn btn--secondary" style="margin-top:16px">View Tasks</RouterLink>
     </div>
 
     <!-- Log stream overlay while generating -->
@@ -213,14 +221,6 @@ async function discardPlan() {
   await fetch(`/api/projects/${projectId.value}/plan`, { method: 'DELETE' });
   planContent.value = '';
   dirty.value = false;
-}
-
-async function startNewPlan() {
-  if (!confirm('Archive current tasks and start a new plan?')) return;
-  await fetch(`/api/projects/${projectId.value}/plan`, { method: 'DELETE' }).catch(() => {});
-  description.value = '';
-  genLog.value = [];
-  await projects.fetchOne(projectId.value);
 }
 
 function formatTime(ms) {
