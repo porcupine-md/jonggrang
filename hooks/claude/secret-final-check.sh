@@ -19,7 +19,7 @@ MODIFIED_FILES=$(
 [ -z "$MODIFIED_FILES" ] && exit 0
 
 if ! command -v trufflehog &>/dev/null; then
-  echo "[jonggrang] WARNING: trufflehog tidak terinstall — secret scan dilewati. Install: https://github.com/trufflesecurity/trufflehog" >&2
+  echo "[jonggrang] WARNING: trufflehog not installed — secret scan skipped. Install: https://github.com/trufflesecurity/trufflehog" >&2
   exit 0
 fi
 
@@ -40,7 +40,7 @@ LEAKED=$(trufflehog filesystem --directory="$SCAN_DIR" --only-verified --json --
 
 if [ -n "$LEAKED" ]; then
   printf '{"decision": "block", "reason": %s}\n' \
-    "$(printf 'BLOCKED: Secret terdeteksi di file yang dimodifikasi. Hapus secret dan ganti dengan referensi ke secret manager sebelum menyelesaikan task. Temuan: %s' "$LEAKED" | jq -Rs .)"
+    "$(printf 'BLOCKED: Secret detected in modified files. Remove the secret and replace it with a secret manager reference before completing the task. Findings: %s' "$LEAKED" | jq -Rs .)"
   exit 2
 fi
 

@@ -5,8 +5,9 @@
 //
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { spawn, execSync } = require('child_process');
+const { spawn, spawnSync, execSync } = require('child_process');
 const readline = require('readline');
 const { intro, outro, select, confirm, text, isCancel, cancel, spinner } = require('@clack/prompts');
 
@@ -50,10 +51,12 @@ const SKILLS_DIR    = paths.skillsDir;
 
 const JONGGRANG_VERSION = require('../package.json').version;
 
+const DEFAULT_TOOL = 'jonggrang';
+
 // Defaults (can be overridden by flags/env)
 let MAX_ITERATIONS = parseInt(process.env.JONGGRANG_MAX_ITERATIONS || '0', 10);
 let MODE = process.env.JONGGRANG_MODE || 'autonomous';
-let TOOL = process.env.JONGGRANG_TOOL || 'opencode';
+let TOOL = process.env.JONGGRANG_TOOL || DEFAULT_TOOL;
 let TOOL_SET = false;
 let TASK_ID = '';
 let BRANCH = '';
@@ -126,7 +129,33 @@ function checkDeps() {
   for (const cmd of ['jq', 'git']) {
     if (!commandExists(cmd)) missing.push(cmd);
   }
-  if (!commandExists(TOOL)) missing.push(TOOL);
+  // Tool-specific checks: opencode & claude need a CLI binary; jonggrang needs the Pi SDK
+  if (TOOL === 'jonggrang') {
+    let found = false;
+    try {
+      const { createRequire } = require('module');
+      const req     = createRequire(path.join(PROJECT_ROOT, 'package.json'));
+      const reqSelf = createRequire(__filename);
+      const searchPaths = [
+        ...(req.resolve.paths('@earendil-works/pi-coding-agent') || []),
+        ...(reqSelf.resolve.paths('@earendil-works/pi-coding-agent') || []),
+      ];
+      // Also check the global npm root (handles nvm paths like ~/.nvm/versions/node/vX.Y.Z/lib/node_modules)
+      try {
+        const globalRoot = execSync('npm root -g', { encoding: 'utf8', timeout: 3000 }).trim();
+        if (globalRoot) searchPaths.push(globalRoot);
+      } catch {}
+      for (const p of searchPaths) {
+        if (lib.fileExists(path.join(p, '@earendil-works', 'pi-coding-agent', 'package.json'))) {
+          found = true;
+          break;
+        }
+      }
+    } catch { /* ignore — fall through to not found */ }
+    if (!found) missing.push('@earendil-works/pi-coding-agent');
+  } else {
+    if (!commandExists(TOOL)) missing.push(TOOL);
+  }
 
   if (missing.length > 0) {
     logError(`Missing dependencies: ${missing.join(', ')}`);
@@ -135,8 +164,9 @@ function checkDeps() {
       switch (cmd) {
         case 'jq':       console.log('  Install jq:       brew install jq'); break;
         case 'git':      console.log('  Install git:      brew install git'); break;
-        case 'opencode': console.log('  Install opencode: curl -fsSL https://opencode.ai/install | bash'); break;
-        case 'claude':   console.log('  Install claude:   npm install -g @anthropic-ai/claude-code'); break;
+        case 'opencode':  console.log('  Install opencode:  curl -fsSL https://opencode.ai/install | bash'); break;
+        case 'claude':    console.log('  Install claude:    npm install -g @anthropic-ai/claude-code'); break;
+        case '@earendil-works/pi-coding-agent': console.log('  Install Pi SDK:  npm install -g @earendil-works/pi-coding-agent'); break;
         default:         console.log(`  Install ${cmd}`); break;
       }
     }
@@ -418,7 +448,7 @@ async function cmdWork(descriptionParts = []) {
   safeCheckConfig();
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
-    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
   if (MODE === 'autonomous') {
     MODE = lib.readConfig(CONFIG_FILE, 'mode.autonomy', 'autonomous');
@@ -725,7 +755,7 @@ async function cmdReview() {
   safeCheckConfig();
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
-    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
 
   logHeader('JONGGRANG Review');
@@ -810,6 +840,36 @@ function displayPlanBox(planFile) {
   console.log('');
 }
 
+// Ensure the project is initialized. Offers to run `jonggrang init` if not.
+// Returns true if we can proceed, false if the user declined or init failed.
+async function ensureInit() {
+  if (lib.fileExists(CONFIG_FILE)) return true;
+
+  const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
+  if (!isInteractiveTTY) {
+    logError('Project not initialized. Run "jonggrang init" first.');
+    return false;
+  }
+
+  logWarn('Project not initialized (.jonggrang/jonggrang.json not found).');
+  const doInit = await confirm({
+    message: 'Initialize project now?',
+    initialValue: true,
+  });
+  if (isCancel(doInit) || !doInit) {
+    cancel('Run "jonggrang init" first to set up the project.');
+    return false;
+  }
+
+  await cmdInit();
+
+  if (!lib.fileExists(CONFIG_FILE)) {
+    logError('Init did not complete successfully. Please run "jonggrang init" manually.');
+    return false;
+  }
+  return true;
+}
+
 // ── PHASE 1: Generate draft plan.md ───────────────────────────
 // opts.fromWork = true → suppress "run jonggrang work" tail (cmdWork will continue itself)
 async function cmdPlan(args, opts = {}) {
@@ -823,13 +883,22 @@ async function cmdPlan(args, opts = {}) {
     else if (!arg.startsWith('--')) description = arg;
   }
 
-  safeCheckConfig();
+  if (!await ensureInit()) return;
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
-    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
+
+  // Ask about deep mode when user hasn't specified --deep and a description was given
+  if (description && !deepMode && !autoApprove && isInteractiveTTY) {
+    const useDeep = await confirm({
+      message: 'Use deep mode? (3-phase analysis — richer plan for complex features)',
+      initialValue: false,
+    });
+    if (!isCancel(useDeep)) deepMode = !!useDeep;
+  }
 
   // ── No description → pick from available plans ──────────────
   if (!description) {
@@ -1074,7 +1143,7 @@ async function cmdApprove(args, opts = {}) {
   safeCheckConfig();
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
-    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
 
   const planContent = fs.readFileSync(PLAN_FILE, 'utf8');
@@ -1246,7 +1315,7 @@ async function cmdBug(args) {
   safeCheckConfig();
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
-    TOOL = lib.readConfig(CONFIG_FILE, 'tool', 'opencode');
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
@@ -1494,9 +1563,10 @@ async function cmdInit() {
 
     if (!INIT_TOOL) {
       const toolAnswer = await select({
-        message: 'Primary AI agent tool (both Claude Code + OpenCode will be set up)',
-        initialValue: 'claude',
+        message: 'Primary AI agent tool',
+        initialValue: 'jonggrang',
         options: [
+          { value: 'jonggrang', label: 'Jonggrang   — primary tool (Recommended)' },
           { value: 'claude',    label: 'Claude Code — primary tool' },
           { value: 'opencode',  label: 'OpenCode    — primary tool' },
         ],
@@ -1522,7 +1592,7 @@ async function cmdInit() {
   } else {
     const rl = createRL();
     if (!INIT_NAME)     INIT_NAME     = await ask(rl, 'Project name:',  path.basename(PROJECT_ROOT));
-    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'claude', 'claude|opencode');
+    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'jonggrang', 'jonggrang|claude|opencode');
     if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:',  'autonomous', 'supervised|balanced|autonomous');
     rl.close();
   }
@@ -1553,7 +1623,7 @@ async function cmdInit() {
 
   logSuccess('Generated .jonggrang/jonggrang-tasks.json');
   logSuccess('Generated .jonggrang/progress.txt');
-  logSuccess(`Copied ${result.skillCount} skill templates`);
+  logSuccess(`Copied ${result.skillCount} skill templates → .claude/skills, .opencode/skills, .jonggrang/skills`);
 
   // ── Install hooks for the selected tool ──────────────────────
   try {
@@ -1674,7 +1744,7 @@ async function cmdOrchestrate(descriptionParts) {
 }
 
 async function runOrchestrationLoop(featureId, manifest, manifestPath) {
-  const activeTool = TOOL || lib.readConfig(CONFIG_FILE, '.tool', 'opencode');
+  const activeTool = TOOL || lib.readConfig(CONFIG_FILE, '.tool', DEFAULT_TOOL);
   const activeMode = MODE || lib.readConfig(CONFIG_FILE, '.mode.autonomy', 'autonomous');
 
   for (const phaseNum of manifest.active_phases) {
@@ -1730,7 +1800,15 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     }
 
     // ── Build phase prompt ────────────────────────────────────────
-    const phaseContext = orchestration.buildPhaseContext(manifest, phaseNum);
+    let phaseContext;
+    if (phaseNum === orchestration.SIMPLIFY_PHASE) {
+      // Phase 9 (simplification) uses specialized prompt with file scope
+      phaseContext = orchestration.buildSimplifyPrompt(manifest, PROJECT_ROOT);
+    } else {
+      // All other phases use generic phase context
+      phaseContext = orchestration.buildPhaseContext(manifest, phaseNum);
+    }
+    
     const agentsContent = lib.fileExists(paths.agentsFile)
       ? fs.readFileSync(paths.agentsFile, 'utf8') : '';
     const progressContent = lib.fileExists(paths.progressFile)
@@ -1892,7 +1970,8 @@ function cmdWeb() {
 // INTERACTIVE MENU
 // ============================================================
 
-async function cmdMenu() {
+// Fallback menu using @clack/prompts (used when pi-tui is unavailable)
+async function cmdMenuClack() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     cmdHelp();
     return;
@@ -2044,6 +2123,548 @@ async function cmdMenu() {
 
   if (!outroShown) {
     outro('All set. Happy building!');
+  }
+}
+
+// Pi TUI menu loop — rich keyboard-navigable interface
+async function cmdMenuTUI(runJonggrangTUI) {
+  while (true) {
+    const hasPendingPlan = lib.fileExists(PLAN_FILE);
+    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
+
+    const items = [
+      { value: 'init',     label: 'init',      description: 'Initialize project' },
+      { value: 'plan',     label: 'plan',       description: 'Plan a new feature (Phase 1)' },
+      ...(hasArchivedPlans ? [{ value: 'pick-plan', label: 'pick-plan', description: 'Resume an archived plan' }] : []),
+      { value: 'approve',  label: 'approve',    description: `Approve plan — Phase 2${hasPendingPlan ? ' ◀ pending!' : ''}` },
+      { value: 'work',     label: 'work',        description: 'Execute tasks' },
+      { value: 'status',   label: 'status',      description: 'Show project status board' },
+      { value: 'review',   label: 'review',      description: 'Run code review' },
+      { value: 'web',      label: 'web',          description: 'Launch web dashboard' },
+      { value: 'exit',     label: 'exit',         description: 'Exit Jonggrang' },
+    ];
+
+    const choice = await runJonggrangTUI(items);
+    if (!choice || choice === 'exit') break;
+
+    try {
+      switch (choice) {
+        case 'init':
+          await cmdInit();
+          break;
+        case 'plan': {
+          const description = await text({
+            message: 'Feature description (Phase 1 — generates plan.md for review)',
+            validate(value) {
+              if (!value || !value.trim()) return 'Description is required.';
+            },
+          });
+          if (isCancel(description)) { logWarn('Plan cancelled.'); continue; }
+          checkDeps();
+          await cmdPlan([description.trim()]);
+          break;
+        }
+        case 'pick-plan':
+          checkDeps();
+          await cmdPlan([]);
+          break;
+        case 'approve':
+          checkDeps();
+          await cmdApprove([]);
+          break;
+        case 'work':
+          checkDeps();
+          await cmdWork();
+          break;
+        case 'status':
+          cmdStatus();
+          break;
+        case 'review':
+          checkDeps();
+          await cmdReview();
+          break;
+        case 'web': {
+          const portAnswer = await text({
+            message: `Dashboard port (current: ${WEB_PORT})`,
+            initialValue: String(WEB_PORT),
+            validate(value) {
+              if (!value || !value.trim()) return undefined;
+              return /^\d+$/.test(value.trim()) ? undefined : 'Port must be numeric.';
+            },
+          });
+          if (isCancel(portAnswer)) { logWarn('Dashboard launch cancelled.'); continue; }
+          const autoOpen = await confirm({ message: 'Open browser automatically?', initialValue: WEB_OPEN });
+          if (isCancel(autoOpen)) { logWarn('Dashboard launch cancelled.'); continue; }
+          const prevPort = WEB_PORT;
+          const prevOpen = WEB_OPEN;
+          if (portAnswer.trim()) {
+            const parsed = parseInt(portAnswer.trim(), 10);
+            if (!Number.isNaN(parsed)) WEB_PORT = parsed;
+          }
+          WEB_OPEN = !!autoOpen;
+          cmdWeb();
+          WEB_PORT = prevPort;
+          WEB_OPEN = prevOpen;
+          break;
+        }
+        default:
+          logWarn('Unknown option.');
+      }
+    } catch (err) {
+      logError((err && err.message) || String(err));
+    }
+  }
+}
+
+// Full-screen TUI menu — persistent session, plan input handled inline
+async function cmdMenuFull(runJonggrangApp) {
+  while (true) {
+    const hasPendingPlan = lib.fileExists(PLAN_FILE);
+    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
+
+    const items = [
+      { value: 'init',     label: 'init',    description: 'Initialize project' },
+      { value: 'plan',     label: 'plan',    description: 'Plan a new feature (Phase 1)' },
+      ...(hasArchivedPlans ? [{ value: 'pick-plan', label: 'pick-plan', description: 'Resume archived plan' }] : []),
+      { value: 'approve',  label: 'approve', description: `Approve plan — Phase 2${hasPendingPlan ? ' ◀ pending!' : ''}` },
+      { value: 'work',     label: 'work',    description: 'Execute tasks' },
+      { value: 'status',   label: 'status',  description: 'Show project status' },
+      { value: 'review',   label: 'review',  description: 'Run code review' },
+      { value: 'agent',    label: 'agent',   description: 'Chat with AI agent (Pi)' },
+      { value: 'web',      label: 'web',     description: 'Launch web dashboard' },
+      { value: 'exit',     label: 'exit',    description: 'Exit Jonggrang' },
+    ];
+
+    const result = await runJonggrangApp({ items, planFile: PLAN_FILE, tasksFile: TASKS_FILE });
+    if (!result || !result.choice || result.choice === 'exit') break;
+
+    try {
+      switch (result.choice) {
+        case 'init':
+          await cmdInit();
+          break;
+        case 'plan': {
+          const description = result.planDescription;
+          if (!description) { logWarn('Plan cancelled.'); continue; }
+          checkDeps();
+          await cmdPlan([description]);
+          break;
+        }
+        case 'pick-plan':
+          checkDeps();
+          await cmdPlan([]);
+          break;
+        case 'approve':
+          checkDeps();
+          await cmdApprove([]);
+          break;
+        case 'work':
+          checkDeps();
+          await cmdWork();
+          break;
+        case 'status':
+          cmdStatus();
+          break;
+        case 'review':
+          checkDeps();
+          await cmdReview();
+          break;
+        case 'agent':
+          await cmdAgent();
+          break;
+        case 'web':
+          cmdWeb();
+          break;
+        default:
+          logWarn('Unknown option.');
+      }
+    } catch (err) {
+      logError((err && err.message) || String(err));
+    }
+  }
+}
+
+// Entry point: try full Pi TUI, fall back to legacy TUI loop, then @clack/prompts
+async function cmdMenu() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    cmdHelp();
+    return;
+  }
+  try {
+    const { runJonggrangApp, runJonggrangTUI } = require('../lib/tui');
+    if (runJonggrangApp) {
+      await cmdMenuFull(runJonggrangApp);
+    } else {
+      await cmdMenuTUI(runJonggrangTUI);
+    }
+  } catch {
+    await cmdMenuClack();
+  }
+}
+
+// ============================================================
+// AGENT CHAT (jonggrang agent)
+// ============================================================
+
+// Descriptions shown in Pi's /help for each registered slash command
+const AGENT_COMMAND_DESCRIPTIONS = {
+  plan:    'Generate a plan  — usage: /plan <description>',
+  approve: 'Approve plan → decompose into tasks',
+  work:    'Execute tasks   — usage: /work [description]',
+  status:  'Show project task board',
+  review:  'Run code review',
+};
+
+// Spawn jonggrang CLI as a subprocess (inherits terminal so output is visible)
+function spawnJonggrang(args) {
+  return spawnSync(process.execPath, [process.argv[1], ...args], { stdio: 'inherit' });
+}
+
+async function cmdAgent() {
+  // Must set BEFORE import + initTheme() — initTheme() calls getCustomThemesDir()
+  // → getAgentDir() which reads the env var. Setting it after would fall back to ~/.pi/agent.
+  applyAgentDirEnv();
+
+  const { main, initTheme } = await import('@earendil-works/pi-coding-agent');
+  initTheme();
+
+  // Suspend Pi TUI, run a jonggrang subprocess, then resume Pi TUI.
+  // Uses ctx.ui.custom() to obtain the live TUI instance so we can call
+  // tui.stop() (exits raw mode, removes stdin listeners) before handing the
+  // terminal to the subprocess, and tui.start() (re-enters raw mode, redraws)
+  // after the subprocess exits.  Ctrl+C during the subprocess exits normally;
+  // once tui.start() fires, Pi resumes as if nothing happened.
+  function suspendTUIAndRun(ctx, spawnArgs) {
+    return ctx.ui.custom((tui, _theme, _keybindings, done) => {
+      // Schedule work AFTER this factory returns so Pi can register the overlay
+      // first — calling done() before returning the component causes Pi to leave
+      // the overlay stack in an inconsistent state.
+      setImmediate(() => {
+        tui.stop();
+        try {
+          spawnJonggrang(spawnArgs);
+        } finally {
+          tui.start();
+        }
+        done(undefined);
+      });
+      return { render: () => [], invalidate: () => {} };
+    });
+  }
+
+  // Extension factory — registers /plan, /approve, /work, /status, /review
+  const jonggrangExtension = (pi) => {
+    pi.registerCommand('plan', {
+      description: AGENT_COMMAND_DESCRIPTIONS.plan,
+      handler: async (args, ctx) => {
+        if (!args.trim()) {
+          ctx.ui.notify('Usage: /plan <description>', 'warning');
+          return;
+        }
+        await ctx.waitForIdle();
+        await suspendTUIAndRun(ctx, ['plan', args.trim()]);
+      },
+    });
+
+    pi.registerCommand('approve', {
+      description: AGENT_COMMAND_DESCRIPTIONS.approve,
+      handler: async (_args, ctx) => {
+        await ctx.waitForIdle();
+        await suspendTUIAndRun(ctx, ['approve']);
+      },
+    });
+
+    pi.registerCommand('work', {
+      description: AGENT_COMMAND_DESCRIPTIONS.work,
+      handler: async (args, ctx) => {
+        await ctx.waitForIdle();
+        await suspendTUIAndRun(ctx, ['work', ...(args.trim() ? [args.trim()] : [])]);
+      },
+    });
+
+    pi.registerCommand('status', {
+      description: AGENT_COMMAND_DESCRIPTIONS.status,
+      handler: async (_args, ctx) => {
+        await ctx.waitForIdle();
+        await suspendTUIAndRun(ctx, ['status']);
+      },
+    });
+
+    pi.registerCommand('review', {
+      description: AGENT_COMMAND_DESCRIPTIONS.review,
+      handler: async (_args, ctx) => {
+        await ctx.waitForIdle();
+        await suspendTUIAndRun(ctx, ['review']);
+      },
+    });
+
+    // /config — Jonggrang settings TUI
+    // Reads: ~/.jonggrang/settings.json (global) merged with .jonggrang/jonggrang.json (project)
+    // Saves: project fields → .jonggrang/jonggrang.json, global fields → ~/.jonggrang/settings.json
+    pi.registerCommand('config', {
+      description: 'Configure Jonggrang settings (global ▸ ~/.jonggrang/settings.json, project ▸ .jonggrang/jonggrang.json)',
+      handler: async (_args, ctx) => {
+        const { SettingsList } = await import('@earendil-works/pi-tui');
+        const { getSettingsListTheme } = await import('@earendil-works/pi-coding-agent');
+        const jonggrangSettings = require('../lib/settings');
+
+        const cwd = ctx.cwd || process.cwd();
+        const merged = jonggrangSettings.loadMerged(cwd);
+
+        const items = [
+          {
+            id: 'tool',
+            label: 'Agent tool',
+            description: 'AI agent used to execute tasks (project scope)',
+            currentValue: merged.tool,
+            values: ['jonggrang', 'claude', 'opencode'],
+          },
+          {
+            id: 'autonomy',
+            label: 'Autonomy mode',
+            description: 'How much the agent asks before acting (project scope)',
+            currentValue: merged.autonomy,
+            values: ['autonomous', 'balanced', 'supervised'],
+          },
+        ];
+
+        await ctx.ui.custom((_tui, _theme, _kb, done) => {
+          const settingsList = new SettingsList(
+            items,
+            Math.min(items.length + 3, 12),
+            getSettingsListTheme(),
+            (id, newValue) => {
+              jonggrangSettings.saveProjectField(cwd, id, newValue);
+              ctx.ui.notify(`${id} = ${newValue}  (saved → .jonggrang/jonggrang.json)`, 'info');
+            },
+            () => done(undefined),
+          );
+
+          return {
+            render:      (w) => settingsList.render(w),
+            invalidate:  ()  => settingsList.invalidate(),
+            handleInput: (d) => settingsList.handleInput(d),
+          };
+        });
+      },
+    });
+
+    // Redirect skills/prompts to .jonggrang/ directories (only if they exist)
+    pi.on('resources_discover', async (event) => {
+      const cwd = event.cwd || process.cwd();
+      const skillsPath  = path.join(cwd, '.jonggrang', 'skills');
+      const promptsPath = path.join(cwd, '.jonggrang', 'prompts');
+      return {
+        skillPaths:  fs.existsSync(skillsPath)  ? [skillsPath]  : [],
+        promptPaths: fs.existsSync(promptsPath) ? [promptsPath] : [],
+        themePaths:  [],
+      };
+    });
+
+  };
+
+  // Load the security+workflow extension via --extension so Pi's jiti loader
+  // transpiles the .ts file and wires all hooks (tool_call, tool_result, agent_end, etc.)
+  const extPath = path.join(__dirname, '..', 'hooks', 'pi', 'jonggrang-extension.ts');
+  const extArgs = fs.existsSync(extPath) ? ['--extension', extPath] : [];
+
+  await main(extArgs, { extensionFactories: [jonggrangExtension] });
+}
+
+// ============================================================
+// AUTH / PROVIDER COMMANDS
+// ============================================================
+
+function resolveAgentDir() {
+  return path.join(os.homedir(), '.jonggrang', 'agent');
+}
+
+function resolveAuthPath() {
+  return path.join(resolveAgentDir(), 'auth.json');
+}
+
+// ENV_AGENT_DIR is not re-exported from @earendil-works/pi-coding-agent's index.
+// Derive it from Pi's package.json: APP_NAME = piConfig.name || "pi",
+// ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`.
+function getPiAgentDirEnvVar() {
+  try {
+    const piPkg = require('@earendil-works/pi-coding-agent/package.json');
+    const appName = (piPkg.piConfig && piPkg.piConfig.name) || 'pi';
+    return `${appName.toUpperCase()}_CODING_AGENT_DIR`;
+  } catch {
+    return 'PI_CODING_AGENT_DIR';
+  }
+}
+
+function applyAgentDirEnv() {
+  process.env[getPiAgentDirEnvVar()] = resolveAgentDir();
+}
+const API_KEY_PROVIDERS = [
+  { id: 'anthropic',               name: 'Anthropic' },
+  { id: 'openai',                  name: 'OpenAI' },
+  { id: 'google',                  name: 'Google Gemini' },
+  { id: 'opencode-go',             name: 'OpenCode Go' },
+  { id: 'deepseek',                name: 'DeepSeek' },
+  { id: 'mistral',                 name: 'Mistral' },
+  { id: 'groq',                    name: 'Groq' },
+  { id: 'xai',                     name: 'xAI (Grok)' },
+  { id: 'openrouter',              name: 'OpenRouter' },
+  { id: 'azure-openai-responses',  name: 'Azure OpenAI' },
+  { id: 'cloudflare-ai-gateway',   name: 'Cloudflare AI Gateway' },
+  { id: 'cloudflare-workers-ai',   name: 'Cloudflare Workers AI' },
+  { id: 'fireworks',               name: 'Fireworks AI' },
+  { id: 'huggingface',             name: 'Hugging Face' },
+  { id: 'cerebras',                name: 'Cerebras' },
+  { id: 'moonshotai',              name: 'Moonshot AI (Kimi)' },
+  { id: 'kimi-coding',             name: 'Kimi Coding' },
+];
+
+async function cmdLogin() {
+  applyAgentDirEnv(); // must be before any Pi import side-effects touch the fs
+  const { AuthStorage, LoginDialogComponent, initTheme } = await import('@earendil-works/pi-coding-agent');
+  const { TUI, ProcessTerminal } = await import('@earendil-works/pi-tui');
+  const { runJonggrangTUI } = require('../lib/tui');
+
+  initTheme();
+
+  const authStorage = AuthStorage.create(resolveAuthPath());
+
+  const oauthProviders = authStorage.getOAuthProviders();
+
+  const items = [
+    ...oauthProviders.map(p => ({ value: `oauth:${p.id}`, label: p.name, description: 'subscription (OAuth)' })),
+    ...API_KEY_PROVIDERS.map(p => ({ value: `apikey:${p.id}`, label: p.name, description: 'API key' })),
+  ];
+
+  const choice = await runJonggrangTUI(items);
+  if (!choice || choice === 'exit') return;
+
+  if (choice.startsWith('oauth:')) {
+    const providerId = choice.slice(6);
+    const providerName = oauthProviders.find(p => p.id === providerId)?.name || providerId;
+
+    await new Promise((resolve) => {
+      let settled = false;
+      const done = (ok, msg) => {
+        if (settled) return;
+        settled = true;
+        if (ok) console.log(`\n✓ Logged in to ${providerName}`);
+        else logError(`Login failed${msg ? ': ' + msg : ''}`);
+        resolve();
+      };
+
+      const terminal = new ProcessTerminal();
+      const tui = new TUI(terminal);
+
+      const dialog = new LoginDialogComponent(tui, providerId, (success, message) => {
+        tui.stop();
+        done(success, message);
+      });
+
+      tui.addChild(dialog);
+      tui.setFocus(dialog);
+      tui.start();
+
+      authStorage.login(providerId, {
+        onAuth:            (info) => dialog.showAuth(info.url, info.instructions),
+        onPrompt:          async (prompt) => dialog.showPrompt(prompt.message, prompt.placeholder),
+        onProgress:        (msg) => dialog.showProgress(msg),
+        onManualCodeInput: () => dialog.showManualInput('Paste the authorization code:'),
+        signal:            dialog.signal,
+      }).then(() => {
+        tui.stop();
+        done(true);
+      }).catch((err) => {
+        if (!dialog.signal.aborted) {
+          tui.stop();
+          done(false, err.message);
+        } else {
+          tui.stop();
+          resolve();
+        }
+      });
+    });
+
+  } else if (choice.startsWith('apikey:')) {
+    const providerId = choice.slice(7);
+    const providerName = API_KEY_PROVIDERS.find(p => p.id === providerId)?.name || providerId;
+
+    const key = await text({
+      message: `Enter API key for ${providerName}:`,
+      validate(value) { if (!value || !value.trim()) return 'API key is required.'; },
+    });
+    if (isCancel(key)) { logWarn('Login cancelled.'); return; }
+
+    authStorage.set(providerId, { type: 'api_key', key: key.trim() });
+    console.log(`✓ API key saved for ${providerName}`);
+  }
+}
+
+async function cmdLogout() {
+  applyAgentDirEnv();
+  const { AuthStorage } = await import('@earendil-works/pi-coding-agent');
+  const { runJonggrangTUI } = require('../lib/tui');
+
+  const authStorage = AuthStorage.create(resolveAuthPath());
+
+  const configured = authStorage.list();
+  if (configured.length === 0) {
+    console.log('No providers configured. Use `jonggrang login` to add one.');
+    return;
+  }
+
+  const items = configured.map(id => {
+    const status = authStorage.getAuthStatus(id);
+    return { value: id, label: id, description: status.source ? `via ${status.source}` : 'configured' };
+  });
+
+  const choice = await runJonggrangTUI(items);
+  if (!choice || choice === 'exit') return;
+
+  authStorage.logout(choice);
+  console.log(`✓ Logged out from ${choice}`);
+}
+
+async function cmdModel() {
+  applyAgentDirEnv();
+  const { AuthStorage, ModelRegistry } = await import('@earendil-works/pi-coding-agent');
+  const { runJonggrangTUI } = require('../lib/tui');
+
+  const authStorage = AuthStorage.create(resolveAuthPath());
+  const modelRegistry = ModelRegistry.create(authStorage);
+
+  let models = modelRegistry.getAvailable();
+  if (models.length === 0) {
+    console.log('No configured providers found — showing all models. Run `jonggrang login` first.');
+    models = modelRegistry.getAll();
+  }
+  if (models.length === 0) {
+    logError('No models available.');
+    return;
+  }
+
+  const items = models.map(m => ({
+    value: `${m.provider}::${m.id}`,
+    label: m.name || m.id,
+    description: String(m.provider),
+  }));
+
+  const choice = await runJonggrangTUI(items);
+  if (!choice || choice === 'exit') return;
+
+  const sepIdx = choice.indexOf('::');
+  const provider = choice.slice(0, sepIdx);
+  const modelId  = choice.slice(sepIdx + 2);
+
+  if (lib.fileExists(CONFIG_FILE)) {
+    const cfg = lib.readJSON(CONFIG_FILE) || {};
+    cfg.provider = provider;
+    cfg.model = modelId;
+    lib.writeJSON(CONFIG_FILE, cfg);
+    console.log(`✓ Model set to ${modelId} (${provider})`);
+  } else {
+    logWarn('Project not initialized — run `jonggrang init` first to save this selection.');
+    console.log(`  Selected: ${modelId} (${provider})`);
   }
 }
 
@@ -2404,8 +3025,15 @@ Commands:
   status                  Show pipeline state + task board
   review                  Run code review
   task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
+  agent                   Start interactive chat with the AI agent (Pi TUI)
+  login                   Add provider credentials (OAuth subscription or API key)
+  logout                  Remove provider credentials
+  model                   Select AI model for jonggrang engine
   web                     Start web dashboard
   menu                    Interactive menu launcher
+  bot-reviewer <sub>      Automated MR review bot
+    bot-reviewer gitlab     Start GitLab MR review bot (polls for new MRs)
+    bot-reviewer settings   Configure token, repos, and Anthropic API key
   version                 Show version
 
   # Backward compat (routes to work):
@@ -2419,7 +3047,7 @@ Work type auto-detection:
 
 Init flags (bypass wizard):
   --name <name>           Project name
-  --tool <tool>           claude | opencode (default: claude) — both tools always set up
+  --tool <tool>           jonggrang | claude | opencode (default: jonggrang) — all tools always set up
   --autonomy <mode>       supervised | balanced | autonomous
   --force                 Overwrite existing jonggrang.json
   (stack, type, testing, ci are auto-detected from the project)
@@ -2450,7 +3078,9 @@ Examples:
   jonggrang bug convert                     # AI converts open bugs → tasks
   jonggrang bug convert --feature add-hello-endpoint-abc12345
   jonggrang status                          # pipeline + task board
-  jonggrang web                             # visual dashboard`);
+  jonggrang web                             # visual dashboard
+  jonggrang bot-reviewer settings           # configure GitLab token + repos
+  jonggrang bot-reviewer gitlab             # start MR review bot`);
 }
 
 // ============================================================
@@ -2464,9 +3094,15 @@ async function main() {
   const command = providedCommand || (isInteractiveShell ? 'menu' : 'help');
   let rest = providedCommand ? args.slice(1) : [];
 
-  // Task subcommand handles its own flags — bypass global parser
+  // Subcommands that handle their own flags — bypass global parser
   if (command === 'task') {
     cmdTask(rest);
+    return;
+  }
+
+  if (command === 'bot-reviewer') {
+    const { runBotReviewer } = require('../lib/bot-reviewer');
+    await runBotReviewer(rest);
     return;
   }
 
@@ -2535,6 +3171,18 @@ async function main() {
       break;
     case 'orchestrate':
       await cmdOrchestrate(planArgs);
+      break;
+    case 'agent':
+      await cmdAgent();
+      break;
+    case 'login':
+      await cmdLogin();
+      break;
+    case 'logout':
+      await cmdLogout();
+      break;
+    case 'model':
+      await cmdModel();
       break;
     case 'web':
     case 'dashboard':

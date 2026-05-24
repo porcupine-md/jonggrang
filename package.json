@@ -33,11 +33,12 @@
     "README.md"
   ],
   "scripts": {
-    "start": "node server.js",
+    "start": "bash scripts/ensure-build.sh && node server.js",
     "dev:server": "node server.js",
     "dev:client": "cd client && npm run dev",
     "dev": "npm run dev:server & npm run dev:client",
-    "build": "cd client && npm run build",
+    "build": "cd client && npm install && npm run build",
+    "predev:server": "bash scripts/ensure-build.sh",
     "install:all": "npm install && cd client && npm install",
     "check": "bash scripts/check.sh",
     "check:quick": "bash scripts/check.sh --quick",
@@ -45,6 +46,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0",
+    "@earendil-works/pi-coding-agent": "^0.74.2",
     "chokidar": "^4.0.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
