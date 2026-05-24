@@ -16,6 +16,22 @@ const path = require("path") as typeof import("path");
 const fs = require("fs") as typeof import("fs");
 const { execSync } = require("child_process") as typeof import("child_process");
 
+function readJsonSafe(filePath: string): Record<string, any> {
+  try {
+    if (fs.existsSync(filePath)) return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {}
+  return {};
+}
+
+function writeJsonSafe(filePath: string, data: any): void {
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  } catch (e: any) {
+    console.error("[jonggrang] writeJsonSafe failed:", e.message);
+  }
+}
+
 export default function (pi: ExtensionAPI) {
   // Resolve projectRoot from the extension's location:
   // installed at <projectRoot>/.jonggrang/extensions/jonggrang.ts → ../../.. = projectRoot
@@ -51,12 +67,7 @@ export default function (pi: ExtensionAPI) {
     if (!sessionId) return;
 
     const sessionRolesPath = path.join(projectRoot, ".jonggrang", ".ephemeral", "session-roles.json");
-    let sessionRoles: Record<string, string> = {};
-    try {
-      if (fs.existsSync(sessionRolesPath)) {
-        sessionRoles = JSON.parse(fs.readFileSync(sessionRolesPath, "utf8"));
-      }
-    } catch {}
+    const sessionRoles: Record<string, string> = readJsonSafe(sessionRolesPath);
 
     if (sessionRoles[sessionId]) return; // already registered
 
@@ -78,14 +89,8 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (!role) return;
-
-    try {
-      fs.mkdirSync(path.dirname(sessionRolesPath), { recursive: true });
-      sessionRoles[sessionId] = role;
-      fs.writeFileSync(sessionRolesPath, JSON.stringify(sessionRoles, null, 2));
-    } catch (e: any) {
-      console.error("[jonggrang] session-role registration failed:", e.message);
-    }
+    sessionRoles[sessionId] = role;
+    writeJsonSafe(sessionRolesPath, sessionRoles);
   });
 
   // ── LAYER 1: resources_discover → redirect to .jonggrang/ paths ──────────
@@ -147,20 +152,15 @@ export default function (pi: ExtensionAPI) {
       if (!fs.existsSync(agentsRegistry)) return;
 
       const domain = detectDomain(filePath);
-      let registry: Record<string, unknown> = {};
-      try { registry = JSON.parse(fs.readFileSync(agentsRegistry, "utf8")); } catch {}
+      const registry: Record<string, unknown> = readJsonSafe(agentsRegistry);
 
       if (registry[domain]) {
         const sessionId = (ctx as any)?.sessionId || "";
         let sessionRole = "";
         if (sessionId) {
           const sessionRolesPath = path.join(projectRoot, ".jonggrang", ".ephemeral", "session-roles.json");
-          try {
-            if (fs.existsSync(sessionRolesPath)) {
-              const roles = JSON.parse(fs.readFileSync(sessionRolesPath, "utf8"));
-              sessionRole = roles[sessionId] || "";
-            }
-          } catch {}
+          const roles = readJsonSafe(sessionRolesPath);
+          sessionRole = roles[sessionId] || "";
         }
         if (sessionRole !== "developer" && sessionRole !== "tester") {
           return {
@@ -212,43 +212,21 @@ export default function (pi: ExtensionAPI) {
       if (e.message && e.message.includes("FEEDBACK LOOP")) throw e;
     }
 
-    // ── Quality Gate ──────────────────────────────────────────────────────
+    // ── Output Enforcement (combined quality + output gates) ─────────────
     const violations: string[] = [];
-    try {
-      const untracked = execSync("git ls-files --others --exclude-standard", {
-        cwd: projectRoot, encoding: "utf8",
-      }).split("\n").filter((f: string) =>
-        f.endsWith(".md") &&
-        !f.startsWith(".jonggrang/") &&
-        !f.startsWith(".claude/") &&
-        !f.startsWith(".opencode/") &&
-        !f.startsWith("docs/") &&
-        f !== "AGENTS.md" && f !== "CLAUDE.md" && f !== "README.md" &&
-        f !== "CHANGELOG.md" && f !== "CONTRIBUTING.md" && f !== "SKILL.md"
-      );
-      for (const f of untracked) {
-        if (f) violations.push(`Untracked .md outside .jonggrang/.output/: ${f}`);
-      }
-    } catch {}
-
-    // ── Output Enforcement ────────────────────────────────────────────────
+    const ALLOWED_MD_PATTERNS = [
+      /^\.jonggrang\//, /^\.claude\//, /^\.opencode\//, /^docs\//,
+      /^AGENTS\.md$/, /^CLAUDE\.md$/, /^SKILL\.md$/,
+      /^README\.md$/, /^CHANGELOG\.md$/, /^CONTRIBUTING\.md$/,
+    ];
     try {
       const untracked = execSync("git ls-files --others --exclude-standard", {
         cwd: projectRoot, encoding: "utf8",
       }).split("\n").filter(Boolean);
 
-      const allowedPatterns = [
-        /^\.jonggrang\//,
-        /^\.claude\//,
-        /^\.opencode\//,
-        /^docs\//,
-        /^AGENTS\.md$/, /^CLAUDE\.md$/, /^SKILL\.md$/,
-        /^progress\.txt$/, /^README\.md$/, /^CHANGELOG\.md$/, /^CONTRIBUTING\.md$/,
-      ];
-
       for (const file of untracked) {
         if (!file.endsWith(".md")) continue;
-        if (!allowedPatterns.some((p) => p.test(file))) {
+        if (!ALLOWED_MD_PATTERNS.some((p) => p.test(file))) {
           violations.push(`Unapproved .md file: ${file} (use .jonggrang/.output/)`);
         }
       }
