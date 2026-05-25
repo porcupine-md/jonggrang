@@ -6,9 +6,8 @@
         <span class="nav-brand-path">~/</span>jonggrang
       </RouterLink>
       <div class="nav-links">
-        <RouterLink to="/" class="nav-link"><span class="nav-num">01</span> projects</RouterLink>
-        <RouterLink to="/settings" class="nav-link"><span class="nav-num">02</span> settings</RouterLink>
-        <RouterLink to="/legacy" class="nav-link nav-link--dim"><span class="nav-num">03</span> legacy</RouterLink>
+        <RouterLink to="/" class="nav-link">projects</RouterLink>
+        <RouterLink to="/settings" class="nav-link">settings</RouterLink>
       </div>
       <div class="nav-status" :class="connected ? 'nav-status--ok' : 'nav-status--off'">
         {{ connected ? '● live' : '○ offline' }}
@@ -78,9 +77,6 @@ body {
 .nav-link:first-child { border-left: 1px solid var(--jg-border); }
 .nav-link:hover { color: var(--jg-text); background: var(--jg-hover); }
 .nav-link.router-link-active { color: var(--jg-green); background: oklch(0.195 0.014 245); }
-.nav-num { color: var(--jg-text-faint); font-size: 10px; }
-.nav-link--dim { opacity: 0.4; }
-.nav-link--dim:hover { opacity: 0.7; }
 .nav-status { font-size: 11px; font-family: var(--font-mono); margin-left: auto; }
 .nav-status--ok { color: var(--jg-green); }
 .nav-status--off { color: var(--jg-text-faint); }
