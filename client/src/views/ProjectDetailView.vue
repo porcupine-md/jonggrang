@@ -170,6 +170,12 @@ async function restartSandbox() {
 }
 
 async function rebuildSandbox() {
+  const ok = window.confirm(
+    'Rebuild will destroy the current container and create a fresh one.\n\n' +
+    'Any software installed manually inside the container and changes outside the mounted volumes will be permanently lost.\n\n' +
+    'Continue?'
+  );
+  if (!ok) return;
   sandboxLogTail.value = '';
   sandboxStatus.value = 'starting';
   await fetch(`/api/projects/${id.value}/sandbox/rebuild`, { method: 'POST' });
