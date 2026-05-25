@@ -186,24 +186,7 @@ module.exports = function register(app, io, ctx) {
     app.use('/api', require('../secrets')(deps));
     app.use('/api/projects', require('./settings')(deps));
 
-    // Idle sandbox detection — stop containers idle > 30 min
-    const sandbox = require('../../lib/sandbox');
-    setInterval(async () => {
-        const now = Date.now();
-        for (const project of webState.listProjects()) {
-            if (!project.sandbox?.enabled) continue;
-            const last = lastActivity.get(project.id) || 0;
-            if (now - last > 30 * 60 * 1000) {
-                try {
-                    const running = await sandbox.isRunning(project.id);
-                    if (running) {
-                        await sandbox.stop(project.id);
-                        io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'stopped' });
-                    }
-                } catch {}
-            }
-        }
-    }, 5 * 60 * 1000);
+    // Idle sandbox auto-stop disabled — containers stopped manually only
 
     // ── Cleanup ───────────────────────────────────────────────────
 
