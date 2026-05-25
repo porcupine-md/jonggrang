@@ -26,9 +26,10 @@ module.exports = function(deps) {
         }
     }
 
-    function resolveAgentCommand(tool) {
+    function resolveAgentCommand(tool, sandboxEnabled) {
         if (tool === 'claude')    return { cmd: 'claude',   args: [] };
         if (tool === 'opencode')  return { cmd: 'opencode', args: [] };
+        if (sandboxEnabled)       return { cmd: 'jonggrang', args: ['agent'] };
         return { cmd: 'node', args: [nodeCli, 'agent'] };
     }
 
@@ -115,7 +116,7 @@ module.exports = function(deps) {
 
         const { tool, cols = 80, rows = 24 } = req.body || {};
         const resolvedTool = tool || readProjectTool(project);
-        const { cmd, args } = resolveAgentCommand(resolvedTool);
+        const { cmd, args } = resolveAgentCommand(resolvedTool, project.sandbox?.enabled);
 
         try {
             spawnPty(project, 'agent', cmd, args, cols, rows);

@@ -29,6 +29,28 @@
         <RouterLink :to="`/projects/${id}/terminal`" class="snav-link"><i class="pi pi-dollar" /> Terminal</RouterLink>
         <RouterLink :to="`/projects/${id}/settings`" class="snav-link"><i class="pi pi-cog" /> Settings</RouterLink>
       </nav>
+      <!-- Sandbox panel -->
+      <div v-if="project.sandbox?.enabled" class="sandbox-panel">
+        <div class="sandbox-panel-title">
+          <i class="pi pi-box" />
+          <span>Sandbox</span>
+          <span class="sbx-status-dot" :class="`sbx-dot--${sandboxStatus || 'stopped'}`"></span>
+          <span class="sbx-status-label">{{ sandboxStatus || 'stopped' }}</span>
+        </div>
+        <div class="sbx-container-name">{{ containerName }}</div>
+        <div class="sbx-actions">
+          <button class="sbx-btn" :disabled="sandboxStatus === 'starting'" @click="restartSandbox" title="Restart">
+            <i class="pi pi-refresh" />
+          </button>
+          <button class="sbx-btn sbx-btn--stop" v-if="sandboxStatus === 'running'" @click="stopSandbox" title="Stop">
+            <i class="pi pi-stop" />
+          </button>
+          <button class="sbx-btn sbx-btn--start" v-if="sandboxStatus === 'stopped' || sandboxStatus === 'error'" @click="startSandbox" title="Start">
+            <i class="pi pi-play" />
+          </button>
+        </div>
+      </div>
+
       <div class="sidebar-meta">
         <div class="meta-row"><span>Status</span><span>{{ project.init_status }}</span></div>
         <div class="meta-row"><span>Path</span><span class="meta-path">{{ project.path }}</span></div>
@@ -103,6 +125,7 @@ const loading = ref(false);
 const showInit = ref(false);
 const sandboxStatus = ref(null);
 const sandboxLogTail = ref('');
+const containerName = computed(() => project.value ? `jonggrang-${id.value}` : '');
 
 const manifest = useManifestStore();
 const project = computed(() => projects.byId[id.value] || null);
@@ -132,6 +155,16 @@ const stateSeverity = computed(() => {
 async function startSandbox() {
   sandboxLogTail.value = '';
   await fetch(`/api/projects/${id.value}/sandbox/start`, { method: 'POST' });
+}
+
+async function stopSandbox() {
+  await fetch(`/api/projects/${id.value}/sandbox/stop`, { method: 'POST' });
+}
+
+async function restartSandbox() {
+  sandboxLogTail.value = '';
+  sandboxStatus.value = 'starting';
+  await fetch(`/api/projects/${id.value}/sandbox/restart`, { method: 'POST' });
 }
 
 onMounted(async () => {
@@ -212,7 +245,45 @@ async function onInitDone() {
 .snav-back:hover { color: var(--jg-text-muted) !important; }
 .snav-divider { height: 1px; background: var(--jg-border); margin: 4px 8px; }
 
-.sidebar-meta { padding: 12px 16px; margin-top: auto; border-top: 1px solid var(--jg-border); }
+.sandbox-panel {
+  margin-top: auto;
+  padding: 10px 14px;
+  border-top: 1px solid var(--jg-border);
+  background: color-mix(in oklch, var(--jg-green) 5%, transparent);
+}
+.sandbox-panel-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--jg-text-faint); margin-bottom: 6px;
+}
+.sandbox-panel-title .pi-box { font-size: 11px; }
+.sbx-status-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-left: auto;
+}
+.sbx-dot--running  { background: var(--jg-green); box-shadow: 0 0 4px var(--jg-green); }
+.sbx-dot--starting { background: #f59e0b; box-shadow: 0 0 4px #f59e0b; animation: pulse 1s infinite; }
+.sbx-dot--stopped  { background: var(--jg-text-faint); }
+.sbx-dot--error    { background: var(--jg-red); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.sbx-status-label { font-size: 9px; color: var(--jg-text-faint); }
+.sbx-container-name {
+  font-size: 9px; color: var(--jg-text-faint); font-family: monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-bottom: 8px;
+}
+.sbx-actions { display: flex; gap: 6px; }
+.sbx-btn {
+  flex: 1; padding: 5px; border: 1px solid var(--jg-border);
+  background: var(--jg-hover); color: var(--jg-text-muted);
+  cursor: pointer; font-size: 11px; transition: all 0.15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.sbx-btn:hover:not(:disabled) { background: var(--jg-card); color: var(--jg-text); }
+.sbx-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.sbx-btn--stop:hover:not(:disabled)  { color: var(--jg-red); border-color: var(--jg-red); }
+.sbx-btn--start:hover:not(:disabled) { color: var(--jg-green); border-color: var(--jg-green); }
+
+.sidebar-meta { padding: 12px 16px; border-top: 1px solid var(--jg-border); }
 .meta-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--jg-text-faint); margin-bottom: 6px; gap: 8px; }
 .meta-row span:first-child { flex-shrink: 0; }
 .meta-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; direction: rtl; text-align: right; color: var(--jg-text-muted); }

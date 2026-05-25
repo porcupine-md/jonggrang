@@ -61,6 +61,36 @@ module.exports = function(deps) {
         });
     });
 
+    router.post('/:id/sandbox/restart', async (req, res) => {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
+        if (!project.sandbox?.enabled) return res.status(400).json({ error: 'SANDBOX_DISABLED' });
+
+        if (startingSet.has(project.id)) return res.json({ ok: true, status: 'starting' });
+
+        io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
+        res.json({ ok: true, status: 'starting' });
+
+        startingSet.add(project.id);
+        try { await sandbox.remove(project.id); } catch {}
+
+        const secretVars = webState.getProjectSecretVars(project.id);
+        const globalConfig = webState.getSandboxConfig();
+        const sandboxConfig = {
+            image: project.sandbox?.image || globalConfig.image,
+            shell: project.sandbox?.shell || globalConfig.shell,
+        };
+        sandbox.start(project, sandboxConfig, secretVars, (line) => {
+            io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });
+        }).then(() => {
+            startingSet.delete(project.id);
+            io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
+        }).catch((err) => {
+            startingSet.delete(project.id);
+            io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'error', message: err.message });
+        });
+    });
+
     router.post('/:id/sandbox/stop', async (req, res) => {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
