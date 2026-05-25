@@ -7,6 +7,7 @@
       </RouterLink>
       <div class="nav-links">
         <RouterLink to="/" class="nav-link">projects</RouterLink>
+        <RouterLink to="/secrets" class="nav-link">secrets</RouterLink>
         <RouterLink to="/settings" class="nav-link">settings</RouterLink>
       </div>
       <div class="nav-status" :class="connected ? 'nav-status--ok' : 'nav-status--off'">

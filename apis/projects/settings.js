@@ -1,0 +1,46 @@
+'use strict';
+
+const { Router } = require('express');
+const fs = require('fs');
+const path = require('path');
+
+module.exports = function(deps) {
+  const { webState } = deps;
+  const router = Router();
+
+  router.get('/:id/settings', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
+    const configPath = path.join(project.path, '.jonggrang', 'jonggrang.json');
+    let jonggrang_config = {};
+    try { jonggrang_config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch {}
+    res.json({ jonggrang_config, secrets: project.secrets || [] });
+  });
+
+  router.put('/:id/settings', (req, res) => {
+    const project = webState.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
+    const { secrets, jonggrang_config } = req.body || {};
+    if (Array.isArray(secrets)) {
+      try { webState.updateProject(req.params.id, { secrets }); } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
+    if (jonggrang_config && typeof jonggrang_config === 'object') {
+      const jonggrangDir = path.join(project.path, '.jonggrang');
+      const configPath = path.join(jonggrangDir, 'jonggrang.json');
+      try {
+        fs.mkdirSync(jonggrangDir, { recursive: true });
+        let existing = {};
+        try { existing = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch {}
+        Object.assign(existing, jonggrang_config);
+        fs.writeFileSync(configPath, JSON.stringify(existing, null, 2), 'utf-8');
+      } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
+    res.json({ ok: true });
+  });
+
+  return router;
+};

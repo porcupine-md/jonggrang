@@ -15,9 +15,11 @@ const routes = [
       { path: 'changelog', component: () => import('../views/ChangelogView.vue') },
       { path: 'agent',    component: () => import('../views/AgentView.vue') },
       { path: 'terminal', component: () => import('../views/TerminalView.vue') },
+      { path: 'settings', component: () => import('../views/ProjectSettingsView.vue') },
     ],
   },
   { path: '/settings', component: () => import('../views/SettingsView.vue') },
+  { path: '/secrets',  component: () => import('../views/SecretsView.vue') },
   // Legacy single-project route — keep old UI accessible
   { path: '/legacy', component: () => import('../views/LegacyView.vue') },
 ];

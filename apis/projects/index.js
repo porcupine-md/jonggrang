@@ -180,6 +180,8 @@ module.exports = function register(app, io, ctx) {
     app.use('/api/projects', require('./tasks')(deps));
     app.use('/api/projects', require('./work')(deps));
     app.use('/api/projects', require('./pty')(deps));
+    app.use('/api', require('../secrets')(deps));
+    app.use('/api/projects', require('./settings')(deps));
 
     // ── Cleanup ───────────────────────────────────────────────────
 

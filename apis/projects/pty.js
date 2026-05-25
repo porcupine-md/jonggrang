@@ -41,10 +41,12 @@ module.exports = function(deps) {
             activePtySessions.delete(key);
         }
 
+        const secretVars = webState.getProjectSecretVars(project.id);
+
         const ptyProcess = pty.spawn(cmd, args, {
             name: 'xterm-256color',
             cwd: project.path,
-            env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+            env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', ...secretVars },
             cols: cols || 80,
             rows: rows || 24,
         });
