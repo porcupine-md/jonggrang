@@ -195,6 +195,7 @@ function goHome() {
 .source-desc { font-size: 11px; color: var(--jg-text-faint); }
 
 .wizard-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--jg-border); }
+.wizard-actions :deep(.p-button) { padding-block: 9px !important; min-height: 36px; }
 
 .progress-log {
   background: var(--jg-bg); border: 1px solid var(--jg-border); border-radius: var(--radius);

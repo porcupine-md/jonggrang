@@ -92,11 +92,11 @@ body {
   border-radius: 0px !important;
   font-size: 12px !important;
   font-weight: 500 !important;
-  padding: 5px 14px !important;
   border: 1px solid transparent !important;
   transition: background 0.12s, border-color 0.12s, color 0.12s !important;
   box-shadow: none !important;
   cursor: pointer !important;
+  padding: 7px 14px !important;
 }
 /* Primary — solid green */
 .p-button:not(.p-button-secondary):not(.p-button-danger):not(.p-button-warn):not(.p-button-info):not(.p-button-text):not(.p-button-outlined) {
@@ -132,7 +132,7 @@ body {
 /* Disabled */
 .p-button:disabled { opacity: 0.35 !important; cursor: not-allowed !important; }
 /* Small */
-.p-button-sm { font-size: 11px !important; padding: 3px 10px !important; }
+.p-button-sm { font-size: 11px !important; padding: 6px 10px !important; }
 /* Icon-only spacing */
 .p-button .p-button-icon { font-size: 11px !important; }
 .p-button .p-button-icon + .p-button-label { margin-left: 5px !important; }
