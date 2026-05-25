@@ -2,29 +2,6 @@
   <div class="init-wizard">
     <div class="form-row">
       <div class="form-group">
-        <label>Project type</label>
-        <Select v-model="form.type" :options="[
-          { label: 'API / Backend', value: 'api' },
-          { label: 'Web App / Frontend', value: 'web-app' },
-          { label: 'CLI Tool', value: 'cli' },
-          { label: 'Library', value: 'library' },
-          { label: 'Full Stack', value: 'fullstack' },
-        ]" optionLabel="label" optionValue="value" fluid />
-      </div>
-      <div class="form-group">
-        <label>Stack</label>
-        <Select v-model="form.stack" :options="[
-          { label: 'Node.js / TypeScript', value: 'node-typescript' },
-          { label: 'Express / TypeScript', value: 'express-typescript' },
-          { label: 'Next.js / TypeScript', value: 'nextjs-typescript' },
-          { label: 'Python / FastAPI', value: 'python-fastapi' },
-          { label: 'Go', value: 'go' },
-          { label: 'Rust', value: 'rust' },
-        ]" optionLabel="label" optionValue="value" fluid />
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
         <label>AI Tool</label>
         <Select v-model="form.tool" :options="[
           { label: 'OpenCode', value: 'opencode' },
@@ -39,6 +16,37 @@
           { label: 'Balanced (approve edits)', value: 'balanced' },
           { label: 'Supervised (review each task)', value: 'supervised' },
         ]" optionLabel="label" optionValue="value" fluid />
+      </div>
+    </div>
+
+    <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+      <i :class="showAdvanced ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" />
+      Advanced
+    </button>
+
+    <div v-if="showAdvanced" class="advanced-panel">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Project type</label>
+          <Select v-model="form.type" :options="[
+            { label: 'API / Backend', value: 'api' },
+            { label: 'Web App / Frontend', value: 'web-app' },
+            { label: 'CLI Tool', value: 'cli' },
+            { label: 'Library', value: 'library' },
+            { label: 'Full Stack', value: 'fullstack' },
+          ]" optionLabel="label" optionValue="value" placeholder="Choose..." fluid />
+        </div>
+        <div class="form-group">
+          <label>Stack</label>
+          <Select v-model="form.stack" :options="[
+            { label: 'Node.js / TypeScript', value: 'node-typescript' },
+            { label: 'Express / TypeScript', value: 'express-typescript' },
+            { label: 'Next.js / TypeScript', value: 'nextjs-typescript' },
+            { label: 'Python / FastAPI', value: 'python-fastapi' },
+            { label: 'Go', value: 'go' },
+            { label: 'Rust', value: 'rust' },
+          ]" optionLabel="label" optionValue="value" placeholder="Choose..." fluid />
+        </div>
       </div>
     </div>
 
@@ -71,11 +79,12 @@ const ws = useWsStore();
 const initing = ref(false);
 const error = ref('');
 const initLog = ref([]);
+const showAdvanced = ref(false);
 
 const form = ref({
-  type: 'api',
-  stack: 'node-typescript',
-  tool: 'opencode',
+  type: null,
+  stack: null,
+  tool: 'jonggrang',
   autonomy: 'autonomous',
 });
 
@@ -129,4 +138,15 @@ async function doInit() {
   max-height: 140px; overflow-y: auto; margin-bottom: 12px;
 }
 .init-log-line { line-height: 1.5; }
+
+.advanced-toggle {
+  display: flex; align-items: center; gap: 6px;
+  background: none; border: none; cursor: pointer; padding: 6px 0;
+  font-size: 11px; color: var(--jg-text-faint); margin-bottom: 4px;
+  transition: color 0.15s;
+}
+.advanced-toggle:hover { color: var(--jg-text-muted); }
+.advanced-toggle .pi { font-size: 10px; }
+
+.advanced-panel { margin-bottom: 4px; }
 </style>
