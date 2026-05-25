@@ -35,14 +35,16 @@
             <input type="checkbox" v-model="sbx.enabled" />
             <span>Enable Docker sandbox</span>
           </label>
-          <div v-if="sbx.enabled" class="field-group">
-            <label>Docker Image</label>
-            <input v-model="sbx.image" placeholder="orcinus/jonggrang-agent" class="sandbox-image-input" />
-          </div>
-          <div v-if="sbx.enabled" class="field-group">
-            <label>Shell</label>
-            <input v-model="sbx.shell" placeholder="/bin/bash" class="sandbox-image-input" />
-          </div>
+          <template v-if="sbx.enabled">
+            <div class="field-group">
+              <label>Image <span class="override-hint">(leave blank to use global)</span></label>
+              <input v-model="sbx.image" :placeholder="globalSbx.image || 'orcinus/jonggrang-agent'" class="sandbox-image-input" />
+            </div>
+            <div class="field-group">
+              <label>Shell <span class="override-hint">(leave blank to use global)</span></label>
+              <input v-model="sbx.shell" :placeholder="globalSbx.shell || '/bin/bash'" class="sandbox-image-input" />
+            </div>
+          </template>
           <div v-if="sbxError" class="error-text">{{ sbxError }}</div>
           <div v-if="sbxSaved" class="saved-text"><i class="pi pi-check" /> Saved</div>
           <div class="section-footer">
@@ -114,6 +116,7 @@ const cfgError = ref('');
 const cfgSaved = ref(false);
 
 const sbx = reactive({ enabled: false, image: '', shell: '' });
+const globalSbx = reactive({ image: '', shell: '' });
 const sbxSaving = ref(false);
 const sbxError = ref('');
 const sbxSaved = ref(false);
@@ -139,6 +142,7 @@ onMounted(async () => {
       if (data.jonggrang_config?.autonomy) cfg.autonomy = data.jonggrang_config.autonomy;
       attachedSecrets.value = Array.isArray(data.secrets) ? [...data.secrets] : [];
       if (data.sandbox) { sbx.enabled = !!data.sandbox.enabled; sbx.image = data.sandbox.image || ''; sbx.shell = data.sandbox.shell || ''; }
+      fetch('/api/settings/sandbox').then(r => r.json()).then(d => { globalSbx.image = d.image || ''; globalSbx.shell = d.shell || ''; }).catch(() => {});
     }
   } catch {}
   secretsLoading.value = false;
@@ -178,7 +182,7 @@ async function saveSandbox() {
     const res = await fetch(`/api/projects/${projectId.value}/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sandbox: { enabled: sbx.enabled, image: sbx.image || 'orcinus/jonggrang-agent', shell: sbx.shell || '/bin/bash' } }),
+      body: JSON.stringify({ sandbox: { enabled: sbx.enabled, image: sbx.image || null, shell: sbx.shell || null } }),
     });
     if (!res.ok) throw new Error('Save failed');
     sbxSaved.value = true;
@@ -258,6 +262,8 @@ async function saveSecrets() {
   outline: none; margin-top: 4px;
 }
 .sandbox-image-input:focus { border-color: var(--jg-green); }
+.sandbox-hint { font-size: 11px; color: var(--jg-text-faint); margin-top: 4px; }
+.override-hint { font-size: 10px; color: var(--jg-text-faint); font-weight: 400; }
 .empty-secrets { font-size: 12px; color: var(--jg-text-faint); display: flex; align-items: center; gap: 8px; }
 .link { color: var(--jg-cyan); text-decoration: none; font-size: 12px; }
 .link:hover { text-decoration: underline; }

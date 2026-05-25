@@ -46,7 +46,8 @@ module.exports = function(deps) {
 
         if (project.sandbox?.enabled) {
             const containerName = sandbox.getContainerName(project.id);
-            const execArgs = sandbox.buildExecArgs(containerName, cmd, args, secretVars);
+            const containerPath = sandbox.getContainerPath(project);
+            const execArgs = sandbox.buildExecArgs(containerName, containerPath, cmd, args, secretVars);
             cmd = 'docker';
             args = execArgs;
         }
@@ -145,7 +146,7 @@ module.exports = function(deps) {
 
         const { cols = 80, rows = 24 } = req.body || {};
         const shell = project.sandbox?.enabled
-            ? (project.sandbox.shell || '/bin/bash')
+            ? (project.sandbox.shell || webState.getSandboxConfig().shell || '/bin/bash')
             : (process.env.SHELL || 'bash');
 
         try {

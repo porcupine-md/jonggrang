@@ -19,6 +19,11 @@
       </div>
     </div>
 
+    <label class="sandbox-toggle-row">
+      <input type="checkbox" v-model="form.sandbox_enabled" />
+      <span>Run in Docker sandbox</span>
+    </label>
+
     <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
       <i :class="showAdvanced ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" />
       Advanced
@@ -47,17 +52,6 @@
             { label: 'Rust', value: 'rust' },
           ]" optionLabel="label" optionValue="value" placeholder="Choose..." fluid />
         </div>
-      </div>
-      <div class="form-group sandbox-group">
-        <label>Execution Environment</label>
-        <label class="sandbox-toggle-row">
-          <input type="checkbox" v-model="form.sandbox_enabled" />
-          <span>Run in Docker sandbox</span>
-        </label>
-        <input v-if="form.sandbox_enabled" v-model="form.sandbox_image"
-          placeholder="orcinus/jonggrang-agent" class="sandbox-image-input" />
-        <input v-if="form.sandbox_enabled" v-model="form.sandbox_shell"
-          placeholder="/bin/bash" class="sandbox-image-input" style="margin-top:4px" />
       </div>
     </div>
 
@@ -97,7 +91,7 @@ const form = ref({
   stack: null,
   tool: 'jonggrang',
   autonomy: 'autonomous',
-  sandbox_enabled: false,
+  sandbox_enabled: true,
   sandbox_image: '',
   sandbox_shell: '',
 });
@@ -137,11 +131,7 @@ async function doInit() {
   try {
     const payload = { ...form.value };
     if (form.value.sandbox_enabled) {
-      payload.sandbox = {
-        enabled: true,
-        image: form.value.sandbox_image || 'orcinus/jonggrang-agent',
-        shell: form.value.sandbox_shell || '/bin/bash',
-      };
+      payload.sandbox = { enabled: true };
     }
     await projects.initProject(props.project.id, payload);
   } catch (e) {

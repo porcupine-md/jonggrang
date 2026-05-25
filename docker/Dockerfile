@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     unzip \
     xz-utils \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Node.js (latest LTS via NodeSource) ──────────────────────────────────────

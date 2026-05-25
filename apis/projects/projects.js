@@ -1,6 +1,7 @@
 'use strict';
 
 const { Router } = require('express');
+const sandbox = require('../../lib/sandbox');
 
 module.exports = function(deps) {
     const { io, fs, webState, stopProjectWatcher, startProjectWatcher } = deps;
@@ -116,8 +117,13 @@ module.exports = function(deps) {
         });
     });
 
-    router.delete('/projects/:id', (req, res) => {
-        const project = webState.getProject(req.params.id);
+    router.delete('/projects/:id', async (req, res) => {
+        const id = req.params.id;
+
+        // Always attempt container cleanup first — rm -f stops+removes in one shot
+        try { await sandbox.remove(id); } catch {}
+
+        const project = webState.getProject(id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
         stopProjectWatcher(project.id);

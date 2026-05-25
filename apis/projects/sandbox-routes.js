@@ -45,7 +45,12 @@ module.exports = function(deps) {
         res.json({ ok: true, status: 'starting' });
 
         const secretVars = webState.getProjectSecretVars(project.id);
-        sandbox.start(project, secretVars, (line) => {
+        const globalConfig = webState.getSandboxConfig();
+        const sandboxConfig = {
+            image: project.sandbox?.image || globalConfig.image,
+            shell: project.sandbox?.shell || globalConfig.shell,
+        };
+        sandbox.start(project, sandboxConfig, secretVars, (line) => {
             io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });
         }).then(() => {
             startingSet.delete(project.id);

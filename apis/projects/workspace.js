@@ -27,5 +27,19 @@ module.exports = function(deps) {
         }
     });
 
+    router.get('/settings/sandbox', (req, res) => {
+        res.json(webState.getSandboxConfig());
+    });
+
+    router.put('/settings/sandbox', (req, res) => {
+        const { image, shell } = req.body || {};
+        try {
+            const config = webState.setSandboxConfig({ image, shell });
+            res.json(config);
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     return router;
 };

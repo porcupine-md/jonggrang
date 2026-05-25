@@ -42,6 +42,24 @@
       </div>
     </div>
 
+    <!-- Sandbox -->
+    <div class="settings-card">
+      <div class="card-title"><i class="pi pi-box" /> Docker Sandbox</div>
+      <div class="form-group">
+        <label>Default Image</label>
+        <InputText v-model="sbx.image" placeholder="orcinus/jonggrang-agent" style="width:100%" />
+        <p class="hint">Docker image used for all sandbox projects.</p>
+      </div>
+      <div class="form-group">
+        <label>Shell</label>
+        <InputText v-model="sbx.shell" placeholder="/bin/bash" style="width:100%" />
+        <p class="hint">Shell binary inside the container (e.g. /bin/bash, /bin/sh).</p>
+      </div>
+      <div v-if="sbxError" class="error-text"><i class="pi pi-times-circle" /> {{ sbxError }}</div>
+      <div v-if="sbxOk" class="ok-text"><i class="pi pi-check-circle" /> Saved!</div>
+      <Button :disabled="sbxSaving" @click="saveSandbox" :icon="sbxSaving ? 'pi pi-spin pi-spinner' : 'pi pi-check'" :label="sbxSaving ? 'Saving…' : 'Save'" />
+    </div>
+
     <!-- About -->
     <div class="settings-card">
       <div class="card-title"><i class="pi pi-info-circle" /> About</div>
@@ -53,7 +71,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, reactive, onMounted } from 'vue';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import SelectButton from 'primevue/selectbutton';
@@ -78,10 +96,39 @@ const saving = ref(false);
 const saveError = ref('');
 const saveOk = ref(false);
 
+const sbx = reactive({ image: '', shell: '' });
+const sbxSaving = ref(false);
+const sbxError = ref('');
+const sbxOk = ref(false);
+
 onMounted(async () => {
   await workspace.fetch();
   workspacePath.value = workspace.path;
+  try {
+    const res = await fetch('/api/settings/sandbox');
+    if (res.ok) { const d = await res.json(); sbx.image = d.image || ''; sbx.shell = d.shell || ''; }
+  } catch {}
 });
+
+async function saveSandbox() {
+  sbxSaving.value = true;
+  sbxError.value = '';
+  sbxOk.value = false;
+  try {
+    const res = await fetch('/api/settings/sandbox', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: sbx.image || 'orcinus/jonggrang-agent', shell: sbx.shell || '/bin/bash' }),
+    });
+    if (!res.ok) throw new Error('Save failed');
+    sbxOk.value = true;
+    setTimeout(() => { sbxOk.value = false; }, 2000);
+  } catch (e) {
+    sbxError.value = e.message;
+  } finally {
+    sbxSaving.value = false;
+  }
+}
 
 async function saveWorkspace() {
   saving.value = true;
