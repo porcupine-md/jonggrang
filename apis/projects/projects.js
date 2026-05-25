@@ -69,7 +69,10 @@ module.exports = function(deps) {
                 if (source.type === 'git') {
                     // Remove leftover directory from a previous failed clone so git doesn't reject the target
                     if (fs.existsSync(targetPath)) {
-                        try { fs.rmSync(targetPath, { recursive: true, force: true }); } catch {}
+                        await new Promise((res2, rej) => {
+                            const rm = spawn('rm', ['-rf', targetPath], { stdio: 'pipe' });
+                            rm.on('close', c => c === 0 ? res2() : rej(new Error(`Failed to remove existing directory: ${targetPath}`)));
+                        });
                     }
                     const gitArgs = ['clone', '--progress', source.url, targetPath];
                     if (source.ref) gitArgs.push('--branch', source.ref);
