@@ -10,6 +10,20 @@
       </RouterLink>
     </div>
 
+    <!-- Filter -->
+    <div v-if="projects.list.length > 0" class="filter-bar">
+      <i class="pi pi-search filter-icon" />
+      <input
+        v-model="filter"
+        class="filter-input"
+        placeholder="Filter projects..."
+        @keydown.escape="filter = ''"
+      />
+      <button v-if="filter" class="filter-clear" @click="filter = ''">
+        <i class="pi pi-times" />
+      </button>
+    </div>
+
     <div v-if="projects.loading" class="empty-state">Loading...</div>
     <div v-else-if="projects.list.length === 0" class="empty-state">
       <i class="pi pi-sparkles empty-icon" />
@@ -19,9 +33,12 @@
         <Button label="Create first project" icon="pi pi-plus" />
       </RouterLink>
     </div>
+    <div v-else-if="filtered.length === 0" class="empty-state">
+      <div class="empty-title">No matches for "{{ filter }}"</div>
+    </div>
     <div v-else class="project-grid">
       <div
-        v-for="project in projects.list"
+        v-for="project in filtered"
         :key="project.id"
         class="project-card"
         @click="openProject(project)"
@@ -39,16 +56,40 @@
           <Tag :value="project.init_status" :severity="initStatusSeverity(project.init_status)" size="small" />
           <span v-if="project.init_status === 'imported'" class="project-action-hint">Click to initialize</span>
         </div>
+
+        <!-- Delete button -->
+        <button class="card-delete" @click.stop="confirmDelete(project)" title="Delete project">
+          <i class="pi pi-trash" />
+        </button>
       </div>
     </div>
+
+    <!-- Delete confirm dialog -->
+    <Dialog v-model:visible="deleteDialog" header="Delete Project" :modal="true" :style="{ width: '400px' }">
+      <div class="delete-dialog-body">
+        <div class="delete-dialog-name">{{ deleteTarget?.name }}</div>
+        <div class="delete-dialog-desc">Remove this project from Jonggrang?</div>
+        <label class="delete-files-label">
+          <input type="checkbox" v-model="deleteFiles" />
+          Also delete project files from disk
+        </label>
+      </div>
+      <template #footer>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <Button label="Cancel" severity="secondary" @click="deleteDialog = false" />
+          <Button label="Delete" severity="danger" :disabled="deleting" @click="doDelete" />
+        </div>
+      </template>
+    </Dialog>
   </div>
 </template>
 
 <script setup>
-import { onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import Tag from 'primevue/tag';
+import Dialog from 'primevue/dialog';
 import { useProjectsStore } from '../stores/projects.js';
 import { useWorkspaceStore } from '../stores/workspace.js';
 
@@ -56,12 +97,48 @@ const router = useRouter();
 const projects = useProjectsStore();
 const workspace = useWorkspaceStore();
 
+const filter = ref('');
+const deleteDialog = ref(false);
+const deleteTarget = ref(null);
+const deleteFiles = ref(false);
+const deleting = ref(false);
+
+const filtered = computed(() => {
+  const q = filter.value.trim().toLowerCase();
+  if (!q) return projects.list;
+  return projects.list.filter(p =>
+    p.name.toLowerCase().includes(q) ||
+    p.path?.toLowerCase().includes(q) ||
+    p.source?.url?.toLowerCase().includes(q)
+  );
+});
+
 onMounted(async () => {
   await Promise.all([workspace.fetch(), projects.fetchAll()]);
 });
 
 function openProject(project) {
   router.push(`/projects/${project.id}/plan`);
+}
+
+function confirmDelete(project) {
+  deleteTarget.value = project;
+  deleteFiles.value = false;
+  deleteDialog.value = true;
+}
+
+async function doDelete() {
+  if (!deleteTarget.value) return;
+  deleting.value = true;
+  try {
+    await projects.deleteProject(deleteTarget.value.id, deleteFiles.value);
+    deleteDialog.value = false;
+    deleteTarget.value = null;
+  } catch (e) {
+    console.error(e);
+  } finally {
+    deleting.value = false;
+  }
 }
 
 function stateSeverity(project) {
@@ -89,8 +166,7 @@ function sourceLabel(project) {
 
 function formatDate(iso) {
   if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleDateString();
+  return new Date(iso).toLocaleDateString();
 }
 </script>
 
@@ -103,11 +179,34 @@ function formatDate(iso) {
 .empty-title { font-size: 16px; color: var(--jg-text-muted); margin-bottom: 8px; }
 .empty-desc { font-size: 12px; color: var(--jg-text-faint); }
 
+/* Filter bar */
+.filter-bar {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 16px;
+  background: var(--jg-card); border: 1px solid var(--jg-border);
+  padding: 6px 10px;
+}
+.filter-icon { font-size: 11px; color: var(--jg-text-faint); flex-shrink: 0; }
+.filter-input {
+  flex: 1; background: transparent; border: none; outline: none;
+  font-family: var(--font-mono); font-size: 12px; color: var(--jg-text);
+}
+.filter-input::placeholder { color: var(--jg-text-faint); }
+.filter-clear {
+  background: none; border: none; cursor: pointer; padding: 0;
+  color: var(--jg-text-faint); font-size: 10px;
+}
+.filter-clear:hover { color: var(--jg-text-muted); }
+
+/* Grid */
 .project-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;
 }
+
+/* Card */
 .project-card {
-  background: var(--jg-card); border: 1px solid var(--jg-border); border-radius: var(--radius); padding: 16px;
+  position: relative;
+  background: var(--jg-card); border: 1px solid var(--jg-border); padding: 16px;
   cursor: pointer; transition: border-color 0.15s, background 0.15s;
 }
 .project-card:hover { border-color: var(--jg-green); background: var(--jg-hover); }
@@ -117,4 +216,21 @@ function formatDate(iso) {
 .project-meta { display: flex; justify-content: space-between; font-size: 10px; color: var(--jg-text-faint); }
 .project-status-bar { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--jg-border); display: flex; align-items: center; gap: 8px; }
 .project-action-hint { font-size: 11px; color: var(--jg-green); }
+
+/* Delete button */
+.card-delete {
+  position: absolute; bottom: 8px; right: 8px;
+  background: none; border: none; cursor: pointer; padding: 4px 6px;
+  color: var(--jg-text-faint); font-size: 11px;
+  opacity: 0; transition: opacity 0.15s, color 0.15s;
+  line-height: 1;
+}
+.project-card:hover .card-delete { opacity: 1; }
+.card-delete:hover { color: var(--jg-red) !important; }
+
+/* Delete dialog */
+.delete-dialog-body { display: flex; flex-direction: column; gap: 10px; }
+.delete-dialog-name { font-weight: 600; font-size: 13px; color: var(--jg-text); }
+.delete-dialog-desc { font-size: 12px; color: var(--jg-text-muted); }
+.delete-files-label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--jg-text-muted); margin-top: 4px; cursor: pointer; }
 </style>

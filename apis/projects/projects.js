@@ -67,6 +67,10 @@ module.exports = function(deps) {
                 io.to(`project:${id}`).emit('import.progress', { project_id: id, phase: 'prepare', message: 'Preparing project...' });
 
                 if (source.type === 'git') {
+                    // Remove leftover directory from a previous failed clone so git doesn't reject the target
+                    if (fs.existsSync(targetPath)) {
+                        try { fs.rmSync(targetPath, { recursive: true, force: true }); } catch {}
+                    }
                     const gitArgs = ['clone', '--progress', source.url, targetPath];
                     if (source.ref) gitArgs.push('--branch', source.ref);
                     const child = spawn('git', gitArgs, {
@@ -74,11 +78,13 @@ module.exports = function(deps) {
                         stdio: ['pipe', 'pipe', 'pipe'],
                     });
                     await new Promise((resolve, reject) => {
+                        let lastStderr = '';
                         child.stderr.on('data', d => {
                             const msg = d.toString().trim();
+                            lastStderr = msg;
                             io.to(`project:${id}`).emit('import.progress', { project_id: id, phase: 'clone', message: msg });
                         });
-                        child.on('close', code => code === 0 ? resolve() : reject(new Error(`git clone failed (${code})`)));
+                        child.on('close', code => code === 0 ? resolve() : reject(new Error(lastStderr || `git clone failed (${code})`)));
                     });
                 } else if (source.type === 'fresh') {
                     fs.mkdirSync(targetPath, { recursive: true });
@@ -95,7 +101,13 @@ module.exports = function(deps) {
                 io.to(`project:${id}`).emit('import.done', { project_id: id, detected });
                 startProjectWatcher(webState.getProject(id));
             } catch (err) {
-                webState.updateProject(id, { init_status: 'error', init_error: err.message });
+                // Remove the project record — don't leave failed imports as zombie entries
+                try { stopProjectWatcher(id); } catch {}
+                try { webState.deleteProject(id); } catch {}
+                // Clean up any partial files created during the attempt
+                if (source.type !== 'local') {
+                    try { fs.rmSync(targetPath, { recursive: true, force: true }); } catch {}
+                }
                 io.to(`project:${id}`).emit('import.error', { project_id: id, message: err.message });
             }
         });

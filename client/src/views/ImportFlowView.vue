@@ -147,8 +147,13 @@ async function doImport() {
     });
     socket.on('import.error', ({ project_id, message }) => {
       if (project_id !== id) return;
+      // Backend deleted the project — purge from local store too
+      projects.list = projects.list.filter(p => p.id !== id);
+      ws.unsubscribe(id);
+      currentProjectId.value = null;
       importError.value = message;
       step.value = 1;
+      importing.value = false;
     });
 
     // Timeout fallback — if import was already done before we subscribed
