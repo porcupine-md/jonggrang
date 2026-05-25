@@ -4,9 +4,10 @@ const { Router } = require('express');
 const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
+const sandbox = require('../../lib/sandbox');
 
 module.exports = function(deps) {
-    const { io, webState } = deps;
+    const { io, webState, lastActivity } = deps;
     const router = Router();
     const nodeCli = path.join(__dirname, '..', '..', 'bin', 'jonggrang.js');
 
@@ -43,6 +44,13 @@ module.exports = function(deps) {
 
         const secretVars = webState.getProjectSecretVars(project.id);
 
+        if (project.sandbox?.enabled) {
+            const containerName = sandbox.getContainerName(project.id);
+            const execArgs = sandbox.buildExecArgs(containerName, cmd, args, secretVars);
+            cmd = 'docker';
+            args = execArgs;
+        }
+
         const ptyProcess = pty.spawn(cmd, args, {
             name: 'xterm-256color',
             cwd: project.path,
@@ -54,6 +62,7 @@ module.exports = function(deps) {
         activePtySessions.set(key, ptyProcess);
 
         ptyProcess.onData(data => {
+            lastActivity.set(project.id, Date.now());
             io.to(`project:${project.id}`).emit('pty.data', {
                 project_id: project.id,
                 session,
@@ -135,7 +144,9 @@ module.exports = function(deps) {
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
 
         const { cols = 80, rows = 24 } = req.body || {};
-        const shell = process.env.SHELL || 'bash';
+        const shell = project.sandbox?.enabled
+            ? (project.sandbox.shell || '/bin/bash')
+            : (process.env.SHELL || 'bash');
 
         try {
             spawnPty(project, 'terminal', shell, [], cols, rows);

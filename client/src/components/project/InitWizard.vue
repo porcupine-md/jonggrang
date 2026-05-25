@@ -48,6 +48,17 @@
           ]" optionLabel="label" optionValue="value" placeholder="Choose..." fluid />
         </div>
       </div>
+      <div class="form-group sandbox-group">
+        <label>Execution Environment</label>
+        <label class="sandbox-toggle-row">
+          <input type="checkbox" v-model="form.sandbox_enabled" />
+          <span>Run in Docker sandbox</span>
+        </label>
+        <input v-if="form.sandbox_enabled" v-model="form.sandbox_image"
+          placeholder="orcinus/jonggrang-agent" class="sandbox-image-input" />
+        <input v-if="form.sandbox_enabled" v-model="form.sandbox_shell"
+          placeholder="/bin/bash" class="sandbox-image-input" style="margin-top:4px" />
+      </div>
     </div>
 
     <div v-if="error" class="error-text">{{ error }}</div>
@@ -86,6 +97,9 @@ const form = ref({
   stack: null,
   tool: 'jonggrang',
   autonomy: 'autonomous',
+  sandbox_enabled: false,
+  sandbox_image: '',
+  sandbox_shell: '',
 });
 
 // Pre-fill from detected stack
@@ -121,7 +135,15 @@ async function doInit() {
   initLog.value = [];
   initing.value = true;
   try {
-    await projects.initProject(props.project.id, form.value);
+    const payload = { ...form.value };
+    if (form.value.sandbox_enabled) {
+      payload.sandbox = {
+        enabled: true,
+        image: form.value.sandbox_image || 'orcinus/jonggrang-agent',
+        shell: form.value.sandbox_shell || '/bin/bash',
+      };
+    }
+    await projects.initProject(props.project.id, payload);
   } catch (e) {
     error.value = e.message;
     initing.value = false;
@@ -149,4 +171,18 @@ async function doInit() {
 .advanced-toggle .pi { font-size: 10px; }
 
 .advanced-panel { margin-bottom: 4px; }
+
+.sandbox-group { margin-top: 12px; }
+.sandbox-toggle-row {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  font-size: 12px; color: var(--jg-text-muted); margin-bottom: 0;
+}
+.sandbox-toggle-row input[type="checkbox"] { accent-color: var(--jg-green); }
+.sandbox-image-input {
+  margin-top: 8px; width: 100%; padding: 6px 10px;
+  background: var(--jg-bg); border: 1px solid var(--jg-border);
+  color: var(--jg-text); font-family: inherit; font-size: 12px;
+  outline: none;
+}
+.sandbox-image-input:focus { border-color: var(--jg-green); }
 </style>

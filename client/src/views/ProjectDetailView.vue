@@ -45,6 +45,25 @@
       <div v-else-if="project.init_status === 'initializing'" class="init-banner init-banner--progress">
         Initializing project... <i class="pi pi-spin pi-spinner" />
       </div>
+      <template v-else-if="project.sandbox?.enabled && sandboxStatus !== 'running'">
+        <div class="sandbox-gate">
+          <div v-if="sandboxStatus === 'starting'" class="sandbox-starting">
+            <i class="pi pi-spin pi-spinner" />
+            <span>Starting Docker sandbox...</span>
+            <div v-if="sandboxLogTail" class="sandbox-log-mini">{{ sandboxLogTail }}</div>
+          </div>
+          <div v-else-if="sandboxStatus === 'error'" class="sandbox-error">
+            <i class="pi pi-times-circle" />
+            <span>Sandbox failed to start.</span>
+            <button class="sandbox-btn" @click="startSandbox">Retry</button>
+          </div>
+          <div v-else class="sandbox-stopped">
+            <i class="pi pi-docker" />
+            <span>Docker sandbox is stopped.</span>
+            <button class="sandbox-btn" @click="startSandbox">Start Sandbox</button>
+          </div>
+        </div>
+      </template>
       <RouterView v-else />
     </div>
   </div>
@@ -82,6 +101,8 @@ const tasks = useTasksStore();
 const ws = useWsStore();
 const loading = ref(false);
 const showInit = ref(false);
+const sandboxStatus = ref(null);
+const sandboxLogTail = ref('');
 
 const manifest = useManifestStore();
 const project = computed(() => projects.byId[id.value] || null);
@@ -108,6 +129,11 @@ const stateSeverity = computed(() => {
   return { idle: 'secondary', draft: 'info', tasks_pending: 'warn', working: 'success', done: 'success' }[s] || 'secondary';
 });
 
+async function startSandbox() {
+  sandboxLogTail.value = '';
+  await fetch(`/api/projects/${id.value}/sandbox/start`, { method: 'POST' });
+}
+
 onMounted(async () => {
   loading.value = true;
   try {
@@ -116,6 +142,25 @@ onMounted(async () => {
     await tasks.fetchTasks(id.value);
     ws.subscribe(id.value);
     manifest.fetch(id.value);
+
+    if (project.value?.sandbox?.enabled) {
+      const res = await fetch(`/api/projects/${id.value}/sandbox/status`);
+      const data = await res.json();
+      sandboxStatus.value = data.status;
+      if (data.status === 'stopped') startSandbox();
+    }
+
+    const socket = ws.socket;
+    if (socket) {
+      socket.on('sandbox.status', ({ project_id, status }) => {
+        if (project_id !== id.value) return;
+        sandboxStatus.value = status;
+      });
+      socket.on('sandbox.log', ({ project_id, line }) => {
+        if (project_id !== id.value) return;
+        sandboxLogTail.value = line;
+      });
+    }
   } catch {}
   loading.value = false;
 });
@@ -188,4 +233,25 @@ async function onInitDone() {
   flex: 1; text-align: center;
 }
 .empty-title { font-size: 16px; color: var(--jg-text-muted); }
+
+.sandbox-gate {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+}
+.sandbox-starting, .sandbox-error, .sandbox-stopped {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  color: var(--jg-text-muted); font-size: 13px;
+}
+.sandbox-starting .pi-spinner { font-size: 24px; color: var(--jg-green); }
+.sandbox-error .pi-times-circle { font-size: 24px; color: var(--jg-red); }
+.sandbox-stopped .pi-docker { font-size: 24px; color: var(--jg-text-faint); }
+.sandbox-log-mini {
+  font-size: 10px; color: var(--jg-text-faint); max-width: 400px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sandbox-btn {
+  padding: 6px 16px; background: var(--jg-green); color: #000;
+  border: none; cursor: pointer; font-family: inherit; font-size: 12px;
+  transition: opacity 0.15s;
+}
+.sandbox-btn:hover { opacity: 0.85; }
 </style>

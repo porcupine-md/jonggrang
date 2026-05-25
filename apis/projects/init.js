@@ -13,7 +13,7 @@ module.exports = function(deps) {
             return res.status(409).json({ error: { code: 'ALREADY_INITIALIZED', message: 'Project not in importable state' } });
         }
 
-        const { type = 'api', stack = 'node-typescript', tool = 'opencode', autonomy = 'autonomous' } = req.body || {};
+        const { type = 'api', stack = 'node-typescript', tool = 'opencode', autonomy = 'autonomous', sandbox } = req.body || {};
         const initArgs = [
             'init', '--force',
             '--name', project.name,
@@ -24,6 +24,9 @@ module.exports = function(deps) {
             '--state', fs.existsSync(path.join(project.path, '.git')) ? 'existing' : 'new',
         ];
 
+        if (sandbox?.enabled) {
+            webState.updateProject(project.id, { sandbox });
+        }
         webState.updateProject(project.id, { init_status: 'initializing' });
         res.status(202).json({ job_id: project.id });
 
