@@ -13,6 +13,8 @@ const routes = [
       { path: 'tasks', component: () => import('../components/kanban/KanbanBoard.vue') },
       { path: 'logs', component: () => import('../components/log/LogStream.vue') },
       { path: 'changelog', component: () => import('../views/ChangelogView.vue') },
+      { path: 'agent',    component: () => import('../views/AgentView.vue') },
+      { path: 'terminal', component: () => import('../views/TerminalView.vue') },
     ],
   },
   { path: '/settings', component: () => import('../views/SettingsView.vue') },

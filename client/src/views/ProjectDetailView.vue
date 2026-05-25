@@ -23,6 +23,10 @@
           <RouterLink :to="`/projects/${id}/tasks`" class="snav-link"><i class="pi pi-list-check" /> Tasks</RouterLink>
           <RouterLink :to="`/projects/${id}/logs`" class="snav-link"><i class="pi pi-desktop" /> Logs</RouterLink>
         </template>
+        <!-- Always visible -->
+        <div class="snav-divider"></div>
+        <RouterLink :to="`/projects/${id}/agent`" class="snav-link"><i class="pi pi-microchip-ai" /> Agent</RouterLink>
+        <RouterLink :to="`/projects/${id}/terminal`" class="snav-link"><i class="pi pi-dollar" /> Terminal</RouterLink>
       </nav>
       <div class="sidebar-meta">
         <div class="meta-row"><span>Status</span><span>{{ project.init_status }}</span></div>

@@ -179,6 +179,7 @@ module.exports = function register(app, io, ctx) {
     app.use('/api/projects', require('./approve')(deps));
     app.use('/api/projects', require('./tasks')(deps));
     app.use('/api/projects', require('./work')(deps));
+    app.use('/api/projects', require('./pty')(deps));
 
     // ── Cleanup ───────────────────────────────────────────────────
 
