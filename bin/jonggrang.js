@@ -876,14 +876,38 @@ async function cmdPlan(args, opts = {}) {
   let description = '';
   let autoApprove = false;
   let deepMode = false;
+  let reviseMode = false;
 
   for (const arg of args) {
     if (arg === '--yes' || arg === '-y') autoApprove = true;
     else if (arg === '--deep') deepMode = true;
+    else if (arg === '--revise') reviseMode = true;
     else if (!arg.startsWith('--')) description = arg;
   }
 
   if (!await ensureInit()) return;
+
+  // ── Revise mode: AI rewrites existing plan.md ────────────────
+  if (reviseMode) {
+    if (!lib.fileExists(PLAN_FILE)) {
+      logError('No plan.md found to revise. Generate a plan first.');
+      process.exit(1);
+    }
+    if (!description) {
+      logError('Revision instruction required. Usage: jonggrang plan --revise "instruction"');
+      process.exit(1);
+    }
+    if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
+      TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
+    }
+    logHeader('JONGGRANG Plan — Revise with AI');
+    logInfo(`Instruction: ${description}`);
+    const currentPlan = fs.readFileSync(PLAN_FILE, 'utf8');
+    const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description);
+    await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+    logSuccess('Plan revised. Run "jonggrang approve" to decompose into tasks.');
+    return;
+  }
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);

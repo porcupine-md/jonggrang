@@ -16,11 +16,11 @@
       <Button
         v-if="!proc.isRunning && canWork"
         size="small"
-        :disabled="working"
+        :disabled="workButtonDisabled"
         @click="startWork"
       >
-        <i :class="isInterrupted ? 'pi pi-refresh' : 'pi pi-play'" />
-        {{ isInterrupted ? 'Resume Work' : 'Start Work' }}
+        <i :class="workButtonIcon" />
+        {{ workButtonLabel }}
       </Button>
       <Button
         v-if="proc.isRunning && proc.running?.command === 'work'"
@@ -41,29 +41,52 @@ import ProgressBar from 'primevue/progressbar';
 import { useTasksStore } from '../../stores/tasks.js';
 import { useProcessStore } from '../../stores/process.js';
 import { useProjectsStore } from '../../stores/projects.js';
+import { useManifestStore } from '../../stores/manifest.js';
 
 const props = defineProps({ projectId: String });
 const tasks = useTasksStore();
 const proc = useProcessStore();
 const projects = useProjectsStore();
+const manifest = useManifestStore();
 
 const working = ref(false);
 const project = computed(() => projects.byId[props.projectId]);
 const state = computed(() => project.value?.derived_state?.state || 'idle');
 const canWork = computed(() => ['tasks_pending', 'working', 'done'].includes(state.value) || tasks.tasks.length > 0);
-// Interrupted = some tasks are in_progress but no process is running (crashed/stopped)
-const isInterrupted = computed(() =>
-  state.value === 'working' && !proc.isRunning
+
+// All active phases completed = pipeline fully done
+const pipelineComplete = computed(() => {
+  if (!manifest.data) return false;
+  const active = manifest.phases.filter(p => p.status !== 'skipped');
+  return active.length > 0 && active.every(p => p.status === 'completed');
+});
+
+// Resume when: process stopped mid-work OR state is done with more pipeline to run
+const needsResume = computed(() =>
+  (state.value === 'working' && !proc.isRunning) || state.value === 'done'
+);
+
+const workButtonLabel = computed(() => {
+  if (state.value === 'done') return pipelineComplete.value ? 'Done' : 'Next Pipeline';
+  return needsResume.value ? 'Resume' : 'Start Work';
+});
+
+const workButtonIcon = computed(() => {
+  if (state.value === 'done' && pipelineComplete.value) return 'pi pi-check';
+  return needsResume.value ? 'pi pi-refresh' : 'pi pi-play';
+});
+
+const workButtonDisabled = computed(() =>
+  working.value || (state.value === 'done' && pipelineComplete.value)
 );
 
 async function startWork() {
   working.value = true;
   try {
-    const body = isInterrupted.value ? { resume: true } : {};
     await fetch(`/api/projects/${props.projectId}/work`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(needsResume.value ? { resume: true } : {}),
     });
   } catch {}
   working.value = false;

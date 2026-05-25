@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@primevue/themes": "^4.5.4",
+    "@toast-ui/vue-editor": "^3.2.3",
     "@vue-flow/background": "^1.3.2",
     "@vue-flow/controls": "^1.1.3",
     "@vue-flow/core": "^1.48.2",

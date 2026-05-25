@@ -6,6 +6,86 @@ module.exports = function(deps) {
     const { fs, path, webState, orchestration, spawnForProject, wireProjectProcess } = deps;
     const router = Router();
 
+    function extractPlanTitle(content) {
+        const firstLine = content.split('\n').find(l => l.trim());
+        if (!firstLine) return 'Untitled Plan';
+        // strip YAML frontmatter delimiter
+        if (firstLine === '---') {
+            const afterFm = content.split('---').slice(2).join('---').trim();
+            const heading = afterFm.split('\n').find(l => l.trim());
+            return heading ? heading.replace(/^#+\s*/, '').trim() : 'Untitled Plan';
+        }
+        return firstLine.replace(/^#+\s*/, '').trim() || 'Untitled Plan';
+    }
+
+    // GET /api/projects/:id/plans — list of all plans (draft + archived)
+    router.get('/:id/plans', (req, res) => {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+        const plans = [];
+        const jonggrangDir = path.join(project.path, '.jonggrang');
+
+        // 1. Active draft plan
+        const draftPath = path.join(jonggrangDir, 'plan.md');
+        if (fs.existsSync(draftPath)) {
+            try {
+                const content = fs.readFileSync(draftPath, 'utf-8');
+                const mtime = fs.statSync(draftPath).mtimeMs;
+                plans.push({ id: 'draft', title: extractPlanTitle(content), status: 'draft', mtime, content });
+            } catch {}
+        }
+
+        // 2. Archived plans from .output/features/*/plan.md
+        const featuresDir = path.join(jonggrangDir, '.output', 'features');
+        if (fs.existsSync(featuresDir)) {
+            try {
+                const entries = fs.readdirSync(featuresDir)
+                    .map(name => ({ name, mtime: fs.statSync(path.join(featuresDir, name)).mtimeMs }))
+                    .sort((a, b) => b.mtime - a.mtime);
+
+                for (const { name } of entries) {
+                    const planPath = path.join(featuresDir, name, 'plan.md');
+                    if (!fs.existsSync(planPath)) continue;
+                    const content = fs.readFileSync(planPath, 'utf-8');
+                    const mtime = fs.statSync(planPath).mtimeMs;
+
+                    let status = 'approved';
+                    let work_type = null;
+                    try {
+                        const mPath = path.join(featuresDir, name, 'MANIFEST.yaml');
+                        if (fs.existsSync(mPath)) {
+                            const manifest = orchestration.readManifest(mPath);
+                            work_type = manifest?.work_type || null;
+                            const ms = manifest?.status;
+                            if (ms === 'completed') status = 'done';
+                            else if (ms === 'running' || ms === 'paused') status = 'in_progress';
+                            else if (ms === 'failed') status = 'failed';
+                        }
+                    } catch {}
+
+                    plans.push({ id: name, title: extractPlanTitle(content), status, mtime, work_type, content });
+                }
+            } catch {}
+        }
+
+        res.json(plans);
+    });
+
+    // POST /api/projects/:id/plan/revise — revise plan with AI
+    router.post('/:id/plan/revise', (req, res) => {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+        const { instruction } = req.body || {};
+        if (!instruction) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'instruction required' } });
+
+        const args = ['plan', '--revise', instruction];
+        const child = spawnForProject(project, args);
+        wireProjectProcess(project.id, child, 'plan-revise');
+        res.status(202).json({ job_id: project.id });
+    });
+
     router.get('/:id/plan', (req, res) => {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });

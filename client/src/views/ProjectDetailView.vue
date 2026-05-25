@@ -7,14 +7,22 @@
         <Tag :value="stateLabel" :severity="stateSeverity" size="small" />
       </div>
       <nav class="sidebar-nav">
-        <RouterLink :to="`/projects/${id}/plan`" class="snav-link"><i class="pi pi-file-edit" /> Plan</RouterLink>
-        <RouterLink :to="`/projects/${id}/pipeline`" class="snav-link">
-          <i class="pi pi-sitemap" /> Pipeline
-          <span v-if="manifest.data" class="snav-chip">{{ pipelineProgress }}</span>
-        </RouterLink>
-        <RouterLink :to="`/projects/${id}/tasks`" class="snav-link"><i class="pi pi-list-check" /> Tasks</RouterLink>
-        <RouterLink :to="`/projects/${id}/logs`" class="snav-link"><i class="pi pi-desktop" /> Logs</RouterLink>
-        <RouterLink :to="`/projects/${id}/changelog`" class="snav-link"><i class="pi pi-history" /> Changelog</RouterLink>
+        <!-- Plan Mode: idle / draft -->
+        <template v-if="!isWorkMode">
+          <RouterLink :to="`/projects/${id}/plan`" class="snav-link"><i class="pi pi-file-edit" /> Plan</RouterLink>
+          <RouterLink :to="`/projects/${id}/changelog`" class="snav-link"><i class="pi pi-history" /> Changelog</RouterLink>
+        </template>
+        <!-- Work Mode: tasks_pending / working / done -->
+        <template v-else>
+          <RouterLink :to="`/projects/${id}/plan`" class="snav-link snav-back"><i class="pi pi-arrow-left" /> Plan</RouterLink>
+          <div class="snav-divider"></div>
+          <RouterLink :to="`/projects/${id}/pipeline`" class="snav-link">
+            <i class="pi pi-sitemap" /> Pipeline
+            <span v-if="manifest.data" class="snav-chip">{{ pipelineProgress }}</span>
+          </RouterLink>
+          <RouterLink :to="`/projects/${id}/tasks`" class="snav-link"><i class="pi pi-list-check" /> Tasks</RouterLink>
+          <RouterLink :to="`/projects/${id}/logs`" class="snav-link"><i class="pi pi-desktop" /> Logs</RouterLink>
+        </template>
       </nav>
       <div class="sidebar-meta">
         <div class="meta-row"><span>Status</span><span>{{ project.init_status }}</span></div>
@@ -73,6 +81,11 @@ const showInit = ref(false);
 const manifest = useManifestStore();
 const project = computed(() => projects.byId[id.value] || null);
 const derivedState = computed(() => project.value?.derived_state);
+const isWorkMode = computed(() => {
+  const s = derivedState.value?.state;
+  return ['tasks_pending', 'working', 'done'].includes(s);
+});
+
 const pipelineProgress = computed(() => {
   if (!manifest.data) return '';
   const done = manifest.phases.filter(p => p.status === 'completed').length;
@@ -145,6 +158,9 @@ async function onInitDone() {
 .snav-link:hover { background: var(--jg-hover); color: var(--jg-text); }
 .snav-link.router-link-active { background: color-mix(in oklch, var(--jg-green) 12%, transparent); color: var(--jg-green); }
 .snav-chip { font-size: 9px; background: var(--jg-hover); color: var(--jg-text-faint); padding: 1px 4px; border-radius: 0px; margin-left: auto; letter-spacing: 0.04em; }
+.snav-back { color: var(--jg-text-faint) !important; font-size: 11px; }
+.snav-back:hover { color: var(--jg-text-muted) !important; }
+.snav-divider { height: 1px; background: var(--jg-border); margin: 4px 8px; }
 
 .sidebar-meta { padding: 12px 16px; margin-top: auto; border-top: 1px solid var(--jg-border); }
 .meta-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--jg-text-faint); margin-bottom: 6px; gap: 8px; }
