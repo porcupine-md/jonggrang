@@ -3,9 +3,7 @@
     <div class="header-left">
       <div class="header-stats">
         <span class="stats-text">{{ tasks.stats.done }}/{{ tasks.stats.total }} tasks</span>
-        <div class="progress-bar">
-          <div class="progress-fill" :style="{ width: tasks.stats.pct + '%' }"></div>
-        </div>
+        <ProgressBar :value="tasks.stats.pct" style="width:120px;height:4px" :showValue="false" />
         <span class="stats-pct">{{ tasks.stats.pct }}%</span>
       </div>
       <div v-if="proc.isRunning" class="running-badge">
@@ -15,23 +13,31 @@
       </div>
     </div>
     <div class="header-right">
-      <button
+      <Button
         v-if="!proc.isRunning && canWork"
-        class="btn btn--primary btn--sm"
+        size="small"
         :disabled="working"
         @click="startWork"
-      >{{ isInterrupted ? '↺ Resume Work' : '▶ Start Work' }}</button>
-      <button
+      >
+        <i :class="isInterrupted ? 'pi pi-refresh' : 'pi pi-play'" />
+        {{ isInterrupted ? 'Resume Work' : 'Start Work' }}
+      </Button>
+      <Button
         v-if="proc.isRunning && proc.running?.command === 'work'"
-        class="btn btn--danger btn--sm"
+        size="small"
+        severity="danger"
         @click="cancelWork"
-      >✕ Cancel</button>
+      >
+        <i class="pi pi-times" /> Cancel
+      </Button>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue';
+import Button from 'primevue/button';
+import ProgressBar from 'primevue/progressbar';
 import { useTasksStore } from '../../stores/tasks.js';
 import { useProcessStore } from '../../stores/process.js';
 import { useProjectsStore } from '../../stores/projects.js';
@@ -77,18 +83,16 @@ function formatElapsed(ms) {
 <style scoped>
 .kanban-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 16px; border-bottom: 1px solid #1e1f2a; flex-shrink: 0;
-  background: #0d0e14;
+  padding: 10px 16px; border-bottom: 1px solid var(--jg-border); flex-shrink: 0;
+  background: var(--jg-card);
 }
 .header-left { display: flex; align-items: center; gap: 16px; }
 .header-stats { display: flex; align-items: center; gap: 8px; }
-.stats-text { font-size: 12px; color: #6b7280; }
-.progress-bar { width: 120px; height: 4px; background: #1e1f2a; border-radius: 2px; overflow: hidden; }
-.progress-fill { height: 100%; background: #7c3aed; transition: width 0.3s; }
-.stats-pct { font-size: 12px; color: #9ca3af; }
-.running-badge { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #34d399; }
-.running-dot { width: 6px; height: 6px; border-radius: 50%; background: #34d399; animation: pulse 1s infinite; }
+.stats-text { font-size: 12px; color: var(--jg-text-muted); }
+.stats-pct { font-size: 12px; color: var(--jg-text-faint); }
+.running-badge { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--jg-green); }
+.running-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--jg-green); animation: pulse 1s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-.elapsed { color: #6b7280; }
+.elapsed { color: var(--jg-text-faint); }
 .header-right { display: flex; gap: 8px; }
 </style>

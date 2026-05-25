@@ -11,12 +11,12 @@
     <div v-if="task.files?.length" class="card-files">
       {{ task.files[0] }}{{ task.files.length > 1 ? ` +${task.files.length - 1}` : '' }}
     </div>
-    <div v-if="preview && task.status === 'in_progress'" class="card-preview">↳ {{ preview }}</div>
+    <div v-if="preview && task.status === 'in_progress'" class="card-preview"><i class="pi pi-arrow-right" style="font-size:9px" /> {{ preview }}</div>
     <div v-if="task.status === 'failed' && task.error" class="card-error">! {{ task.error }}</div>
     <div v-if="task.status === 'blocked'" class="card-blocked-actions" @click.stop>
-      <button class="btn-resume" :disabled="resuming" @click="resumeTask">
-        {{ resuming ? '...' : '↺ Resume' }}
-      </button>
+      <Button size="small" severity="secondary" :disabled="resuming" @click="resumeTask">
+        <i class="pi pi-refresh" /> {{ resuming ? '...' : 'Resume' }}
+      </Button>
     </div>
   </div>
 </template>
@@ -24,6 +24,7 @@
 <script setup>
 import { ref, computed, watch, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
+import Button from 'primevue/button';
 import { useProcessStore } from '../../stores/process.js';
 
 const props = defineProps({ task: Object });
@@ -69,40 +70,33 @@ const preview = computed(() => proc.taskLogPreview(props.task.id));
 
 <style scoped>
 .task-card {
-  background: #111218; border: 1px solid #1e1f2a; border-radius: 6px;
+  background: var(--jg-bg); border: 1px solid var(--jg-border); border-radius: var(--radius);
   padding: 10px; cursor: pointer; transition: border-color 0.15s;
 }
-.task-card:hover { border-color: #4b5563; }
-.task-card--in_progress { border-color: #92400e; }
-.task-card--completed   { border-color: #065f46; opacity: 0.8; }
-.task-card--failed      { border-color: #7f1d1d; }
-.task-card--blocked     { border-color: #78350f; }
+.task-card:hover { border-color: var(--jg-text-faint); }
+.task-card--in_progress { border-color: color-mix(in oklch, var(--jg-orange) 40%, transparent); }
+.task-card--completed   { border-color: color-mix(in oklch, var(--jg-green) 35%, transparent); opacity: 0.85; }
+.task-card--failed      { border-color: color-mix(in oklch, var(--jg-red) 40%, transparent); }
+.task-card--blocked     { border-color: color-mix(in oklch, var(--jg-orange) 40%, transparent); }
 
 .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-.task-id { font-size: 10px; font-family: monospace; color: #4b5563; }
+.task-id { font-size: 10px; color: var(--jg-text-faint); }
 .card-right { display: flex; align-items: center; gap: 6px; }
-.task-elapsed { font-size: 10px; color: #6b7280; }
+.task-elapsed { font-size: 10px; color: var(--jg-text-faint); }
 
-.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.dot--pending     { background: #4b5563; }
-.dot--in_progress { background: #f59e0b; animation: pulse 1s infinite; }
-.dot--completed   { background: #10b981; }
-.dot--blocked     { background: #f97316; }
-.dot--failed      { background: #ef4444; }
-.dot--skipped     { background: #6b7280; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.dot--pending     { background: var(--jg-text-faint); }
+.dot--in_progress { background: var(--jg-orange); animation: pulse 1s infinite; }
+.dot--completed   { background: var(--jg-green); }
+.dot--blocked     { background: var(--jg-orange); }
+.dot--failed      { background: var(--jg-red); }
+.dot--skipped     { background: var(--jg-text-faint); }
 
 @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
 
-.card-title { font-size: 12px; color: #d1d5db; line-height: 1.4; }
-.card-files { font-size: 10px; color: #4b5563; font-family: monospace; margin-top: 4px; }
-.card-preview { font-size: 10px; color: #6b7280; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card-error { font-size: 10px; color: #ef4444; margin-top: 4px; }
+.card-title { font-size: 12px; color: var(--jg-text); line-height: 1.4; }
+.card-files { font-size: 10px; color: var(--jg-text-faint); margin-top: 4px; }
+.card-preview { font-size: 10px; color: var(--jg-text-muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 3px; }
+.card-error { font-size: 10px; color: var(--jg-red); margin-top: 4px; }
 .card-blocked-actions { margin-top: 8px; }
-.btn-resume {
-  font-size: 10px; padding: 3px 10px; border-radius: 4px;
-  background: #1e1f2a; border: 1px solid #4b5563; color: #9ca3af;
-  cursor: pointer; transition: all 0.15s;
-}
-.btn-resume:hover:not(:disabled) { background: #2d2f3e; color: #e4e4e7; border-color: #6b7280; }
-.btn-resume:disabled { opacity: 0.5; cursor: default; }
 </style>

@@ -4,13 +4,15 @@
     <div class="kanban-body">
       <div v-if="!tasks.tasks.length && state === 'idle'" class="kanban-empty">
         <div>No tasks yet. Generate a plan first.</div>
-        <RouterLink :to="`/projects/${projectId}/plan`" class="btn btn--secondary" style="margin-top:12px">Go to Plan</RouterLink>
+        <RouterLink :to="`/projects/${projectId}/plan`" style="margin-top:12px">
+          <Button label="Go to Plan" severity="secondary" />
+        </RouterLink>
       </div>
       <template v-else>
-        <KanbanColumn title="To Do" :tasks="tasks.columns.todo" color="#6b7280" @open-task="openTask" />
-        <KanbanColumn title="In Progress" :tasks="tasks.columns.in_progress" color="#f59e0b" @open-task="openTask" />
-        <KanbanColumn title="Blocked" :tasks="tasks.columns.blocked" color="#ef4444" @open-task="openTask" />
-        <KanbanColumn title="Done" :tasks="tasks.columns.done" color="#10b981" @open-task="openTask" />
+        <KanbanColumn title="To Do" :tasks="tasks.columns.todo" accent="muted" @open-task="openTask" />
+        <KanbanColumn title="In Progress" :tasks="tasks.columns.in_progress" accent="orange" @open-task="openTask" />
+        <KanbanColumn title="Blocked" :tasks="tasks.columns.blocked" accent="red" @open-task="openTask" />
+        <KanbanColumn title="Done" :tasks="tasks.columns.done" accent="green" @open-task="openTask" />
       </template>
     </div>
 
@@ -26,6 +28,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
+import Button from 'primevue/button';
 import { useTasksStore } from '../../stores/tasks.js';
 import { useProjectsStore } from '../../stores/projects.js';
 import KanbanHeader from './KanbanHeader.vue';
@@ -50,5 +53,5 @@ onMounted(() => {
 <style scoped>
 .kanban-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .kanban-body { display: flex; flex: 1; gap: 12px; padding: 16px; overflow: hidden; }
-.kanban-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; color: #6b7280; text-align: center; }
+.kanban-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; color: var(--jg-text-muted); text-align: center; }
 </style>

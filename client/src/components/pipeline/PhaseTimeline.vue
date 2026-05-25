@@ -1,50 +1,60 @@
 <template>
-  <div class="timeline">
-    <div class="timeline-header">
-      <div class="tl-title">Pipeline Phases</div>
-      <span v-if="manifest.data" class="work-type-badge" :class="`wt--${(manifest.data.work_type || '').toLowerCase()}`">
-        {{ manifest.data.work_type || '—' }}
-      </span>
-      <span v-if="manifest.data" class="status-badge" :class="`ms--${manifest.data.status}`">
-        {{ manifest.data.status }}
-      </span>
+  <div class="timeline-wrap">
+    <div class="tl-header">
+      <span class="tl-title">Pipeline Phases</span>
+      <Tag v-if="manifest.data" :value="manifest.data.work_type || '—'" :severity="workTypeSeverity" size="small" />
+      <Tag v-if="manifest.data" :value="manifest.data.status" :severity="statusSeverity" size="small" />
     </div>
 
     <div v-if="!manifest.data" class="tl-empty">
-      No pipeline data yet. Run <code>jonggrang work</code> to start.
+      <i class="pi pi-sitemap tl-empty-icon" />
+      <p>No pipeline data yet.</p>
+      <p class="tl-empty-hint">Run <code>jonggrang work</code> to start.</p>
     </div>
 
-    <div v-else class="tl-phases">
-      <div
-        v-for="phase in manifest.phases"
-        :key="phase.num"
-        class="phase-row"
-        :class="`phase--${phase.status}`"
-      >
-        <div class="phase-icon">
-          <span v-if="phase.status === 'completed'">✓</span>
-          <span v-else-if="phase.status === 'in_progress'" class="pulse">◉</span>
-          <span v-else-if="phase.status === 'skipped'">—</span>
-          <span v-else>○</span>
-        </div>
-        <div class="phase-num">{{ phase.num }}</div>
-        <div class="phase-info">
-          <span class="phase-name">{{ phase.name }}</span>
-          <span v-if="phase.status === 'in_progress'" class="phase-running">running</span>
-          <span v-if="phase.status === 'skipped'" class="phase-skip-reason">skipped ({{ skippedBy(phase.num, manifest.data.work_type) }})</span>
-        </div>
-        <div class="phase-role" :class="`role--${phase.role.toLowerCase().replace('-', '')}`">
-          {{ phase.role }}
-        </div>
-        <div class="phase-time" v-if="phase.completed_at">
-          {{ fmtTime(phase.completed_at) }}
-        </div>
-      </div>
+    <div v-else class="tl-scroll">
+      <Timeline :value="manifest.phases" class="tl-timeline">
+        <template #marker="{ item }">
+          <span class="tl-marker" :class="`tl-marker--${item.status}`">
+            <i v-if="item.status === 'completed'" class="pi pi-check" />
+            <i v-else-if="item.status === 'in_progress'" class="pi pi-spin pi-spinner" />
+            <i v-else-if="item.status === 'skipped'" class="pi pi-minus" />
+            <i v-else class="pi pi-circle" />
+          </span>
+        </template>
+
+        <template #content="{ item }">
+          <div class="tl-item" :class="`tl-item--${item.status}`">
+            <div class="tl-item-main">
+              <span class="tl-num">#{{ item.num }}</span>
+              <span class="tl-name">{{ item.name }}</span>
+              <Tag
+                :value="item.role"
+                :severity="roleSeverity(item.role)"
+                size="small"
+                class="tl-role"
+              />
+              <span v-if="item.status === 'in_progress'" class="tl-badge-running">
+                <i class="pi pi-spin pi-spinner" style="font-size:10px" /> running
+              </span>
+            </div>
+            <div v-if="item.status === 'skipped'" class="tl-skip">
+              skipped for {{ skippedBy(item.num, manifest.data.work_type) }}
+            </div>
+            <div v-if="item.completed_at" class="tl-time">
+              {{ fmtTime(item.completed_at) }}
+            </div>
+          </div>
+        </template>
+      </Timeline>
     </div>
   </div>
 </template>
 
 <script setup>
+import { computed } from 'vue';
+import Timeline from 'primevue/timeline';
+import Tag from 'primevue/tag';
 import { useManifestStore } from '../../stores/manifest.js';
 
 const manifest = useManifestStore();
@@ -53,6 +63,22 @@ const SKIP_MAP = {
   5: ['BUGFIX', 'SMALL'], 6: ['BUGFIX', 'SMALL'], 7: ['BUGFIX', 'SMALL'],
   9: ['BUGFIX', 'SMALL'], 12: ['BUGFIX'],
 };
+
+const workTypeSeverity = computed(() => {
+  const wt = (manifest.data?.work_type || '').toLowerCase();
+  return { bugfix: 'danger', small: 'info', medium: 'success', large: 'warn' }[wt] || 'secondary';
+});
+
+const statusSeverity = computed(() => ({
+  in_progress: 'warn', done: 'success',
+}[manifest.data?.status] || 'secondary'));
+
+function roleSeverity(role) {
+  return {
+    Lead: 'info', Developer: 'success', Reviewer: 'secondary',
+    'Test Lead': 'warn', Tester: 'warn',
+  }[role] || 'secondary';
+}
 
 function skippedBy(num, workType) {
   return workType || (SKIP_MAP[num] ? SKIP_MAP[num].join('/') : '');
@@ -64,75 +90,104 @@ function fmtTime(iso) {
 </script>
 
 <style scoped>
-.timeline { display: flex; flex-direction: column; height: 100%; }
+.timeline-wrap {
+  display: flex; flex-direction: column; height: 100%;
+  background: var(--jg-card);
+}
 
-.timeline-header {
+.tl-header {
   display: flex; align-items: center; gap: 8px;
-  padding: 12px 16px; border-bottom: 1px solid #1e1f2a; flex-shrink: 0;
+  padding: 10px 16px; border-bottom: 1px solid var(--jg-border);
+  flex-shrink: 0;
 }
-.tl-title { font-size: 12px; font-weight: 600; color: #9ca3af; flex: 1; }
-
-.work-type-badge {
-  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px;
-  text-transform: uppercase; letter-spacing: 0.06em;
+.tl-title {
+  font-size: 11px; font-weight: 600;
+  color: var(--jg-text-faint); flex: 1;
+  text-transform: uppercase; letter-spacing: 0.07em;
 }
-.wt--bugfix  { background: #7f1d1d; color: #fca5a5; }
-.wt--small   { background: #1e3a5f; color: #93c5fd; }
-.wt--medium  { background: #14532d; color: #86efac; }
-.wt--large   { background: #312e81; color: #c4b5fd; }
-
-.status-badge {
-  font-size: 10px; padding: 2px 7px; border-radius: 10px; text-transform: capitalize;
-}
-.ms--in_progress { background: #92400e; color: #fcd34d; }
-.ms--done        { background: #065f46; color: #6ee7b7; }
 
 .tl-empty {
-  flex: 1; display: flex; align-items: center; justify-content: center;
-  font-size: 12px; color: #4b5563; text-align: center; padding: 24px;
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 8px; padding: 24px;
+  color: var(--jg-text-faint); text-align: center;
 }
-.tl-empty code { background: #1e1f2a; padding: 2px 6px; border-radius: 4px; }
-
-.tl-phases { flex: 1; overflow-y: auto; padding: 8px 0; }
-
-.phase-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 7px 16px; border-left: 2px solid transparent;
-  transition: background 0.1s;
+.tl-empty-icon { font-size: 28px; margin-bottom: 4px; }
+.tl-empty p { font-size: 12px; }
+.tl-empty-hint { font-size: 11px; opacity: 0.7; }
+.tl-empty code {
+  background: var(--jg-hover);
+  padding: 1px 6px; border-radius: 0px;
+  font-size: 11px; color: var(--jg-green);
 }
-.phase-row:hover { background: #0d0e14; }
 
-.phase--completed  { border-left-color: #065f46; }
-.phase--in_progress { border-left-color: #d97706; background: #0f0e08; }
-.phase--skipped    { opacity: 0.35; }
-.phase--pending    { opacity: 0.6; }
+.tl-scroll { flex: 1; overflow-y: auto; padding: 8px 8px 16px; }
 
-.phase-icon { width: 16px; text-align: center; font-size: 12px; flex-shrink: 0; }
-.phase--completed .phase-icon  { color: #10b981; }
-.phase--in_progress .phase-icon { color: #f59e0b; }
-.phase--skipped .phase-icon    { color: #4b5563; }
-.phase--pending .phase-icon    { color: #374151; }
-
-.phase-num { width: 20px; font-size: 10px; font-family: monospace; color: #4b5563; flex-shrink: 0; }
-
-.phase-info { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.phase-name { font-size: 12px; color: #d1d5db; }
-.phase--skipped .phase-name { text-decoration: line-through; color: #4b5563; }
-.phase-running { font-size: 10px; color: #f59e0b; }
-.phase-skip-reason { font-size: 10px; color: #4b5563; }
-
-.phase-role {
-  font-size: 10px; padding: 1px 6px; border-radius: 8px;
-  flex-shrink: 0; font-weight: 500;
+/* PrimeVue Timeline overrides */
+.tl-timeline :deep(.p-timeline-event-opposite) { display: none; }
+.tl-timeline :deep(.p-timeline-event-connector) {
+  background: var(--jg-border);
+  width: 1px;
 }
-.role--lead       { background: #1e3a5f; color: #93c5fd; }
-.role--developer  { background: #14532d; color: #86efac; }
-.role--reviewer   { background: #312e81; color: #c4b5fd; }
-.role--testlead   { background: #7c2d12; color: #fdba74; }
-.role--tester     { background: #3b0764; color: #e9d5ff; }
+.tl-timeline :deep(.p-timeline-event) { min-height: 36px; }
+.tl-timeline :deep(.p-timeline-event-content) { padding-bottom: 6px; }
 
-.phase-time { font-size: 10px; color: #4b5563; flex-shrink: 0; }
+/* Marker — always circular */
+.tl-marker {
+  width: 20px; height: 20px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; flex-shrink: 0;
+  border: 1.5px solid var(--jg-border);
+  background: transparent;
+  color: var(--jg-text-faint);
+  transition: background 0.15s, border-color 0.15s;
+}
+.tl-marker--completed {
+  background: var(--jg-green);
+  border-color: var(--jg-green);
+  color: oklch(0.12 0.04 145);
+  font-size: 8px;
+}
+.tl-marker--in_progress {
+  border-color: var(--jg-orange);
+  color: var(--jg-orange);
+}
+.tl-marker--skipped {
+  opacity: 0.3;
+}
 
-.pulse { animation: blink 1s ease-in-out infinite; display: inline-block; }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+/* Content */
+.tl-item {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 4px 0;
+}
+.tl-item--skipped { opacity: 0.4; }
+.tl-item--in_progress .tl-name { color: var(--jg-orange); }
+
+.tl-item-main {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.tl-num {
+  font-size: 10px;
+  color: var(--jg-text-faint); flex-shrink: 0; min-width: 24px;
+}
+.tl-name {
+  font-size: 12px; color: var(--jg-text); flex: 1; min-width: 0;
+}
+.tl-item--skipped .tl-name { text-decoration: line-through; }
+.tl-role { flex-shrink: 0; }
+
+.tl-badge-running {
+  font-size: 10px; color: var(--jg-orange);
+  display: flex; align-items: center; gap: 3px;
+}
+
+.tl-skip {
+  font-size: 10px; color: var(--jg-text-faint);
+  padding-left: 32px;
+}
+.tl-time {
+  font-size: 10px; color: var(--jg-text-faint);
+  padding-left: 32px;
+}
 </style>

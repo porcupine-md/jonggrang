@@ -1,45 +1,63 @@
 <template>
   <div class="log-root">
     <div class="log-toolbar">
-      <div class="log-title">Process Logs</div>
-      <button class="btn btn--secondary btn--sm" @click="clearDisplay">Clear display</button>
+      <div class="log-title"><i class="pi pi-desktop" /> Process Logs</div>
+      <Button label="Clear" severity="secondary" size="small" @click="onClear" />
     </div>
-    <div class="log-body" ref="logEl">
-      <div v-if="!proc.globalLog.length" class="log-empty">No logs yet. Start a plan or work session.</div>
-      <div v-for="(entry, i) in proc.globalLog" :key="i" class="log-line" :class="`log-line--${entry.stream || 'stdout'}`">
-        <span class="log-seq">[{{ entry.seq ?? i }}]</span>
-        <span class="log-text">{{ entry.line }}</span>
-      </div>
+    <div v-if="!hasLogs" class="log-empty">
+      <i class="pi pi-desktop log-empty-icon" />
+      <div>No logs yet. Start a plan or work session.</div>
     </div>
+    <div ref="logContainerRef" class="log-terminal" :class="{ 'log-terminal--hidden': !hasLogs }" />
   </div>
 </template>
 
 <script setup>
-import { ref, watch, nextTick } from 'vue';
+import { computed } from 'vue';
+import Button from 'primevue/button';
 import { useProcessStore } from '../../stores/process.js';
+import { useLogTerminal } from '../../composables/useLogTerminal.js';
 
 const proc = useProcessStore();
-const logEl = ref(null);
 
-watch(() => proc.globalLog.length, () => {
-  nextTick(() => { if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight; });
-});
+const logString = computed(() => proc.globalLog.map(e => e.line).join('\n'));
 
-function clearDisplay() { proc.clearLogs(); }
+const { logContainerRef, hasLogs, clearTerminal } = useLogTerminal(logString);
+
+function onClear() {
+  proc.clearLogs();
+  clearTerminal();
+}
 </script>
 
 <style scoped>
-.log-root { display: flex; flex-direction: column; height: 100%; }
+.log-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+
 .log-toolbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 16px; border-bottom: 1px solid #1e1f2a; flex-shrink: 0;
+  padding: 8px 16px; border-bottom: 1px solid var(--jg-border);
+  flex-shrink: 0; gap: 8px;
 }
-.log-title { font-size: 12px; font-weight: 600; color: #9ca3af; }
-.log-body { flex: 1; overflow-y: auto; padding: 12px 16px; font-family: monospace; font-size: 12px; }
-.log-empty { color: #2d2f3e; }
-.log-line { display: flex; gap: 8px; line-height: 1.6; }
-.log-line--stderr .log-text { color: #f87171; }
-.log-line--stdout .log-text { color: #9ca3af; }
-.log-seq { color: #2d2f3e; flex-shrink: 0; }
-.log-text { word-break: break-all; }
+.log-title {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--jg-text-faint);
+  display: flex; align-items: center; gap: 6px;
+}
+
+.log-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; flex: 1; color: var(--jg-text-faint); font-size: 12px;
+}
+.log-empty-icon { font-size: 24px; }
+
+.log-terminal {
+  flex: 1; overflow: hidden;
+  padding: 8px 12px 0;
+}
+.log-terminal--hidden { display: none; }
+
+/* xterm overrides for tight fit */
+.log-terminal :deep(.xterm) { height: 100%; }
+.log-terminal :deep(.xterm-viewport) { overflow-y: auto !important; }
+.log-terminal :deep(.xterm-screen) { padding-left: 0; }
 </style>

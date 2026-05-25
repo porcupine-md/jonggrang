@@ -2,21 +2,19 @@
   <div class="detail-root" v-if="project">
     <div class="detail-sidebar">
       <div class="sidebar-header">
-        <RouterLink to="/" class="sidebar-back">← Projects</RouterLink>
+        <RouterLink to="/" class="sidebar-back"><i class="pi pi-arrow-left" /> Projects</RouterLink>
         <div class="sidebar-name">{{ project.name }}</div>
-        <span class="badge" :class="`badge--${derivedState?.state || 'idle'}`">
-          {{ stateLabel }}
-        </span>
+        <Tag :value="stateLabel" :severity="stateSeverity" size="small" />
       </div>
       <nav class="sidebar-nav">
-        <RouterLink :to="`/projects/${id}/plan`" class="snav-link">📝 Plan</RouterLink>
+        <RouterLink :to="`/projects/${id}/plan`" class="snav-link"><i class="pi pi-file-edit" /> Plan</RouterLink>
         <RouterLink :to="`/projects/${id}/pipeline`" class="snav-link">
-          🔀 Pipeline
+          <i class="pi pi-sitemap" /> Pipeline
           <span v-if="manifest.data" class="snav-chip">{{ pipelineProgress }}</span>
         </RouterLink>
-        <RouterLink :to="`/projects/${id}/tasks`" class="snav-link">📋 Tasks</RouterLink>
-        <RouterLink :to="`/projects/${id}/logs`" class="snav-link">📟 Logs</RouterLink>
-        <RouterLink :to="`/projects/${id}/changelog`" class="snav-link">📜 Changelog</RouterLink>
+        <RouterLink :to="`/projects/${id}/tasks`" class="snav-link"><i class="pi pi-list-check" /> Tasks</RouterLink>
+        <RouterLink :to="`/projects/${id}/logs`" class="snav-link"><i class="pi pi-desktop" /> Logs</RouterLink>
+        <RouterLink :to="`/projects/${id}/changelog`" class="snav-link"><i class="pi pi-history" /> Changelog</RouterLink>
       </nav>
       <div class="sidebar-meta">
         <div class="meta-row"><span>Status</span><span>{{ project.init_status }}</span></div>
@@ -29,26 +27,25 @@
     <div class="detail-content">
       <div v-if="project.init_status === 'imported'" class="init-banner">
         <div class="init-banner-text">Project imported. Initialize it to start working.</div>
-        <button class="btn btn--primary" @click="showInit = true">Initialize</button>
+        <Button label="Initialize" @click="showInit = true" />
       </div>
       <div v-else-if="project.init_status === 'initializing'" class="init-banner init-banner--progress">
-        Initializing project... <span class="spinner">⟳</span>
+        Initializing project... <i class="pi pi-spin pi-spinner" />
       </div>
       <RouterView v-else />
     </div>
   </div>
 
-  <!-- Init wizard overlay -->
-  <div v-if="showInit" class="modal-overlay" @click.self="showInit = false">
-    <div class="modal">
-      <div class="modal-header">Initialize Project</div>
-      <InitWizard :project="project" @done="onInitDone" @cancel="showInit = false" />
-    </div>
-  </div>
+  <!-- Init wizard dialog -->
+  <Dialog v-model:visible="showInit" header="Initialize Project" :modal="true" :style="{ width: '480px' }">
+    <InitWizard :project="project" @done="onInitDone" @cancel="showInit = false" />
+  </Dialog>
 
   <div v-if="!project && !loading" class="page empty-state">
     <div class="empty-title">Project not found</div>
-    <RouterLink to="/" class="btn btn--secondary" style="margin-top:16px">Back to projects</RouterLink>
+    <RouterLink to="/" style="margin-top:16px">
+      <Button label="Back to projects" severity="secondary" icon="pi pi-arrow-left" />
+    </RouterLink>
   </div>
   <div v-if="loading" class="page empty-state">Loading...</div>
 </template>
@@ -56,6 +53,9 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { RouterLink, RouterView, useRoute } from 'vue-router';
+import Button from 'primevue/button';
+import Tag from 'primevue/tag';
+import Dialog from 'primevue/dialog';
 import { useProjectsStore } from '../stores/projects.js';
 import { useTasksStore } from '../stores/tasks.js';
 import { useWsStore } from '../stores/ws.js';
@@ -83,6 +83,11 @@ const pipelineProgress = computed(() => {
 const stateLabel = computed(() => {
   const s = derivedState.value?.state;
   return { idle: 'Idle', draft: 'Draft', tasks_pending: 'Tasks Ready', working: 'Working', done: 'Done' }[s] || (s || 'Idle');
+});
+
+const stateSeverity = computed(() => {
+  const s = derivedState.value?.state || 'idle';
+  return { idle: 'secondary', draft: 'info', tasks_pending: 'warn', working: 'success', done: 'success' }[s] || 'secondary';
 });
 
 onMounted(async () => {
@@ -121,46 +126,45 @@ async function onInitDone() {
 .detail-root { display: flex; height: 100%; overflow: hidden; }
 
 .detail-sidebar {
-  width: 220px; flex-shrink: 0;
-  background: #0d0e14; border-right: 1px solid #1e1f2a;
+  width: 200px; flex-shrink: 0;
+  background: var(--jg-card);
+  border-right: 1px solid var(--jg-border);
   display: flex; flex-direction: column; overflow: hidden;
 }
-.sidebar-header { padding: 16px; border-bottom: 1px solid #1e1f2a; }
-.sidebar-back { font-size: 12px; color: #6b7280; text-decoration: none; }
-.sidebar-back:hover { color: #9ca3af; }
-.sidebar-name { font-weight: 600; font-size: 14px; color: #f4f4f5; margin: 8px 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-header { padding: 16px; border-bottom: 1px solid var(--jg-border); }
+.sidebar-back { font-size: 11px; color: var(--jg-text-faint); text-decoration: none; display: flex; align-items: center; gap: 4px; }
+.sidebar-back:hover { color: var(--jg-text-muted); }
+.sidebar-name { font-weight: 600; font-size: 13px; color: var(--jg-text); margin: 8px 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .sidebar-nav { padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .snav-link {
-  display: block; padding: 8px 12px; border-radius: 6px;
-  text-decoration: none; color: #9ca3af; font-size: 13px;
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--radius);
+  text-decoration: none; color: var(--jg-text-muted); font-size: 12px;
   transition: all 0.15s;
 }
-.snav-link:hover { background: #1e1f2a; color: #e4e4e7; }
-.snav-link.router-link-active { background: #1a1a2e; color: #a78bfa; }
-.snav-chip { font-size: 10px; background: #1e1f2a; color: #6b7280; padding: 1px 5px; border-radius: 8px; margin-left: auto; }
+.snav-link:hover { background: var(--jg-hover); color: var(--jg-text); }
+.snav-link.router-link-active { background: color-mix(in oklch, var(--jg-green) 12%, transparent); color: var(--jg-green); }
+.snav-chip { font-size: 9px; background: var(--jg-hover); color: var(--jg-text-faint); padding: 1px 4px; border-radius: 0px; margin-left: auto; letter-spacing: 0.04em; }
 
-.sidebar-meta { padding: 12px 16px; margin-top: auto; border-top: 1px solid #1e1f2a; }
-.meta-row { display: flex; justify-content: space-between; font-size: 11px; color: #4b5563; margin-bottom: 6px; gap: 8px; }
-.meta-row span:first-child { flex-shrink: 0; color: #6b7280; }
-.meta-path { font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; direction: rtl; text-align: right; }
+.sidebar-meta { padding: 12px 16px; margin-top: auto; border-top: 1px solid var(--jg-border); }
+.meta-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--jg-text-faint); margin-bottom: 6px; gap: 8px; }
+.meta-row span:first-child { flex-shrink: 0; }
+.meta-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; direction: rtl; text-align: right; color: var(--jg-text-muted); }
 
 .detail-content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 
 .init-banner {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 20px; background: #1a1a2e; border-bottom: 1px solid #2d2f4a;
+  padding: 10px 20px;
+  background: color-mix(in oklch, var(--jg-green) 8%, var(--jg-card));
+  border-bottom: 1px solid var(--jg-border);
 }
-.init-banner-text { font-size: 13px; color: #a78bfa; }
-.init-banner--progress { justify-content: flex-start; gap: 12px; color: #9ca3af; }
+.init-banner-text { font-size: 12px; color: var(--jg-green); }
+.init-banner--progress { justify-content: flex-start; gap: 12px; color: var(--jg-text-muted); }
 
-.spinner { animation: spin 1s linear infinite; display: inline-block; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.7);
-  display: flex; align-items: center; justify-content: center; z-index: 100;
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  flex: 1; text-align: center;
 }
-.modal { background: #111218; border: 1px solid #2d2f3e; border-radius: 12px; width: 480px; padding: 24px; }
-.modal-header { font-size: 16px; font-weight: 600; margin-bottom: 20px; color: #f4f4f5; }
+.empty-title { font-size: 16px; color: var(--jg-text-muted); }
 </style>

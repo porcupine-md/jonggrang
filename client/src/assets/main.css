@@ -1,97 +1,317 @@
+/* ── jonggrang.dev design tokens ── */
 :root {
-    --bg-base: #05060a;
-    --bg-card: #0d0e14;
-    --bg-card-hover: #12131a;
-    --bg-elevated: #16171f;
-    --bg-modal: #1a1b24;
-    --bg-surface: #151820;
+  --font-mono: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, monospace;
+  --radius: 0px;
 
-    --border-subtle: rgba(255, 255, 255, 0.06);
-    --border-default: rgba(255, 255, 255, 0.12);
-
-    --text-primary: #f4f4f5;
-    --text-secondary: #9ca3af;
-    --text-muted: #4b5563;
-
-    --accent: #38bdf8;
-    --green: #10b981;
-    --green-muted: rgba(16, 185, 129, 0.12);
-    --blue: #3b82f6;
-    --blue-muted: rgba(59, 130, 246, 0.12);
-    --yellow: #f59e0b;
-    --yellow-muted: rgba(245, 158, 11, 0.12);
-    --red: #ef4444;
-    --red-muted: rgba(239, 68, 68, 0.12);
-    --purple: #8b5cf6;
-
-    --font-mono: "JetBrains Mono", "Fira Code", monospace;
-    --radius: 8px;
-    --topbar-h: 40px;
+  /* accent colors — same in both modes */
+  --jg-green:  oklch(0.78  0.16  145);
+  --jg-red:    oklch(0.68  0.18  25);
+  --jg-orange: oklch(0.78  0.14  70);
+  --jg-violet: oklch(0.70  0.16  295);
+  --jg-cyan:   oklch(0.78  0.14  220);
 }
 
-*,
-*::before,
-*::after {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
+/* Night (dark) mode — jonggrang.dev exact palette */
+html.dark {
+  --jg-bg:         oklch(0.165 0.014 245);
+  --jg-card:       oklch(0.195 0.014 245);
+  --jg-hover:      oklch(0.225 0.014 245);
+  --jg-border:     oklch(0.32  0.014 245);
+  --jg-text:       oklch(0.92  0.006 95);
+  --jg-text-dim:   oklch(0.78  0.008 95);
+  --jg-text-muted: oklch(0.60  0.008 95);
+  --jg-text-faint: oklch(0.45  0.008 95);
 }
 
-html,
-body,
-#app {
-    height: 100%;
-    overflow: hidden;
+/* Light mode */
+html:not(.dark) {
+  --jg-bg:         oklch(0.985 0.004 95);
+  --jg-card:       oklch(1.00  0.000 0);
+  --jg-hover:      oklch(0.95  0.004 245);
+  --jg-border:     oklch(0.85  0.008 95);
+  --jg-text:       oklch(0.18  0.014 245);
+  --jg-text-dim:   oklch(0.30  0.010 245);
+  --jg-text-muted: oklch(0.46  0.010 245);
+  --jg-text-faint: oklch(0.62  0.010 245);
+  /* darker green for contrast on light bg */
+  --jg-green:      oklch(0.52  0.18  145);
+  --jg-red:        oklch(0.50  0.18  25);
+  --jg-orange:     oklch(0.52  0.14  70);
+  --jg-cyan:       oklch(0.50  0.14  220);
 }
+
+/* ── Map to PrimeVue layout vars (direct selectors — Aura nesting broken in Chrome) ── */
+:root {
+  --p-surface-ground:        var(--jg-bg);
+  --p-surface-card:          var(--jg-card);
+  --p-surface-hover:         var(--jg-hover);
+  --p-content-background:    var(--jg-card);
+  --p-content-border-color:  var(--jg-border);
+  --p-text-color:            var(--jg-text);
+  --p-text-muted-color:      var(--jg-text-muted);
+}
+
+html.dark {
+  --p-surface-ground:        var(--jg-bg);
+  --p-surface-card:          var(--jg-card);
+  --p-surface-hover:         var(--jg-hover);
+  --p-content-background:    var(--jg-card);
+  --p-content-border-color:  var(--jg-border);
+  --p-text-color:            var(--jg-text);
+  --p-text-muted-color:      var(--jg-text-muted);
+}
+
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #app { height: 100%; overflow: hidden; }
 
 body {
-    background: var(--bg-base);
-    color: var(--text-primary);
-    font-family: system-ui, -apple-system, sans-serif;
-    font-size: 13px;
+  background: var(--jg-bg);
+  color: var(--jg-text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-#app {
-    width: 100vw;
-}
+#app { width: 100vw; }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.14); }
+::-webkit-scrollbar-thumb { background: var(--jg-border); border-radius: 0px; }
+::-webkit-scrollbar-thumb:hover { background: var(--jg-text-faint); }
 
-/* Vue Flow overrides */
-.vue-flow { background: var(--bg-base) !important; }
-.vue-flow__edge-path { stroke: rgba(255, 255, 255, 0.15); stroke-width: 2; }
+/* ── PrimeVue component overrides — jonggrang.dev style ── */
+
+/* ── Buttons ── */
+.p-button {
+  font-family: var(--font-mono) !important;
+  letter-spacing: 0 !important;
+  border-radius: 0px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  padding: 5px 14px !important;
+  border: 1px solid transparent !important;
+  transition: background 0.12s, border-color 0.12s, color 0.12s !important;
+  box-shadow: none !important;
+  cursor: pointer !important;
+}
+/* Primary — solid green */
+.p-button:not(.p-button-secondary):not(.p-button-danger):not(.p-button-warn):not(.p-button-info):not(.p-button-text):not(.p-button-outlined) {
+  background: var(--jg-green) !important;
+  color: oklch(0.12 0.04 145) !important;
+  border-color: var(--jg-green) !important;
+}
+.p-button:not(.p-button-secondary):not(.p-button-danger):not(.p-button-warn):not(.p-button-info):not(.p-button-text):not(.p-button-outlined):hover:not(:disabled) {
+  background: color-mix(in oklch, var(--jg-green) 85%, white) !important;
+  border-color: color-mix(in oklch, var(--jg-green) 85%, white) !important;
+}
+/* Secondary — outline with dim border */
+.p-button-secondary {
+  background: transparent !important;
+  color: var(--jg-text-muted) !important;
+  border-color: var(--jg-border) !important;
+}
+.p-button-secondary:hover:not(:disabled) {
+  background: var(--jg-hover) !important;
+  color: var(--jg-text) !important;
+  border-color: var(--jg-text-faint) !important;
+}
+/* Danger — outline red */
+.p-button-danger {
+  background: transparent !important;
+  color: var(--jg-red) !important;
+  border-color: color-mix(in oklch, var(--jg-red) 45%, transparent) !important;
+}
+.p-button-danger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--jg-red) 10%, transparent) !important;
+  border-color: var(--jg-red) !important;
+}
+/* Disabled */
+.p-button:disabled { opacity: 0.35 !important; cursor: not-allowed !important; }
+/* Small */
+.p-button-sm { font-size: 11px !important; padding: 3px 10px !important; }
+/* Icon-only spacing */
+.p-button .p-button-icon { font-size: 11px !important; }
+.p-button .p-button-icon + .p-button-label { margin-left: 5px !important; }
+
+/* ── Inputs ── */
+.p-inputtext, .p-textarea, .p-select {
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+  background: var(--jg-bg) !important;
+  color: var(--jg-text) !important;
+  border: 1px solid var(--jg-border) !important;
+  border-radius: 0px !important;
+  box-shadow: none !important;
+  transition: border-color 0.12s !important;
+}
+.p-inputtext:focus, .p-textarea:focus, .p-select:focus {
+  border-color: var(--jg-green) !important;
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--jg-green) 30%, transparent) !important;
+  outline: none !important;
+}
+.p-inputtext::placeholder, .p-textarea::placeholder { color: var(--jg-text-faint) !important; }
+
+/* ── Select dropdown ── */
+.p-select-overlay, .p-select-list-container {
+  background: var(--jg-card) !important;
+  border: 1px solid var(--jg-border) !important;
+  border-radius: 0px !important;
+  box-shadow: 0 4px 16px oklch(0 0 0 / 0.3) !important;
+}
+.p-select-option { font-family: var(--font-mono) !important; font-size: 12px !important; }
+.p-select-option:hover, .p-select-option.p-focus {
+  background: var(--jg-hover) !important; color: var(--jg-text) !important;
+}
+.p-select-option.p-selected {
+  background: color-mix(in oklch, var(--jg-green) 12%, var(--jg-card)) !important;
+  color: var(--jg-green) !important;
+}
+
+/* ── SelectButton (theme switcher) ── */
+.p-selectbutton { border: 1px solid var(--jg-border) !important; border-radius: 0px !important; overflow: hidden; display: inline-flex !important; }
+.p-selectbutton .p-togglebutton {
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  background: transparent !important;
+  color: var(--jg-text-muted) !important;
+  border: none !important;
+  border-right: 1px solid var(--jg-border) !important;
+  border-radius: 0px !important;
+  padding: 5px 14px !important;
+  transition: background 0.12s, color 0.12s !important;
+  outline: none !important;
+}
+/* Kill PrimeVue inner content element that creates the bubble */
+.p-selectbutton .p-togglebutton .p-togglebutton-content {
+  border-radius: 0px !important;
+  background: transparent !important;
+  padding: 0px !important;
+}
+.p-selectbutton .p-togglebutton .p-button-label,
+.p-selectbutton .p-togglebutton .p-button-icon { border-radius: 0px !important; }
+.p-selectbutton .p-togglebutton:focus { outline: none !important; box-shadow: none !important; }
+.p-selectbutton .p-togglebutton:last-child { border-right: none !important; }
+.p-selectbutton .p-togglebutton:hover:not(.p-togglebutton-checked) { background: var(--jg-hover) !important; color: var(--jg-text) !important; }
+.p-selectbutton .p-togglebutton.p-togglebutton-checked {
+  background: color-mix(in oklch, var(--jg-green) 12%, var(--jg-bg)) !important;
+  color: var(--jg-green) !important;
+  border-radius: 0px !important;
+}
+
+/* ── Native checkbox ── */
+input[type="checkbox"] {
+  accent-color: var(--jg-green);
+  width: 12px; height: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+input[type="checkbox"]:focus-visible {
+  outline: 1px solid var(--jg-green);
+  outline-offset: 2px;
+}
+
+/* ── Badge (counter chip) ── */
+.p-badge {
+  font-family: var(--font-mono) !important;
+  font-size: 9px !important;
+  border-radius: 0px !important;
+  background: var(--jg-hover) !important;
+  color: var(--jg-text-faint) !important;
+  border: 1px solid var(--jg-border) !important;
+  min-width: auto !important;
+  height: auto !important;
+  padding: 1px 5px !important;
+  line-height: 1.4 !important;
+  letter-spacing: 0.04em !important;
+  box-shadow: none !important;
+}
+
+/* ── Tags ── */
+.p-tag {
+  font-family: var(--font-mono) !important;
+  font-size: 9px !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  border-radius: 0px !important;
+  padding: 2px 5px !important;
+  font-weight: 600 !important;
+}
+
+/* ── Progress bar ── */
+.p-progressbar { background: var(--jg-hover) !important; border-radius: 0px !important; height: 2px !important; }
+.p-progressbar-value { background: var(--jg-green) !important; border-radius: 0px !important; }
+
+/* ── Dialog / Drawer ── */
+.p-dialog, .p-drawer {
+  font-family: var(--font-mono) !important;
+  background: var(--jg-card) !important;
+  border: 1px solid var(--jg-border) !important;
+  border-radius: 0px !important;
+  box-shadow: 0 8px 32px oklch(0 0 0 / 0.4) !important;
+}
+.p-dialog-header, .p-drawer-header {
+  background: var(--jg-card) !important;
+  border-bottom: 1px solid var(--jg-border) !important;
+  padding: 10px 16px !important;
+  color: var(--jg-text) !important;
+}
+.p-dialog-content, .p-drawer-content {
+  background: var(--jg-card) !important;
+  padding: 16px !important;
+  color: var(--jg-text) !important;
+}
+.p-drawer-close-button { color: var(--jg-text-muted) !important; }
+.p-drawer-close-button:hover { color: var(--jg-text) !important; background: var(--jg-hover) !important; }
+
+/* ── Timeline ── */
+.p-timeline-event-content { font-family: var(--font-mono) !important; }
+
+/* ── Tabs ── */
+.p-tablist { border-bottom: 1px solid var(--jg-border) !important; background: transparent !important; }
+.p-tab {
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+  color: var(--jg-text-muted) !important;
+  border-radius: 0 !important;
+  padding: 8px 16px !important;
+  border-bottom: 2px solid transparent !important;
+}
+.p-tab:hover { color: var(--jg-text) !important; }
+.p-tab[aria-selected="true"] {
+  color: var(--jg-green) !important;
+  border-bottom-color: var(--jg-green) !important;
+  background: transparent !important;
+}
+.p-tabpanel { background: transparent !important; color: var(--jg-text) !important; }
+.p-tabpanels { background: transparent !important; }
+
+/* ── Vue Flow overrides ── */
+.vue-flow { background: var(--jg-bg) !important; }
+.vue-flow__edge-path { stroke: var(--jg-border); stroke-width: 1.5; }
 .vue-flow__controls {
-    box-shadow: none;
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border-subtle) !important;
+  box-shadow: none;
+  background: var(--jg-card) !important;
+  border: 1px solid var(--jg-border) !important;
+  border-radius: var(--radius) !important;
 }
 .vue-flow__controls-button {
-    background: var(--bg-elevated) !important;
-    border: 1px solid var(--border-default) !important;
-    color: var(--text-secondary) !important;
-    fill: var(--text-secondary) !important;
-}
-.vue-flow__controls button {
-    background: transparent !important;
-    color: var(--text-muted) !important;
-    border: none !important;
+  background: var(--jg-hover) !important;
+  border: 1px solid var(--jg-border) !important;
+  color: var(--jg-text-muted) !important;
+  fill: var(--jg-text-muted) !important;
 }
 .vue-flow__controls-button:hover {
-    background: var(--bg-card) !important;
-    color: var(--text-primary) !important;
-    fill: var(--text-primary) !important;
-}
-.vue-flow__controls button:hover {
-    background: var(--bg-elevated) !important;
-    color: var(--text-primary) !important;
+  background: var(--jg-border) !important;
+  color: var(--jg-text) !important;
+  fill: var(--jg-text) !important;
 }
 .vue-flow__minimap {
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border-subtle) !important;
-    border-radius: var(--radius);
+  background: var(--jg-card) !important;
+  border: 1px solid var(--jg-border) !important;
+  border-radius: var(--radius);
 }
-.vue-flow__background pattern circle { fill: rgba(255, 255, 255, 0.03); }
+.vue-flow__background pattern circle { fill: var(--jg-border); }

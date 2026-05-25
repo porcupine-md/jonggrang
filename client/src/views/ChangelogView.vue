@@ -74,31 +74,31 @@ watch(projectId, (id) => { if (id) load(); });
 
 .cl-header {
   display: flex; align-items: baseline; gap: 12px;
-  padding: 12px 20px; border-bottom: 1px solid #1e1f2a; flex-shrink: 0;
+  padding: 10px 20px; border-bottom: 1px solid var(--jg-border); flex-shrink: 0;
 }
-.cl-title { font-size: 13px; font-weight: 600; color: #e4e4e7; }
-.cl-hint { font-size: 11px; color: #4b5563; }
+.cl-title { font-size: 12px; font-weight: 600; color: var(--jg-text); }
+.cl-hint { font-size: 11px; color: var(--jg-text-faint); }
 
 .cl-empty {
   flex: 1; display: flex; align-items: center; justify-content: center;
-  font-size: 13px; color: #4b5563;
+  font-size: 12px; color: var(--jg-text-faint);
 }
 
 .cl-body {
   flex: 1; overflow-y: auto; padding: 20px;
-  font-size: 13px; color: #d1d5db; line-height: 1.7;
+  font-size: 13px; color: var(--jg-text); line-height: 1.7;
 }
 .cl-body :deep(h1) {
-  font-size: 14px; color: #a78bfa; border-bottom: 1px solid #2d2f3e;
+  font-size: 13px; color: var(--jg-green); border-bottom: 1px solid var(--jg-border);
   padding-bottom: 6px; margin: 0 0 12px;
 }
-.cl-body :deep(h2) { font-size: 13px; color: #93c5fd; margin: 16px 0 6px; }
-.cl-body :deep(h3) { font-size: 12px; color: #f4f4f5; margin: 12px 0 4px; }
+.cl-body :deep(h2) { font-size: 13px; color: var(--jg-cyan); margin: 16px 0 6px; }
+.cl-body :deep(h3) { font-size: 12px; color: var(--jg-text-dim); margin: 12px 0 4px; }
 .cl-body :deep(p) { margin-bottom: 8px; }
 .cl-body :deep(ul), .cl-body :deep(ol) { padding-left: 20px; margin-bottom: 8px; }
 .cl-body :deep(li) { margin-bottom: 3px; }
-.cl-body :deep(code) { background: #1e1f2a; padding: 2px 5px; border-radius: 3px; font-size: 12px; color: #e2e8f0; }
-.cl-body :deep(pre) { background: #1e1f2a; padding: 12px; border-radius: 6px; overflow-x: auto; margin-bottom: 10px; }
-.cl-body :deep(hr) { border: none; border-top: 1px solid #2d2f3e; margin: 14px 0; }
-.cl-body :deep(blockquote) { border-left: 3px solid #4b5563; padding-left: 12px; color: #9ca3af; margin: 8px 0; }
+.cl-body :deep(code) { background: var(--jg-hover); padding: 2px 5px; border-radius: 3px; font-size: 12px; color: var(--jg-green); }
+.cl-body :deep(pre) { background: var(--jg-card); padding: 12px; border-radius: var(--radius); overflow-x: auto; margin-bottom: 10px; }
+.cl-body :deep(hr) { border: none; border-top: 1px solid var(--jg-border); margin: 14px 0; }
+.cl-body :deep(blockquote) { border-left: 3px solid var(--jg-border); padding-left: 12px; color: var(--jg-text-muted); margin: 8px 0; }
 </style>

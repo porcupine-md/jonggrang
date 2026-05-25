@@ -3,42 +3,42 @@
     <div class="form-row">
       <div class="form-group">
         <label>Project type</label>
-        <select v-model="form.type">
-          <option value="api">API / Backend</option>
-          <option value="web-app">Web App / Frontend</option>
-          <option value="cli">CLI Tool</option>
-          <option value="library">Library</option>
-          <option value="fullstack">Full Stack</option>
-        </select>
+        <Select v-model="form.type" :options="[
+          { label: 'API / Backend', value: 'api' },
+          { label: 'Web App / Frontend', value: 'web-app' },
+          { label: 'CLI Tool', value: 'cli' },
+          { label: 'Library', value: 'library' },
+          { label: 'Full Stack', value: 'fullstack' },
+        ]" optionLabel="label" optionValue="value" fluid />
       </div>
       <div class="form-group">
         <label>Stack</label>
-        <select v-model="form.stack">
-          <option value="node-typescript">Node.js / TypeScript</option>
-          <option value="express-typescript">Express / TypeScript</option>
-          <option value="nextjs-typescript">Next.js / TypeScript</option>
-          <option value="python-fastapi">Python / FastAPI</option>
-          <option value="go">Go</option>
-          <option value="rust">Rust</option>
-        </select>
+        <Select v-model="form.stack" :options="[
+          { label: 'Node.js / TypeScript', value: 'node-typescript' },
+          { label: 'Express / TypeScript', value: 'express-typescript' },
+          { label: 'Next.js / TypeScript', value: 'nextjs-typescript' },
+          { label: 'Python / FastAPI', value: 'python-fastapi' },
+          { label: 'Go', value: 'go' },
+          { label: 'Rust', value: 'rust' },
+        ]" optionLabel="label" optionValue="value" fluid />
       </div>
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>AI Tool</label>
-        <select v-model="form.tool">
-          <option value="opencode">OpenCode</option>
-          <option value="claude">Claude Code</option>
-          <option value="jonggrang">Jonggrang (Pi)</option>
-        </select>
+        <Select v-model="form.tool" :options="[
+          { label: 'OpenCode', value: 'opencode' },
+          { label: 'Claude Code', value: 'claude' },
+          { label: 'Jonggrang (Pi)', value: 'jonggrang' },
+        ]" optionLabel="label" optionValue="value" fluid />
       </div>
       <div class="form-group">
         <label>Autonomy</label>
-        <select v-model="form.autonomy">
-          <option value="autonomous">Full (auto-approve)</option>
-          <option value="balanced">Balanced (approve edits)</option>
-          <option value="supervised">Supervised (review each task)</option>
-        </select>
+        <Select v-model="form.autonomy" :options="[
+          { label: 'Full (auto-approve)', value: 'autonomous' },
+          { label: 'Balanced (approve edits)', value: 'balanced' },
+          { label: 'Supervised (review each task)', value: 'supervised' },
+        ]" optionLabel="label" optionValue="value" fluid />
       </div>
     </div>
 
@@ -48,16 +48,18 @@
     </div>
 
     <div class="wizard-actions">
-      <button class="btn btn--secondary" @click="$emit('cancel')">Cancel</button>
-      <button class="btn btn--primary" :disabled="initing" @click="doInit">
-        {{ initing ? 'Initializing...' : '🚀 Initialize' }}
-      </button>
+      <Button label="Cancel" severity="secondary" @click="$emit('cancel')" />
+      <Button :disabled="initing" @click="doInit">
+        <i class="pi pi-rocket" /> {{ initing ? 'Initializing...' : 'Initialize' }}
+      </Button>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, watch } from 'vue';
+import Button from 'primevue/button';
+import Select from 'primevue/select';
 import { useProjectsStore } from '../../stores/projects.js';
 import { useWsStore } from '../../stores/ws.js';
 
@@ -122,8 +124,8 @@ async function doInit() {
 .init-wizard {}
 .wizard-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .init-log {
-  background: #0a0b0f; border: 1px solid #1e1f2a; border-radius: 6px;
-  padding: 10px; font-family: monospace; font-size: 11px; color: #6b7280;
+  background: var(--jg-bg); border: 1px solid var(--jg-border); border-radius: var(--radius);
+  padding: 10px; font-size: 11px; color: var(--jg-text-muted);
   max-height: 140px; overflow-y: auto; margin-bottom: 12px;
 }
 .init-log-line { line-height: 1.5; }
