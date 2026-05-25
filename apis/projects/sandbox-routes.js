@@ -44,6 +44,19 @@ module.exports = function(deps) {
         io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
         res.json({ ok: true, status: 'starting' });
 
+        // If container exists (stopped) → docker start, otherwise full docker run
+        const containerStatus = await sandbox.exists(project.id);
+        if (containerStatus === 'exited' || containerStatus === 'created') {
+            sandbox.startExisting(project.id).then(() => {
+                startingSet.delete(project.id);
+                io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
+            }).catch((err) => {
+                startingSet.delete(project.id);
+                io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'error', message: err.message });
+            });
+            return;
+        }
+
         const secretVars = webState.getProjectSecretVars(project.id);
         const globalConfig = webState.getSandboxConfig();
         const sandboxConfig = {
@@ -62,6 +75,24 @@ module.exports = function(deps) {
     });
 
     router.post('/:id/sandbox/restart', async (req, res) => {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
+        if (!project.sandbox?.enabled) return res.status(400).json({ error: 'SANDBOX_DISABLED' });
+
+        if (startingSet.has(project.id)) return res.json({ ok: true, status: 'starting' });
+
+        io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
+        res.json({ ok: true, status: 'starting' });
+
+        try {
+            await sandbox.restart(project.id);
+            io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
+        } catch (err) {
+            io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'error', message: err.message });
+        }
+    });
+
+    router.post('/:id/sandbox/rebuild', async (req, res) => {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
         if (!project.sandbox?.enabled) return res.status(400).json({ error: 'SANDBOX_DISABLED' });

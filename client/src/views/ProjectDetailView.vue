@@ -42,6 +42,9 @@
           <button class="sbx-btn" :disabled="sandboxStatus === 'starting'" @click="restartSandbox" title="Restart">
             <i class="pi pi-refresh" />
           </button>
+          <button class="sbx-btn sbx-btn--rebuild" :disabled="sandboxStatus === 'starting'" @click="rebuildSandbox" title="Rebuild">
+            <i class="pi pi-hammer" />
+          </button>
           <button class="sbx-btn sbx-btn--stop" v-if="sandboxStatus === 'running'" @click="stopSandbox" title="Stop">
             <i class="pi pi-stop" />
           </button>
@@ -162,9 +165,14 @@ async function stopSandbox() {
 }
 
 async function restartSandbox() {
-  sandboxLogTail.value = '';
   sandboxStatus.value = 'starting';
   await fetch(`/api/projects/${id.value}/sandbox/restart`, { method: 'POST' });
+}
+
+async function rebuildSandbox() {
+  sandboxLogTail.value = '';
+  sandboxStatus.value = 'starting';
+  await fetch(`/api/projects/${id.value}/sandbox/rebuild`, { method: 'POST' });
 }
 
 onMounted(async () => {
@@ -280,8 +288,9 @@ async function onInitDone() {
 }
 .sbx-btn:hover:not(:disabled) { background: var(--jg-card); color: var(--jg-text); }
 .sbx-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.sbx-btn--stop:hover:not(:disabled)  { color: var(--jg-red); border-color: var(--jg-red); }
-.sbx-btn--start:hover:not(:disabled) { color: var(--jg-green); border-color: var(--jg-green); }
+.sbx-btn--stop:hover:not(:disabled)    { color: var(--jg-red); border-color: var(--jg-red); }
+.sbx-btn--start:hover:not(:disabled)   { color: var(--jg-green); border-color: var(--jg-green); }
+.sbx-btn--rebuild:hover:not(:disabled) { color: #f59e0b; border-color: #f59e0b; }
 
 .sidebar-meta { padding: 12px 16px; border-top: 1px solid var(--jg-border); }
 .meta-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--jg-text-faint); margin-bottom: 6px; gap: 8px; }
