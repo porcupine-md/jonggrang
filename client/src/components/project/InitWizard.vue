@@ -19,10 +19,24 @@
       </div>
     </div>
 
-    <label class="sandbox-toggle-row">
-      <input type="checkbox" v-model="form.sandbox_enabled" />
-      <span>Run in Docker sandbox</span>
-    </label>
+    <div class="sandbox-config" :class="{ 'sandbox-config--disabled': !form.sandbox_enabled }">
+      <label class="sandbox-toggle-row">
+        <input type="checkbox" v-model="form.sandbox_enabled" />
+        <span>Run in Docker sandbox</span>
+      </label>
+      <div class="sandbox-fields">
+        <div class="sandbox-field">
+          <label class="sandbox-field-label">Image</label>
+          <input v-model="form.sandbox_image" :disabled="!form.sandbox_enabled"
+            :placeholder="globalSbx.image || 'orcinus/jonggrang-agent'" class="sandbox-input" />
+        </div>
+        <div class="sandbox-field">
+          <label class="sandbox-field-label">Shell</label>
+          <input v-model="form.sandbox_shell" :disabled="!form.sandbox_enabled"
+            :placeholder="globalSbx.shell || '/bin/bash'" class="sandbox-input" />
+        </div>
+      </div>
+    </div>
 
     <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
       <i :class="showAdvanced ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" />
@@ -70,7 +84,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue';
+import { ref, reactive, onMounted, watch } from 'vue';
 import Button from 'primevue/button';
 import Select from 'primevue/select';
 import { useProjectsStore } from '../../stores/projects.js';
@@ -85,6 +99,7 @@ const initing = ref(false);
 const error = ref('');
 const initLog = ref([]);
 const showAdvanced = ref(false);
+const globalSbx = reactive({ image: '', shell: '' });
 
 const form = ref({
   type: null,
@@ -102,7 +117,11 @@ watch(() => props.detected, (d) => {
   if (d?.type) form.value.type = d.type;
 }, { immediate: true });
 
-onMounted(() => {
+onMounted(async () => {
+  try {
+    const res = await fetch('/api/settings/sandbox');
+    if (res.ok) { const d = await res.json(); globalSbx.image = d.image || ''; globalSbx.shell = d.shell || ''; }
+  } catch {}
   const socket = ws.socket;
   if (!socket) return;
   socket.on('process.log', ({ project_id, line }) => {
@@ -131,7 +150,7 @@ async function doInit() {
   try {
     const payload = { ...form.value };
     if (form.value.sandbox_enabled) {
-      payload.sandbox = { enabled: true };
+      payload.sandbox = { enabled: true, image: form.value.sandbox_image || null, shell: form.value.sandbox_shell || null };
     }
     await projects.initProject(props.project.id, payload);
   } catch (e) {
@@ -162,17 +181,25 @@ async function doInit() {
 
 .advanced-panel { margin-bottom: 4px; }
 
-.sandbox-group { margin-top: 12px; }
+.sandbox-config {
+  border: 1px solid var(--jg-border); padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  margin: 4px 0; transition: opacity 0.15s;
+}
+.sandbox-config--disabled { opacity: 0.45; }
 .sandbox-toggle-row {
   display: flex; align-items: center; gap: 8px; cursor: pointer;
-  font-size: 12px; color: var(--jg-text-muted); margin-bottom: 0;
+  font-size: 12px; color: var(--jg-text-muted);
 }
 .sandbox-toggle-row input[type="checkbox"] { accent-color: var(--jg-green); }
-.sandbox-image-input {
-  margin-top: 8px; width: 100%; padding: 6px 10px;
+.sandbox-fields { display: flex; gap: 10px; }
+.sandbox-field { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.sandbox-field-label { font-size: 10px; color: var(--jg-text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+.sandbox-input {
+  width: 100%; padding: 5px 8px;
   background: var(--jg-bg); border: 1px solid var(--jg-border);
-  color: var(--jg-text); font-family: inherit; font-size: 12px;
-  outline: none;
+  color: var(--jg-text); font-family: inherit; font-size: 11px; outline: none;
 }
-.sandbox-image-input:focus { border-color: var(--jg-green); }
+.sandbox-input:focus { border-color: var(--jg-green); }
+.sandbox-input:disabled { cursor: not-allowed; }
 </style>

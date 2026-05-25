@@ -35,16 +35,14 @@
             <input type="checkbox" v-model="sbx.enabled" />
             <span>Enable Docker sandbox</span>
           </label>
-          <template v-if="sbx.enabled">
-            <div class="field-group">
-              <label>Image <span class="override-hint">(leave blank to use global)</span></label>
-              <input v-model="sbx.image" :placeholder="globalSbx.image || 'orcinus/jonggrang-agent'" class="sandbox-image-input" />
-            </div>
-            <div class="field-group">
-              <label>Shell <span class="override-hint">(leave blank to use global)</span></label>
-              <input v-model="sbx.shell" :placeholder="globalSbx.shell || '/bin/bash'" class="sandbox-image-input" />
-            </div>
-          </template>
+          <div class="field-group" :class="{ 'field-disabled': !sbx.enabled }">
+            <label>Image <span class="override-hint">(leave blank to use global)</span></label>
+            <input v-model="sbx.image" :disabled="!sbx.enabled" :placeholder="globalSbx.image || 'orcinus/jonggrang-agent'" class="sandbox-image-input" />
+          </div>
+          <div class="field-group" :class="{ 'field-disabled': !sbx.enabled }">
+            <label>Shell <span class="override-hint">(leave blank to use global)</span></label>
+            <input v-model="sbx.shell" :disabled="!sbx.enabled" :placeholder="globalSbx.shell || '/bin/bash'" class="sandbox-image-input" />
+          </div>
           <div v-if="sbxError" class="error-text">{{ sbxError }}</div>
           <div v-if="sbxSaved" class="saved-text"><i class="pi pi-check" /> Saved</div>
           <div class="section-footer">
@@ -264,6 +262,8 @@ async function saveSecrets() {
 .sandbox-image-input:focus { border-color: var(--jg-green); }
 .sandbox-hint { font-size: 11px; color: var(--jg-text-faint); margin-top: 4px; }
 .override-hint { font-size: 10px; color: var(--jg-text-faint); font-weight: 400; }
+.field-disabled { opacity: 0.45; }
+.sandbox-image-input:disabled { cursor: not-allowed; }
 .empty-secrets { font-size: 12px; color: var(--jg-text-faint); display: flex; align-items: center; gap: 8px; }
 .link { color: var(--jg-cyan); text-decoration: none; font-size: 12px; }
 .link:hover { text-decoration: underline; }
