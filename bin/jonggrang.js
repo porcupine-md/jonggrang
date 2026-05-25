@@ -341,8 +341,8 @@ function resolveWorkType(description) {
 // ============================================================
 
 async function runPostWorkPhases(description, workType, featureId, manifest, manifestPath) {
-  if (workType === 'SMALL' || workType === 'BUGFIX') {
-    logInfo(`Work type: ${workType} — no quality gates needed`);
+  if (workType === 'BUGFIX') {
+    logInfo(`Work type: BUGFIX — no quality gates needed`);
     // Mark all remaining active phases as skipped so the phase grid shows complete
     if (manifestPath && manifest) {
       try {
