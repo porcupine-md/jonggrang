@@ -237,9 +237,10 @@ const isIdle = computed(() =>
   plans.value.length === 0 && !generating.value && !showNewPlanForm.value
 );
 
-const canAddNewPlan = computed(() =>
-  ['tasks_pending', 'working', 'done'].includes(state.value)
-);
+const canAddNewPlan = computed(() => {
+  if (['tasks_pending', 'working', 'done'].includes(state.value)) return true;
+  return plans.value.length > 0 && plans.value.every(p => p.status === 'done');
+});
 
 const canGoToWork = computed(() =>
   ['tasks_pending', 'working', 'done'].includes(state.value)
