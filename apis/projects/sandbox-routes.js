@@ -34,13 +34,14 @@ module.exports = function(deps) {
             return res.json({ ok: true, status: 'starting' });
         }
 
+        startingSet.add(project.id);
         const running = await sandbox.isRunning(project.id);
         if (running) {
+            startingSet.delete(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
             return res.json({ ok: true, status: 'running' });
         }
 
-        startingSet.add(project.id);
         io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
         res.json({ ok: true, status: 'starting' });
 
@@ -81,13 +82,16 @@ module.exports = function(deps) {
 
         if (startingSet.has(project.id)) return res.json({ ok: true, status: 'starting' });
 
+        startingSet.add(project.id);
         io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
         res.json({ ok: true, status: 'starting' });
 
         try {
             await sandbox.restart(project.id);
+            startingSet.delete(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
         } catch (err) {
+            startingSet.delete(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'error', message: err.message });
         }
     });
@@ -99,11 +103,11 @@ module.exports = function(deps) {
 
         if (startingSet.has(project.id)) return res.json({ ok: true, status: 'starting' });
 
+        startingSet.add(project.id);
         io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
         res.json({ ok: true, status: 'starting' });
 
-        startingSet.add(project.id);
-        try { await sandbox.remove(project.id); } catch {}
+        await sandbox.remove(project.id);
 
         const secretVars = webState.getProjectSecretVars(project.id);
         const globalConfig = webState.getSandboxConfig();

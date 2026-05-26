@@ -51,7 +51,9 @@ module.exports = function register(app, io, ctx) {
                     const state = webState.deriveState(project.path);
                     io.to(`project:${projectId}`).emit('state', { project_id: projectId, state });
                 }
-            } catch {}
+            } catch (err) {
+                console.error('deriveState error after process exit:', err);
+            }
         });
     }
 
@@ -82,15 +84,21 @@ module.exports = function register(app, io, ctx) {
                     try {
                         const manifest = orchestration.readManifest(changedPath);
                         io.to(`project:${project.id}`).emit('manifest.updated', { project_id: project.id, manifest });
-                    } catch {}
+                    } catch (err) {
+                        console.error('Manifest read error:', err);
+                    }
                 }
                 if (changedPath && changedPath.endsWith('progress.txt')) {
                     try {
                         const content = fs.readFileSync(changedPath, 'utf-8');
                         io.to(`project:${project.id}`).emit('progress.update', { project_id: project.id, content });
-                    } catch {}
+                    } catch (err) {
+                        console.error('Progress read error:', err);
+                    }
                 }
-            } catch {}
+            } catch (err) {
+                console.error('Project watcher emit error:', err);
+            }
         };
 
         watcher.on('add', emit).on('change', emit).on('unlink', emit);
