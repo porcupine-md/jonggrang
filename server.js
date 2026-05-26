@@ -54,6 +54,8 @@ const paths = lib.getProjectPaths(PROJECT_ROOT);
 const legacyCtx = { PROJECT_ROOT, JONGGRANG_HOME, lib, orchestration, compaction, feedback, paths };
 const cleanupLegacy = require('./apis/legacy')(app, io, legacyCtx);
 
+webState.cleanupStaleImports();
+
 const projectsCtx = { JONGGRANG_HOME, webState, orchestration };
 const cleanupProjects = require('./apis/projects')(app, io, projectsCtx);
 
