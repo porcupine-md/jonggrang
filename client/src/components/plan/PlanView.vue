@@ -17,8 +17,15 @@
         <div class="plan-form-footer">
           <label class="deep-label">
             <input type="checkbox" v-model="deep" />
-            Deep analysis (slower, more thorough)
+            Deep analysis
           </label>
+          <div style="flex:1" />
+          <button class="tool-config-btn" @click="openToolModal">
+            <span>{{ TOOLS.find(t => t.value === selectedTool)?.label || 'Configure' }}</span>
+            <span v-if="selectedModel" class="tool-config-extra">· {{ selectedModel }}</span>
+            <span v-if="selectedEffort" class="tool-config-extra">· {{ selectedEffort }}</span>
+            <i class="pi pi-cog" />
+          </button>
           <Button :disabled="!description.trim() || generating" @click="generatePlan">
             <i class="pi pi-sparkles" /> {{ generating ? 'Generating...' : 'Generate Plan' }}
           </Button>
@@ -80,7 +87,15 @@
         <!-- New plan form -->
         <div v-else-if="showNewPlanForm" class="plan-new-wrap">
           <div class="plan-new-inner">
-            <div class="plan-new-title">New Plan</div>
+            <div class="plan-new-header">
+              <div class="plan-new-title">New Plan</div>
+              <button class="tool-config-btn" @click="openToolModal">
+                <span>{{ TOOLS.find(t => t.value === selectedTool)?.label || 'Configure' }}</span>
+                <span v-if="selectedModel" class="tool-config-extra">· {{ selectedModel }}</span>
+                <span v-if="selectedEffort" class="tool-config-extra">· {{ selectedEffort }}</span>
+                <i class="pi pi-cog" />
+              </button>
+            </div>
             <Textarea
               v-model="description"
               placeholder="Describe the next feature to build..."
@@ -93,6 +108,7 @@
                 <input type="checkbox" v-model="deep" />
                 Deep analysis
               </label>
+              <div style="flex:1" />
               <div style="display:flex;gap:8px">
                 <Button severity="secondary" @click="cancelNewPlan">Cancel</Button>
                 <Button :disabled="!description.trim()" @click="generatePlan">
@@ -173,6 +189,41 @@
       </div>
     </div>
   </div>
+
+  <!-- Tool / Model / Effort config modal -->
+  <Dialog v-model:visible="showToolModal" modal header="Model & Effort" :style="{width:'380px'}" :draggable="false">
+    <div class="tool-modal-body">
+      <div class="tool-modal-row">
+        <label class="tool-modal-label">Tool</label>
+        <Select v-model="selectedTool" :options="TOOLS" optionLabel="label" optionValue="value" placeholder="Default" class="tool-modal-select" />
+      </div>
+      <div v-if="selectedTool" class="tool-modal-row">
+        <label class="tool-modal-label">Model</label>
+        <Select
+          v-if="availableModels.length"
+          v-model="selectedModel"
+          :options="availableModels"
+          optionLabel="label"
+          optionValue="value"
+          placeholder="Default"
+          filter
+          class="tool-modal-select"
+        />
+        <input v-else v-model="selectedModel" class="tool-modal-input" placeholder="Default (from jonggrang.json)" />
+      </div>
+      <div v-if="selectedTool && availableEfforts.length" class="tool-modal-row">
+        <label class="tool-modal-label">Effort</label>
+        <Select
+          v-model="selectedEffort"
+          :options="availableEfforts"
+          optionLabel="label"
+          optionValue="value"
+          placeholder="Default"
+          class="tool-modal-select"
+        />
+      </div>
+    </div>
+  </Dialog>
 </template>
 
 <script setup>
@@ -180,6 +231,8 @@ import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import Button from 'primevue/button';
 import Textarea from 'primevue/textarea';
+import Select from 'primevue/select';
+import Dialog from 'primevue/dialog';
 import { marked } from 'marked';
 import { useLogTerminal } from '../../composables/useLogTerminal.js';
 import { useProjectsStore } from '../../stores/projects.js';
@@ -201,6 +254,22 @@ const selectedPlan = ref(null);
 const description = ref('');
 const deep = ref(false);
 const showNewPlanForm = ref(false);
+
+// Tool / model / effort
+const selectedTool = ref(null);
+const selectedModel = ref(null);
+const selectedEffort = ref(null);
+const showToolModal = ref(false);
+const availableModels = ref([]);
+const availableEfforts = ref([]);
+const loadingModels = ref(false);
+
+const TOOLS = [
+  { label: 'OpenCode',      value: 'opencode' },
+  { label: 'Claude Code',   value: 'claude' },
+  { label: 'OpenAI Codex',  value: 'codex' },
+  { label: 'Jonggrang (Pi)', value: 'jonggrang' },
+];
 
 // Process state
 const generating = ref(false);
@@ -300,6 +369,37 @@ function toggleReviseBar() {
   }
 }
 
+async function loadModels(tool, { resetSelection = false } = {}) {
+  if (!tool) { availableModels.value = []; availableEfforts.value = []; return; }
+  loadingModels.value = true;
+  try {
+    const res = await fetch(`/api/models?tool=${encodeURIComponent(tool)}`);
+    if (res.ok) {
+      const data = await res.json();
+      availableModels.value = data.models || [];
+      availableEfforts.value = (data.efforts || []).map(e => ({ label: e, value: e }));
+    }
+  } catch {}
+  loadingModels.value = false;
+  if (resetSelection) { selectedModel.value = null; selectedEffort.value = null; }
+}
+
+async function openToolModal() {
+  if (selectedTool.value) await loadModels(selectedTool.value);
+  showToolModal.value = true;
+}
+
+async function loadProjectTool() {
+  try {
+    const res = await fetch(`/api/projects/${projectId.value}/settings`);
+    if (res.ok) {
+      const data = await res.json();
+      const tool = data.jonggrang_config?.tool || null;
+      if (tool) selectedTool.value = tool;
+    }
+  } catch {}
+}
+
 async function generatePlan() {
   if (!description.value.trim() || generating.value) return;
   genError.value = '';
@@ -307,10 +407,14 @@ async function generatePlan() {
   generating.value = true;
   showNewPlanForm.value = false;
   try {
+    const body = { description: description.value, deep: deep.value };
+    if (selectedTool.value)   body.tool   = selectedTool.value;
+    if (selectedModel.value)  body.model  = selectedModel.value;
+    if (selectedEffort.value) body.effort = selectedEffort.value;
     const res = await fetch(`/api/projects/${projectId.value}/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description: description.value, deep: deep.value }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const err = await res.json();
@@ -381,9 +485,13 @@ async function approvePlan() {
   }
 }
 
+watch(selectedTool, (tool) => { loadModels(tool, { resetSelection: true }); });
+watch(projectId, loadProjectTool);
+
 // WebSocket events
 onMounted(async () => {
   await loadPlans();
+  await loadProjectTool();
 
   const socket = ws.socket;
   if (!socket) return;
@@ -498,7 +606,8 @@ watch(projectId, loadPlans);
 .plan-new-wrap { display: flex; align-items: center; justify-content: center; flex: 1; padding: 20px; }
 .plan-new-inner { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 12px; }
 .plan-new-title { font-size: 13px; font-weight: 600; color: var(--jg-text); }
-.plan-new-footer { display: flex; justify-content: space-between; align-items: center; }
+.plan-form-footer { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.plan-new-footer { display: flex; align-items: center; gap: 8px; }
 
 /* Draft editor */
 .plan-editor-wrap { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
@@ -557,4 +666,30 @@ watch(projectId, loadPlans);
 /* Shared */
 .deep-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--jg-text-faint); }
 .error-text { font-size: 11px; color: var(--jg-red); margin-top: 8px; }
+
+/* Tool config button */
+.plan-new-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.tool-config-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; font-family: var(--font-mono); font-size: 11px;
+  background: var(--jg-hover); border: 1px solid var(--jg-border);
+  color: var(--jg-text-faint); cursor: pointer;
+  transition: color 0.12s, border-color 0.12s; white-space: nowrap;
+}
+.tool-config-btn:hover { color: var(--jg-text); border-color: var(--jg-text-muted); }
+.tool-config-btn .pi { font-size: 11px; }
+.tool-config-extra { color: var(--jg-green); }
+
+/* Tool modal */
+.tool-modal-body { display: flex; flex-direction: column; gap: 14px; padding: 4px 0; }
+.tool-modal-row { display: flex; align-items: center; gap: 12px; }
+.tool-modal-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--jg-text-faint); width: 44px; flex-shrink: 0; }
+.tool-modal-select { flex: 1; font-size: 12px !important; }
+.tool-modal-select :deep(.p-select) { width: 100%; }
+.tool-modal-input {
+  flex: 1; height: 32px; padding: 4px 10px;
+  background: var(--jg-bg); border: 1px solid var(--jg-border);
+  color: var(--jg-text); font-family: var(--font-mono); font-size: 12px; outline: none;
+}
+.tool-modal-input:focus { border-color: var(--jg-green); }
 </style>

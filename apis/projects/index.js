@@ -183,6 +183,7 @@ module.exports = function register(app, io, ctx) {
 
     app.use('/api', require('./workspace')(deps));
     app.use('/api', require('./projects')(deps));
+    app.use('/api', require('../models')(deps));
     app.use('/api/projects', require('./init')(deps));
     app.use('/api/projects', require('./plan')(deps));
     app.use('/api/projects', require('./manifest')(deps));

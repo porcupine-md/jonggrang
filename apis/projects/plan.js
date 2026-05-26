@@ -159,10 +159,13 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const { description, deep } = req.body || {};
+        const { description, deep, tool, model, effort } = req.body || {};
         if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
 
         const args = ['plan', description, ...(deep ? ['--deep'] : [])];
+        if (tool)   args.push('--tool', tool);
+        if (model)  args.push('--model', model);
+        if (effort) args.push('--effort', effort);
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan');
         res.status(202).json({ job_id: project.id });
