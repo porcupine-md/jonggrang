@@ -1175,6 +1175,7 @@ async function cmdApprove(args, opts = {}) {
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
+  resolveModelAndEffort();
 
   const planContent = fs.readFileSync(PLAN_FILE, 'utf8');
 
@@ -1347,6 +1348,7 @@ async function cmdBug(args) {
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
+  resolveModelAndEffort();
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
   const jonggrangDir = path.join(PROJECT_ROOT, '.jonggrang');
@@ -1717,6 +1719,7 @@ async function cmdOrchestrate(descriptionParts) {
   const description = descriptionParts.join(' ').trim();
 
   checkDeps();
+  resolveModelAndEffort();
 
   // ── Check for resume (must come before empty-description guard) ──
   if (ORCHESTRATE_RESUME) {
@@ -1863,7 +1866,7 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     }
 
     // ── Run agent ─────────────────────────────────────────────────
-    const exitCode = await lib.runAgent(prompt, activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG });
+    const exitCode = await lib.runAgent(prompt, activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (exitCode !== 0) {
       logWarn(`Phase ${phaseNum} agent exited with code ${exitCode}`);
