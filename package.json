@@ -42,7 +42,8 @@
     "install:all": "npm install && cd client && npm install",
     "check": "bash scripts/check.sh",
     "check:quick": "bash scripts/check.sh --quick",
-    "check:syntax": "bash scripts/check.sh --syntax-only"
+    "check:syntax": "bash scripts/check.sh --syntax-only",
+    "test": "node test/backend-args.test.js"
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0",
