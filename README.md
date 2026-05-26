@@ -133,8 +133,8 @@ Two-layer: `~/.jonggrang/settings.json` (global) → `.jonggrang/jonggrang.json`
 
 Jonggrang dibuat dan dikelola oleh:
 
-- **[Eka Irawan (Ibnu)](https://github.com/anak10thn)** — arsitektur, orchestration engine, skill system
-- **[Ahmad Anshorimuslim Syuhada](https://github.com/ans4175)** — Pi SDK integration, TUI, hooks
+- **[Eka Irawan (Ibnu)](https://github.com/anak10thn)**
+- **[Ahmad Anshorimuslim Syuhada (Ans)](https://github.com/ans-4175)**
 
 ---
 
