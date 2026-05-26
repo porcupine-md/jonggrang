@@ -17,12 +17,13 @@ module.exports = function(deps) {
     // ── Helpers ──────────────────────────────────────────────────
 
     function readProjectTool(project) {
+        const configPath = path.join(project.path, '.jonggrang', 'jonggrang.json');
         try {
-            const configPath = path.join(project.path, '.jonggrang', 'jonggrang.json');
             const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
             return config.tool || 'jonggrang';
-        } catch {
-            return 'jonggrang';
+        } catch (err) {
+            if (err.code === 'ENOENT') return 'jonggrang';
+            throw err;
         }
     }
 

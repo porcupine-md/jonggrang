@@ -38,7 +38,7 @@ module.exports = function(deps) {
         }
 
         const workspacePath = webState.getWorkspacePath();
-        try { fs.mkdirSync(workspacePath, { recursive: true }); } catch {}
+        fs.mkdirSync(workspacePath, { recursive: true });
 
         const existing = webState.listProjects().find(p => p.name === name);
         if (existing) return res.status(409).json({ error: { code: 'NAME_COLLISION', message: `Project "${name}" already exists` } });
