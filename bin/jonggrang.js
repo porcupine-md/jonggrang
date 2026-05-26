@@ -70,6 +70,8 @@ let GROUP_TASK_IDS = [];
 let ORCHESTRATE_RESUME = false;
 let ORCHESTRATE_ROLE = '';
 let SKIP_GATES = false;
+let MODEL = process.env.JONGGRANG_MODEL || '';
+let EFFORT = process.env.JONGGRANG_EFFORT || '';
 
 // Init options
 let INIT_NAME = '';
@@ -166,6 +168,7 @@ function checkDeps() {
         case 'git':      console.log('  Install git:      brew install git'); break;
         case 'opencode':  console.log('  Install opencode:  curl -fsSL https://opencode.ai/install | bash'); break;
         case 'claude':    console.log('  Install claude:    npm install -g @anthropic-ai/claude-code'); break;
+        case 'codex':     console.log('  Install codex:     npm install -g @openai/codex'); break;
         case '@earendil-works/pi-coding-agent': console.log('  Install Pi SDK:  npm install -g @earendil-works/pi-coding-agent'); break;
         default:         console.log(`  Install ${cmd}`); break;
       }
@@ -196,6 +199,30 @@ function ask(rl, prompt, defaultVal, options) {
       resolve(answer.trim() || defaultVal);
     });
   });
+}
+
+// ============================================================
+// MODEL / EFFORT RESOLUTION
+// ============================================================
+
+/**
+ * Resolve MODEL and EFFORT following the priority order:
+ *   1. CLI flag (--model / --effort) — already set in MODULE globals
+ *   2. Env var (JONGGRANG_MODEL / JONGGRANG_EFFORT) — already set in MODULE globals
+ *   3. Config file: tools.<tool>.model/effort → model/effort (top-level)
+ *   4. Backend default — leave empty so no flag is added to the spawn command
+ *
+ * Must be called after TOOL is resolved from config in each command.
+ */
+function resolveModelAndEffort() {
+  if (!MODEL) {
+    const toolModel = lib.readConfig(CONFIG_FILE, `tools.${TOOL}.model`, '');
+    MODEL = toolModel || lib.readConfig(CONFIG_FILE, 'model', '');
+  }
+  if (!EFFORT) {
+    const toolEffort = lib.readConfig(CONFIG_FILE, `tools.${TOOL}.effort`, '');
+    EFFORT = toolEffort || lib.readConfig(CONFIG_FILE, 'effort', '');
+  }
 }
 
 // ============================================================
@@ -250,7 +277,7 @@ async function runIteration(iteration, taskId) {
     const prompt = lib.buildWorkPrompt(taskId, TASKS_FILE, MODE, testFeedback || undefined);
 
     logInfo(`Spawning fresh ${TOOL} instance...${testAttempt > 0 ? ` (test retry ${testAttempt}/${TEST_RETRY_LIMIT})` : ''}`);
-    const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT, { debug: DEBUG });
+    const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (exitCode !== 0) {
       logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
@@ -450,6 +477,7 @@ async function cmdWork(descriptionParts = []) {
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
+  resolveModelAndEffort();
   if (MODE === 'autonomous') {
     MODE = lib.readConfig(CONFIG_FILE, 'mode.autonomy', 'autonomous');
   }
@@ -757,6 +785,7 @@ async function cmdReview() {
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
+  resolveModelAndEffort();
 
   logHeader('JONGGRANG Review');
 
@@ -766,7 +795,7 @@ async function cmdReview() {
   if (!lib.fileExists(logDir)) fs.mkdirSync(logDir, { recursive: true });
 
   logInfo('Running comprehensive review...');
-  await lib.runAgent(reviewPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+  await lib.runAgent(reviewPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
   logSuccess('Review complete. Check jonggrang-log/ for report.');
 }
@@ -888,6 +917,7 @@ async function cmdPlan(args, opts = {}) {
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
+  resolveModelAndEffort();
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
 
@@ -978,25 +1008,25 @@ async function cmdPlan(args, opts = {}) {
     // Phase 1: Discovery
     logInfo(`${BOLD}[1/3]${NC} Codebase discovery...`);
     const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE);
-    await lib.runAgent(discoveryPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+    await lib.runAgent(discoveryPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (!lib.fileExists(discoveryFile)) {
       logError('Discovery agent did not write .jonggrang/.ephemeral/deep-plan-discovery.md');
       logInfo('Falling back to standard plan generation...');
       const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
-      await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+      await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
     } else {
       // Phase 2: Analysis
       logInfo(`${BOLD}[2/3]${NC} Complexity analysis & brainstorm...`);
       const discoveryContent = fs.readFileSync(discoveryFile, 'utf8');
       const analysisPrompt = lib.buildDeepPlanAnalysisPrompt(description, discoveryContent);
-      await lib.runAgent(analysisPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+      await lib.runAgent(analysisPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
       if (!lib.fileExists(analysisFile)) {
         logError('Analysis agent did not write .jonggrang/.ephemeral/deep-plan-analysis.md');
         logInfo('Falling back to standard plan generation using discovery only...');
         const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
-        await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+        await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       } else {
         // Phase 3: Condense
         logInfo(`${BOLD}[3/3]${NC} Condensing into enriched plan.md...`);
@@ -1004,7 +1034,7 @@ async function cmdPlan(args, opts = {}) {
         const condensePrompt = lib.buildDeepPlanCondensePrompt(
           description, discoveryContent, analysisContent, CONFIG_FILE, TASKS_FILE
         );
-        await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+        await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
         // Clean up ephemeral files
         try {
@@ -1027,7 +1057,7 @@ async function cmdPlan(args, opts = {}) {
     feedback.clearFeedbackState(PROJECT_ROOT);
 
     const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
-    await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+    await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
   }
 
   if (autoApprove) {
@@ -1102,7 +1132,7 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts = {}) {
       logInfo('Revising plan with AI...');
       const currentPlan = fs.readFileSync(PLAN_FILE, 'utf8');
       const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, feedback.trim());
-      await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+      await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       // loop back → display updated plan + options again
 
     } else if (choice === 'edit') {
@@ -1145,6 +1175,7 @@ async function cmdApprove(args, opts = {}) {
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
+  resolveModelAndEffort();
 
   const planContent = fs.readFileSync(PLAN_FILE, 'utf8');
 
@@ -1168,7 +1199,7 @@ async function cmdApprove(args, opts = {}) {
   logInfo('Decomposing plan into tasks...');
 
   const prompt = lib.buildTasksFromPlanPrompt(planContent, CONFIG_FILE, TASKS_FILE, SKILLS_DIR);
-  await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+  await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
   // Stamp every newly created task with the authoritative feature_id.
   // Always overwrite: the decomposition agent may have set feature_id to the bare slug
@@ -1317,6 +1348,7 @@ async function cmdBug(args) {
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
   }
+  resolveModelAndEffort();
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
   const jonggrangDir = path.join(PROJECT_ROOT, '.jonggrang');
@@ -1569,6 +1601,7 @@ async function cmdInit() {
           { value: 'jonggrang', label: 'Jonggrang   — primary tool (Recommended)' },
           { value: 'claude',    label: 'Claude Code — primary tool' },
           { value: 'opencode',  label: 'OpenCode    — primary tool' },
+          { value: 'codex',     label: 'Codex       — OpenAI Codex CLI' },
         ],
       });
       if (isCancel(toolAnswer)) { cancel('Cancelled.'); return; }
@@ -1592,7 +1625,7 @@ async function cmdInit() {
   } else {
     const rl = createRL();
     if (!INIT_NAME)     INIT_NAME     = await ask(rl, 'Project name:',  path.basename(PROJECT_ROOT));
-    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'jonggrang', 'jonggrang|claude|opencode');
+    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'jonggrang', 'jonggrang|claude|opencode|codex');
     if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:',  'autonomous', 'supervised|balanced|autonomous');
     rl.close();
   }
@@ -1686,6 +1719,7 @@ async function cmdOrchestrate(descriptionParts) {
   const description = descriptionParts.join(' ').trim();
 
   checkDeps();
+  resolveModelAndEffort();
 
   // ── Check for resume (must come before empty-description guard) ──
   if (ORCHESTRATE_RESUME) {
@@ -1832,7 +1866,7 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     }
 
     // ── Run agent ─────────────────────────────────────────────────
-    const exitCode = await lib.runAgent(prompt, activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG });
+    const exitCode = await lib.runAgent(prompt, activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (exitCode !== 0) {
       logWarn(`Phase ${phaseNum} agent exited with code ${exitCode}`);
@@ -3052,15 +3086,24 @@ Init flags (bypass wizard):
   --force                 Overwrite existing jonggrang.json
   (stack, type, testing, ci are auto-detected from the project)
 
-Work flags:
+Work / Plan / Review flags:
   --mode <mode>           supervised | balanced | autonomous
-  --tool <tool>           Override AI tool
+  --tool <tool>           Override AI tool (jonggrang | claude | opencode)
+  --model <model>         Pin model for the spawned backend agent (see backend table below)
+  --effort <level>        Pin reasoning effort (see backend table below)
   --task <task-id>        Work on specific task only
   --max-iterations <n>    Max iterations (default: unlimited)
   --branch <name>         Feature branch name
   --dry-run               Preview prompts, no execution
   --debug                 Dump raw JSON from opencode/claude to stderr (diagnose stuck agents)
   --skip-gates            Skip quality gates even for MEDIUM/LARGE
+
+--model / --effort backend mapping:
+  --tool claude:     --model opus|sonnet|haiku|best|<full-id>   --effort low|medium|high|max|xhigh
+  --tool opencode:   --model anthropic/claude-sonnet-4-5-20250929  --effort high  (→ --variant)
+  --tool jonggrang:  --model anthropic/claude-sonnet-4-5  --effort high  (→ SDK thinkingLevel)
+
+Resolution order: --model flag > JONGGRANG_MODEL env > tools.<tool>.model in jonggrang.json > backend default
 
 Examples:
   jonggrang init
@@ -3073,6 +3116,11 @@ Examples:
   jonggrang work "add JWT auth" --deep --yes  # deep mode full pipeline
   jonggrang work --task task-003            # run specific task only
   jonggrang work --ignore-plan              # execute tasks, skip pending plan warning
+
+  # Pin model per-invocation (composes with --tool):
+  jonggrang plan "add auth" --tool claude --model opus --effort xhigh
+  jonggrang work --tool opencode --model anthropic/claude-opus-4-7 --effort high
+  jonggrang work --tool jonggrang --model anthropic/claude-sonnet-4-5 --effort medium
   jonggrang bug "null pointer on POST /hello"   # report a bug (interactive feature picker)
   jonggrang bug list                        # list all bugs across features
   jonggrang bug convert                     # AI converts open bugs → tasks
@@ -3137,6 +3185,8 @@ async function main() {
       case '--resume':        ORCHESTRATE_RESUME = true; break;
       case '--role':          ORCHESTRATE_ROLE = rest[++i]; break;
       case '--skip-gates':    SKIP_GATES = true; break;
+      case '--model':         MODEL = rest[++i]; break;
+      case '--effort':        EFFORT = rest[++i]; break;
       default:                planArgs.push(rest[i]); break;
     }
     i++;

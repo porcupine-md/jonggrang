@@ -4,9 +4,56 @@
 
 Jonggrang is a CLI tool that orchestrates AI coding agents to handle your development workflow. It uses a **Work Loop** model — decompose a feature into tasks, implement them one-by-one with a fresh agent per task.
 
-Supports three AI agent backends: [OpenCode](https://opencode.ai/), [Claude Code](https://claude.ai/code), and **Jonggrang** (built on [Pi](https://pi.dev/) — multi-provider, TypeScript-extensible).
+Supports four AI agent backends: [OpenCode](https://opencode.ai/), [Claude Code](https://claude.ai/code), [OpenAI Codex CLI](https://github.com/openai/codex), and **Jonggrang** (built on the [Pi](https://pi.dev/) SDK — multi-provider, TypeScript-extensible).
 
 Inspired by the [Ralph Loop](https://github.com/snarktank/ralph), [Agent Orchestra](https://addyosmani.com/blog/code-agent-orchestra/) (Addy Osmani), and the [collapsed SDLC](https://boristane.com/blog/the-software-development-lifecycle-is-dead/) (Boris Tane).
+
+---
+
+## Philosophy
+
+AI agents write code fast. Too fast. The bottleneck is no longer *writing* — it's *knowing when to stop, reflect, and clean up*.
+
+Jonggrang is built around one belief: **a codebase shaped by a disciplined process is cleaner than one shaped by raw speed.** Every feature passes through the same pipeline — not because every step is always necessary, but because skipping steps is how complexity accumulates silently.
+
+### The Pipeline Is the Quality Gate
+
+```
+                ┌─────────────────────────────────────┐
+                │              Hooks                  │
+                │  (active throughout — guards every  │
+                │   tool call, file edit, and exit)   │
+                └──────┬──────────────────────────────┘
+                       │ enforces invariants in real-time
+                       ▼
+Plan  →  Implement ⟲  →  Simplify  →  Test  →  Review
+               ▲____|
+          (loops until
+          quality gates
+             pass)
+```
+
+Each stage has a specific job:
+
+- **Plan** — the agent reads your intent and produces a structured task list. You review it before a single line of code is written. Humans stay in the loop at the point where it costs the least to change course.
+
+- **Implement** — each task runs in a *fresh context*. No accumulated confusion, no prompt memory carrying forward wrong assumptions. The agent starts clean every time. **Hooks run here** — blocking secret exposure, enforcing delegation, preventing context overload, and refusing to let the agent exit until the loop conditions are met.
+
+- **Hooks** — not a final stage, but a continuous enforcement layer woven into the implement loop. Every tool call, every file edit, every agent exit passes through hooks first. They police what the agent cannot be trusted to police itself: no secrets leaking into context, no orchestrator making direct edits it should delegate, no agent spawning when the context window is near-full, no exit until review and tests are green.
+
+- **Simplify** — after implementation, before the PR is opened, the agent revisits every changed file with a single mandate: *reduce complexity without changing behavior*. Rename the unclear variable. Collapse the redundant function. Remove the comment that just restates the code. This phase exists because the first pass is never the last word.
+
+- **Test** — the agent writes the tests, runs them, and verifies coverage. Tests are not an afterthought appended at the end; they are part of the definition of done for every task.
+
+- **Review** — a dedicated review pass reads the implementation as a future maintainer would. It asks: is this correct? is this maintainable? does it match the plan?
+
+### Why This Matters
+
+An AI agent without structure produces a codebase that looks finished but is made of layers. Each feature adds another layer — slightly different naming conventions, subtly duplicated logic, tests that assert the wrong thing. It works until it doesn't.
+
+The pipeline is the answer to that. It is not bureaucracy — it is the minimum structure required to keep the output coherent over time.
+
+Jonggrang is opinionated because it has to be. The agent will always take the shortest path. The framework's job is to make sure the shortest path is also the right one.
 
 ---
 
@@ -50,9 +97,9 @@ jonggrang work "feature" --deep --yes    # deep mode full pipeline
 ## Requirements
 
 - **AI agent** (pick one):
-  - [OpenCode](https://opencode.ai/) (default) — `curl -fsSL https://opencode.ai/install | bash`
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — `npm install -g @anthropic-ai/claude-code`
-  - **Jonggrang** (Pi engine, multi-provider) — `npm install -g @earendil-works/pi-coding-agent`
+  - [OpenCode](https://opencode.ai/) (`--tool opencode`) — `curl -fsSL https://opencode.ai/install | bash`
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`--tool claude`) — `npm install -g @anthropic-ai/claude-code`
+  - **Jonggrang** (`--tool jonggrang`, Pi SDK, multi-provider) — `npm install -g @earendil-works/pi-coding-agent`
 - [jq](https://jqlang.github.io/jq/) — `brew install jq`
 - git
 
@@ -105,8 +152,9 @@ jonggrang init --name my-app --type api --stack express-typescript --autonomy ba
 # With Claude Code
 jonggrang init --name my-app --type api --tool claude --autonomy autonomous --force
 
-# With Jonggrang (Pi engine — supports Anthropic, OpenAI, Gemini, DeepSeek, and more)
+# With Jonggrang (Pi SDK — supports Anthropic, OpenAI, Gemini, DeepSeek, and more)
 jonggrang init --name my-app --type api --tool jonggrang --autonomy autonomous --force
+
 ```
 
 ---
@@ -120,7 +168,7 @@ Interactive wizard that sets up your project. Generates:
 - `AGENTS.md` — project knowledge for AI agents (human-curated)
 - `.jonggrang/jonggrang-tasks.json` — task board
 - `.jonggrang/progress.txt` — append-only learnings log
-- `.claude/skills/`, `.opencode/skills/`, `.jonggrang/skills/` — prompt templates filtered by your project type
+- `.claude/skills/`, `.opencode/skills/`, `.jonggrang/skills/`, `.codex/skills/` — prompt templates filtered by your project type
 - `.claude/settings.json` — Claude Code enforcement hooks
 - `.opencode/plugins/jonggrang.js` — OpenCode enforcement plugin
 - `.jonggrang/extensions/jonggrang.ts` — Jonggrang (Pi) enforcement extension
@@ -135,7 +183,7 @@ Interactive wizard that sets up your project. Generates:
 | `--team-size` | `2-5` | Team size (if team) |
 | `--state` | `new`, `existing` | New or existing project |
 | `--stack` | `nextjs-typescript`, `express-typescript`, `go`, `python-fastapi`, `library-typescript`, `rust`, `python`, `node-typescript` | Tech stack |
-| `--tool` | `opencode`, `claude`, `jonggrang` | AI agent tool (default: opencode) |
+| `--tool` | `opencode`, `claude`, `jonggrang`, `codex` | AI agent tool (default: jonggrang) |
 | `--autonomy` | `supervised`, `balanced`, `autonomous` | Default autonomy mode |
 | `--ci` | `github-actions`, `gitlab-ci`, `none` | CI/CD provider |
 | `--testing` | `vitest`, `jest`, `go-test`, `pytest`, `none` | Test framework |
@@ -198,7 +246,22 @@ jonggrang work --task task-003                    # work on specific task
 jonggrang work --branch feat/auth                 # create/use a branch
 jonggrang work --dry-run                          # show prompts, don't execute
 jonggrang work --debug                            # dump raw JSON from opencode/claude to stderr
+
+# Pin model/effort per invocation (--tool and --model compose freely):
+jonggrang plan "add auth" --tool claude --model opus --effort xhigh
+jonggrang work --tool opencode --model anthropic/claude-opus-4-7 --effort high
+jonggrang work --tool jonggrang --model anthropic/claude-sonnet-4-5 --effort medium
+jonggrang work --tool codex --model codex-1 --effort high
 ```
+
+**`--model` / `--effort` backend mapping:**
+
+| jonggrang flag | `--tool claude` | `--tool opencode` | `--tool jonggrang` | `--tool codex` |
+|---|---|---|---|---|
+| `--model` | `--model <alias\|id>` e.g. `opus`, `claude-opus-4-7` | `--model <provider/model>` e.g. `anthropic/claude-opus-4-7` | `--model <provider/model>` e.g. `anthropic/claude-sonnet-4-5` | `--model <name>` e.g. `codex-1`, `gpt-5.4` |
+| `--effort` | `--effort low\|medium\|high\|max\|xhigh` | `--variant <level>` | SDK `thinkingLevel`: `off\|minimal\|low\|medium\|high\|xhigh` | `--config reasoning_effort=<level>` |
+
+Resolution order: `--model` flag → `JONGGRANG_MODEL` env → `tools.<tool>.model` in `jonggrang.json` → `model` top-level → backend default.
 
 ### `jonggrang status`
 
@@ -609,8 +672,14 @@ See `.jonggrang/jonggrang.json` after init:
 ```jsonc
 {
   "tool": "opencode",          // opencode | claude | jonggrang
+  "model": "",                 // default model for --tool (backend-specific format; see docs/CONFIG.md)
+  "effort": "",                // default effort/thinking level
+  "tools": {                   // optional per-tool overrides for model/effort
+    "claude":     { "model": "opus",                              "effort": "high" },
+    "opencode":   { "model": "anthropic/claude-opus-4-7",         "effort": "max"  },
+    "jonggrang":  { "model": "anthropic/claude-sonnet-4-5",       "effort": "high" }
+  },
   "provider": "anthropic",     // set by jonggrang model (jonggrang tool only)
-  "model": "claude-opus-4-5",  // set by jonggrang model (jonggrang tool only)
   "mode": {
     "autonomy": "balanced"
   },

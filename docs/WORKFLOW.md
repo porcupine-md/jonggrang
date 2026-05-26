@@ -257,6 +257,11 @@ jonggrang work --dry-run                # preview prompt only
 jonggrang work --tool claude            # override AI tool
 jonggrang work --mode supervised        # override autonomy
 jonggrang work --debug                  # dump raw JSON from agent to stderr
+
+# Pin model and effort per invocation (--tool and --model compose freely)
+jonggrang plan "add auth" --tool claude --model opus --effort xhigh
+jonggrang work --tool opencode --model anthropic/claude-opus-4-7 --effort high
+jonggrang review --tool jonggrang --model anthropic/claude-sonnet-4-5 --effort medium
 ```
 
 ---
