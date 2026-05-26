@@ -270,7 +270,7 @@ Inside the chat, use `/` commands to trigger jonggrang workflow operations witho
 
 All other Pi built-in commands (`/compact`, `/help`, Ctrl+P model cycling, etc.) work as normal.
 
-Security hooks (`hooks/pi/jonggrang-extension.ts`) are loaded automatically on every `jonggrang agent` session — no manual installation needed. The extension blocks access to `.env` and credential files, intercepts secret-leaking bash commands, sanitizes sensitive output, and enforces the feedback loop gate.
+Security hooks (`hooks/jonggrang/jonggrang-extension.ts`) are loaded automatically on every `jonggrang agent` session — no manual installation needed. The extension blocks access to `.env` and credential files, intercepts secret-leaking bash commands, sanitizes sensitive output, and enforces the feedback loop gate.
 
 > Requires the jonggrang engine (`npm install -g @earendil-works/pi-coding-agent`). Run `jonggrang login` first to configure a provider.
 
@@ -429,7 +429,7 @@ Hooks enforce quality gates outside the LLM's context. The same rules apply rega
 | 8 | Stop | `Stop` | `session.idle` | `agent_end` | Block exit until review + tests pass |
 | 8 | Stop | `Stop` | `session.idle` | `agent_end` | Final quality gate (defense in depth) |
 
-Jonggrang hooks live in `hooks/pi/jonggrang-extension.ts` and are loaded automatically via `--extension` on every `jonggrang agent` invocation — no separate installation step required.
+Jonggrang hooks live in `hooks/jonggrang/jonggrang-extension.ts` and are loaded automatically via `--extension` on every `jonggrang agent` invocation — no separate installation step required.
 
 **Feedback Loop (Level 2 enforcement):**
 
@@ -623,13 +623,13 @@ See `.jonggrang/jonggrang.json` after init:
 
 ```jsonc
 {
-  "tool": "opencode",          // opencode | claude | jonggrang | pi
+  "tool": "opencode",          // opencode | claude | jonggrang
   "model": "",                 // default model for --tool (backend-specific format; see docs/CONFIG.md)
   "effort": "",                // default effort/thinking level
   "tools": {                   // optional per-tool overrides for model/effort
-    "claude":   { "model": "opus",                             "effort": "high" },
-    "opencode": { "model": "anthropic/claude-opus-4-7",        "effort": "max"  },
-    "pi":       { "model": "claude-sonnet-4-5",                "effort": "high" }
+    "claude":     { "model": "opus",                              "effort": "high" },
+    "opencode":   { "model": "anthropic/claude-opus-4-7",         "effort": "max"  },
+    "jonggrang":  { "model": "anthropic/claude-sonnet-4-5",       "effort": "high" }
   },
   "provider": "anthropic",     // set by jonggrang model (jonggrang tool only)
   "mode": {
