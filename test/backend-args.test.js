@@ -104,41 +104,12 @@ test('opencode: bare model name error message shows example', () => {
   );
 });
 
-// ── Pi backend ────────────────────────────────────────────────
+// ── Jonggrang (SDK) backend ───────────────────────────────────
+// model/effort are resolved via SDK API in runAgent(), not as CLI flags
 
-test('pi: --model alone', () => {
+test('jonggrang: returns empty array (SDK resolves model/effort internally)', () => {
   assert.deepStrictEqual(
-    buildAgentArgs({ tool: 'pi', model: 'claude-sonnet-4-5', effort: '' }),
-    ['--model', 'claude-sonnet-4-5']
-  );
-});
-
-test('pi: --effort → --thinking', () => {
-  assert.deepStrictEqual(
-    buildAgentArgs({ tool: 'pi', model: '', effort: 'high' }),
-    ['--thinking', 'high']
-  );
-});
-
-test('pi: --model + --effort → --model + --thinking', () => {
-  assert.deepStrictEqual(
-    buildAgentArgs({ tool: 'pi', model: 'claude-sonnet-4-5', effort: 'medium' }),
-    ['--model', 'claude-sonnet-4-5', '--thinking', 'medium']
-  );
-});
-
-test('pi: provider/model format passes through', () => {
-  assert.deepStrictEqual(
-    buildAgentArgs({ tool: 'pi', model: 'anthropic/claude-opus-4-7', effort: 'xhigh' }),
-    ['--model', 'anthropic/claude-opus-4-7', '--thinking', 'xhigh']
-  );
-});
-
-// ── Jonggrang (Pi SDK) backend ────────────────────────────────
-
-test('jonggrang: model/effort ignored (returns empty array)', () => {
-  assert.deepStrictEqual(
-    buildAgentArgs({ tool: 'jonggrang', model: 'some-model', effort: 'high' }),
+    buildAgentArgs({ tool: 'jonggrang', model: 'anthropic/claude-sonnet-4-5', effort: 'high' }),
     []
   );
 });

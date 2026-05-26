@@ -4,7 +4,7 @@
 
 Jonggrang is a CLI tool that orchestrates AI coding agents to handle your development workflow. It uses a **Work Loop** model — decompose a feature into tasks, implement them one-by-one with a fresh agent per task.
 
-Supports four AI agent backends: [OpenCode](https://opencode.ai/), [Claude Code](https://claude.ai/code), **Jonggrang** (built on [Pi](https://pi.dev/) — multi-provider, TypeScript-extensible), and **Pi CLI** (`--tool pi`).
+Supports three AI agent backends: [OpenCode](https://opencode.ai/), [Claude Code](https://claude.ai/code), and **Jonggrang** (built on the [Pi](https://pi.dev/) SDK — multi-provider, TypeScript-extensible).
 
 Inspired by the [Ralph Loop](https://github.com/snarktank/ralph), [Agent Orchestra](https://addyosmani.com/blog/code-agent-orchestra/) (Addy Osmani), and the [collapsed SDLC](https://boristane.com/blog/the-software-development-lifecycle-is-dead/) (Boris Tane).
 
@@ -53,7 +53,6 @@ jonggrang work "feature" --deep --yes    # deep mode full pipeline
   - [OpenCode](https://opencode.ai/) (`--tool opencode`) — `curl -fsSL https://opencode.ai/install | bash`
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`--tool claude`) — `npm install -g @anthropic-ai/claude-code`
   - **Jonggrang** (`--tool jonggrang`, Pi SDK, multi-provider) — `npm install -g @earendil-works/pi-coding-agent`
-  - **Pi CLI** (`--tool pi`, multi-provider) — `npm install -g @mariozechner/pi-coding-agent`
 - [jq](https://jqlang.github.io/jq/) — `brew install jq`
 - git
 
@@ -109,8 +108,6 @@ jonggrang init --name my-app --type api --tool claude --autonomy autonomous --fo
 # With Jonggrang (Pi SDK — supports Anthropic, OpenAI, Gemini, DeepSeek, and more)
 jonggrang init --name my-app --type api --tool jonggrang --autonomy autonomous --force
 
-# With Pi CLI (multi-provider, lightweight CLI)
-jonggrang init --name my-app --type api --tool pi --autonomy autonomous --force
 ```
 
 ---
@@ -139,7 +136,7 @@ Interactive wizard that sets up your project. Generates:
 | `--team-size` | `2-5` | Team size (if team) |
 | `--state` | `new`, `existing` | New or existing project |
 | `--stack` | `nextjs-typescript`, `express-typescript`, `go`, `python-fastapi`, `library-typescript`, `rust`, `python`, `node-typescript` | Tech stack |
-| `--tool` | `opencode`, `claude`, `jonggrang`, `pi` | AI agent tool (default: jonggrang) |
+| `--tool` | `opencode`, `claude`, `jonggrang` | AI agent tool (default: jonggrang) |
 | `--autonomy` | `supervised`, `balanced`, `autonomous` | Default autonomy mode |
 | `--ci` | `github-actions`, `gitlab-ci`, `none` | CI/CD provider |
 | `--testing` | `vitest`, `jest`, `go-test`, `pytest`, `none` | Test framework |
@@ -206,15 +203,15 @@ jonggrang work --debug                            # dump raw JSON from opencode/
 # Pin model/effort per invocation (--tool and --model compose freely):
 jonggrang plan "add auth" --tool claude --model opus --effort xhigh
 jonggrang work --tool opencode --model anthropic/claude-opus-4-7 --effort high
-jonggrang review --tool pi --model claude-sonnet-4-5 --effort medium
+jonggrang work --tool jonggrang --model anthropic/claude-sonnet-4-5 --effort medium
 ```
 
 **`--model` / `--effort` backend mapping:**
 
-| jonggrang flag | `--tool claude` | `--tool opencode` | `--tool pi` |
+| jonggrang flag | `--tool claude` | `--tool opencode` | `--tool jonggrang` |
 |---|---|---|---|
-| `--model` | `--model <alias\|id>` e.g. `opus`, `claude-opus-4-7` | `--model <provider/model>` e.g. `anthropic/claude-opus-4-7` | `--model <model>` e.g. `claude-sonnet-4-5` |
-| `--effort` | `--effort low\|medium\|high\|max\|xhigh` | `--variant <level>` | `--thinking off\|minimal\|low\|medium\|high\|xhigh` |
+| `--model` | `--model <alias\|id>` e.g. `opus`, `claude-opus-4-7` | `--model <provider/model>` e.g. `anthropic/claude-opus-4-7` | `--model <provider/model>` e.g. `anthropic/claude-sonnet-4-5` |
+| `--effort` | `--effort low\|medium\|high\|max\|xhigh` | `--variant <level>` | SDK `thinkingLevel`: `off\|minimal\|low\|medium\|high\|xhigh` |
 
 Resolution order: `--model` flag → `JONGGRANG_MODEL` env → `tools.<tool>.model` in `jonggrang.json` → `model` top-level → backend default.
 

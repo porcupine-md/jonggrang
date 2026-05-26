@@ -168,7 +168,6 @@ function checkDeps() {
         case 'git':      console.log('  Install git:      brew install git'); break;
         case 'opencode':  console.log('  Install opencode:  curl -fsSL https://opencode.ai/install | bash'); break;
         case 'claude':    console.log('  Install claude:    npm install -g @anthropic-ai/claude-code'); break;
-        case 'pi':        console.log('  Install pi:        npm install -g @mariozechner/pi-coding-agent'); break;
         case '@earendil-works/pi-coding-agent': console.log('  Install Pi SDK:  npm install -g @earendil-works/pi-coding-agent'); break;
         default:         console.log(`  Install ${cmd}`); break;
       }
@@ -1599,7 +1598,6 @@ async function cmdInit() {
           { value: 'jonggrang', label: 'Jonggrang   — primary tool (Recommended)' },
           { value: 'claude',    label: 'Claude Code — primary tool' },
           { value: 'opencode',  label: 'OpenCode    — primary tool' },
-          { value: 'pi',        label: 'Pi          — primary tool (CLI, multi-provider)' },
         ],
       });
       if (isCancel(toolAnswer)) { cancel('Cancelled.'); return; }
@@ -1623,7 +1621,7 @@ async function cmdInit() {
   } else {
     const rl = createRL();
     if (!INIT_NAME)     INIT_NAME     = await ask(rl, 'Project name:',  path.basename(PROJECT_ROOT));
-    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'jonggrang', 'jonggrang|claude|opencode|pi');
+    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'jonggrang', 'jonggrang|claude|opencode');
     if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:',  'autonomous', 'supervised|balanced|autonomous');
     rl.close();
   }
@@ -3078,14 +3076,14 @@ Work type auto-detection:
 
 Init flags (bypass wizard):
   --name <name>           Project name
-  --tool <tool>           jonggrang | claude | opencode | pi (default: jonggrang) — all tools always set up
+  --tool <tool>           jonggrang | claude | opencode (default: jonggrang) — all tools always set up
   --autonomy <mode>       supervised | balanced | autonomous
   --force                 Overwrite existing jonggrang.json
   (stack, type, testing, ci are auto-detected from the project)
 
 Work / Plan / Review flags:
   --mode <mode>           supervised | balanced | autonomous
-  --tool <tool>           Override AI tool (jonggrang | claude | opencode | pi)
+  --tool <tool>           Override AI tool (jonggrang | claude | opencode)
   --model <model>         Pin model for the spawned backend agent (see backend table below)
   --effort <level>        Pin reasoning effort (see backend table below)
   --task <task-id>        Work on specific task only
@@ -3098,8 +3096,7 @@ Work / Plan / Review flags:
 --model / --effort backend mapping:
   --tool claude:     --model opus|sonnet|haiku|best|<full-id>   --effort low|medium|high|max|xhigh
   --tool opencode:   --model anthropic/claude-sonnet-4-5-20250929  --effort high  (→ --variant)
-  --tool pi:         --model claude-sonnet-4-5                  --effort high  (→ --thinking)
-  --tool jonggrang:  use \`jonggrang model\` to set model (SDK backend ignores --model/--effort)
+  --tool jonggrang:  --model anthropic/claude-sonnet-4-5  --effort high  (→ SDK thinkingLevel)
 
 Resolution order: --model flag > JONGGRANG_MODEL env > tools.<tool>.model in jonggrang.json > backend default
 
@@ -3118,7 +3115,7 @@ Examples:
   # Pin model per-invocation (composes with --tool):
   jonggrang plan "add auth" --tool claude --model opus --effort xhigh
   jonggrang work --tool opencode --model anthropic/claude-opus-4-7 --effort high
-  jonggrang review --tool pi --model claude-sonnet-4-5 --effort medium
+  jonggrang work --tool jonggrang --model anthropic/claude-sonnet-4-5 --effort medium
   jonggrang bug "null pointer on POST /hello"   # report a bug (interactive feature picker)
   jonggrang bug list                        # list all bugs across features
   jonggrang bug convert                     # AI converts open bugs → tasks
