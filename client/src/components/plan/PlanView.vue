@@ -126,6 +126,13 @@
             <span class="plan-editor-title">{{ selectedPlan.title }}</span>
             <div class="plan-editor-actions">
               <Button label="Discard" severity="secondary" @click="discardPlan" />
+              <Button
+                severity="secondary"
+                :class="{ 'btn-active': showChatSidebar }"
+                @click="showChatSidebar = !showChatSidebar"
+              >
+                <i class="pi pi-comments" /> Discuss
+              </Button>
               <Button severity="secondary" @click="toggleReviseBar">
                 <i class="pi pi-wand-magic-sparkles" /> Revise with AI
               </Button>
@@ -135,33 +142,78 @@
             </div>
           </div>
 
-          <!-- Markdown editor -->
-          <div class="plan-editor-body">
-            <Textarea
-              v-model="planContent"
-              class="plan-editor-textarea"
-              fluid
-              @input="onEditorChange"
-            />
-          </div>
+          <!-- Editor row: textarea + optional chat sidebar -->
+          <div class="plan-editor-row">
+            <div class="plan-editor-col">
+              <div class="plan-editor-body">
+                <Textarea
+                  v-model="planContent"
+                  class="plan-editor-textarea"
+                  fluid
+                  @input="onEditorChange"
+                />
+              </div>
 
-          <!-- Revise bar -->
-          <div v-if="showReviseBar" class="revise-bar">
-            <input
-              v-model="reviseInstruction"
-              class="revise-input"
-              placeholder="Describe what to change, e.g. 'also add rate limiting and caching'"
-              @keydown.enter="submitRevise"
-              @keydown.escape="showReviseBar = false"
-              ref="reviseInputEl"
-            />
-            <Button :disabled="!reviseInstruction.trim()" @click="submitRevise">
-              <i class="pi pi-send" /> Revise
-            </Button>
-            <Button severity="secondary" @click="showReviseBar = false">Cancel</Button>
-          </div>
+              <!-- Revise bar -->
+              <div v-if="showReviseBar" class="revise-bar">
+                <input
+                  v-model="reviseInstruction"
+                  class="revise-input"
+                  placeholder="Describe what to change, e.g. 'also add rate limiting and caching'"
+                  @keydown.enter="submitRevise"
+                  @keydown.escape="showReviseBar = false"
+                  ref="reviseInputEl"
+                />
+                <Button :disabled="!reviseInstruction.trim()" @click="submitRevise">
+                  <i class="pi pi-send" /> Revise
+                </Button>
+                <Button severity="secondary" @click="showReviseBar = false">Cancel</Button>
+              </div>
 
-          <div v-if="genError" class="error-text" style="padding:8px 16px">{{ genError }}</div>
+              <div v-if="genError" class="error-text" style="padding:8px 16px">{{ genError }}</div>
+            </div>
+
+            <!-- Chat sidebar -->
+            <div v-if="showChatSidebar" class="plan-chat-sidebar">
+              <div class="chat-sidebar-header">
+                <span class="chat-sidebar-title"><i class="pi pi-comments" /> Discuss</span>
+                <button class="chat-close-btn" @click="showChatSidebar = false"><i class="pi pi-times" /></button>
+              </div>
+              <div class="chat-messages" ref="chatMessagesRef">
+                <div v-if="chatMessages.length === 0" class="chat-empty">
+                  Ask anything about this plan — suggest changes, explore trade-offs, identify risks.
+                </div>
+                <div
+                  v-for="msg in chatMessages"
+                  :key="msg.id"
+                  :class="['chat-msg', `chat-msg--${msg.role}`]"
+                >
+                  <div class="chat-msg-content">{{ msg.content }}</div>
+                  <button
+                    v-if="msg.role === 'assistant'"
+                    class="chat-apply-btn"
+                    title="Use this as a revision instruction"
+                    @click="applyAsRevision(msg.content)"
+                  ><i class="pi pi-pencil" /> Apply as Revision</button>
+                </div>
+                <div v-if="chatLoading" class="chat-msg chat-msg--loading">
+                  <i class="pi pi-spin pi-spinner" /> Thinking...
+                </div>
+              </div>
+              <div class="chat-input-row">
+                <textarea
+                  v-model="chatInput"
+                  class="chat-input"
+                  placeholder="Ask about this plan… (Ctrl+Enter to send)"
+                  rows="2"
+                  @keydown.ctrl.enter="sendChat"
+                />
+                <Button :disabled="!chatInput.trim() || chatLoading" @click="sendChat">
+                  <i class="pi pi-send" />
+                </Button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Read-only: archived/approved/done plan -->
@@ -291,6 +343,13 @@ const dirty = ref(false);
 const showReviseBar = ref(false);
 const reviseInstruction = ref('');
 const reviseInputEl = ref(null);
+
+// Chat sidebar
+const showChatSidebar = ref(false);
+const chatMessages = ref([]);
+const chatInput = ref('');
+const chatLoading = ref(false);
+const chatMessagesRef = ref(null);
 
 // Rendered markdown for viewer
 const renderedContent = computed(() => {
@@ -447,6 +506,37 @@ async function submitRevise() {
     genError.value = e.message;
     revising.value = false;
   }
+}
+
+async function sendChat() {
+  const msg = chatInput.value.trim();
+  if (!msg || chatLoading.value) return;
+  const id = Date.now();
+  chatMessages.value.push({ id, role: 'user', content: msg });
+  chatInput.value = '';
+  chatLoading.value = true;
+  try {
+    const history = chatMessages.value.slice(0, -1);
+    const res = await fetch(`/api/projects/${projectId.value}/plan/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, history }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Chat failed');
+    chatMessages.value.push({ id: id + 1, role: 'assistant', content: data.content });
+  } catch (e) {
+    chatMessages.value.push({ id: id + 2, role: 'error', content: e.message });
+  }
+  chatLoading.value = false;
+  await nextTick();
+  if (chatMessagesRef.value) chatMessagesRef.value.scrollTop = chatMessagesRef.value.scrollHeight;
+}
+
+function applyAsRevision(content) {
+  reviseInstruction.value = content.slice(0, 500);
+  showReviseBar.value = true;
+  nextTick(() => reviseInputEl.value?.focus());
 }
 
 async function savePlan() {
@@ -617,6 +707,9 @@ watch(projectId, loadPlans);
 }
 .plan-editor-title { font-size: 13px; font-weight: 600; color: var(--jg-text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-editor-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.btn-active :deep(.p-button) { border-color: var(--jg-green) !important; color: var(--jg-green) !important; }
+.plan-editor-row { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+.plan-editor-col { display: flex; flex-direction: column; flex: 1; overflow: hidden; min-height: 0; }
 .plan-editor-body { flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; }
 .plan-editor-body :deep(.plan-editor-textarea) { flex: 1; height: 100% !important; resize: none; border: none !important; border-radius: 0 !important; font-size: 13px !important; line-height: 1.7 !important; padding: 16px !important; background: var(--jg-bg) !important; color: var(--jg-text) !important; }
 .plan-editor-body :deep(.plan-editor-textarea:focus) { box-shadow: none !important; outline: none !important; }
@@ -633,6 +726,61 @@ watch(projectId, loadPlans);
   color: var(--jg-text); padding: 6px 10px; outline: none;
 }
 .revise-input:focus { border-color: var(--jg-orange); }
+
+/* Chat sidebar */
+.plan-chat-sidebar {
+  width: 340px; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden;
+  border-left: 1px solid var(--jg-border);
+}
+.chat-sidebar-header {
+  display: flex; align-items: center; padding: 8px 12px;
+  border-bottom: 1px solid var(--jg-border); flex-shrink: 0;
+  background: var(--jg-card);
+}
+.chat-sidebar-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--jg-text-faint); flex: 1; display: flex; align-items: center; gap: 6px; }
+.chat-close-btn {
+  width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--jg-text-faint); cursor: pointer;
+}
+.chat-close-btn:hover { color: var(--jg-text); }
+.chat-close-btn .pi { font-size: 11px; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.chat-empty { font-size: 11px; color: var(--jg-text-faint); text-align: center; margin: auto; padding: 20px; line-height: 1.6; }
+.chat-msg { display: flex; flex-direction: column; gap: 4px; }
+.chat-msg--user .chat-msg-content {
+  align-self: flex-end; background: color-mix(in oklch, var(--jg-green) 12%, transparent);
+  border: 1px solid color-mix(in oklch, var(--jg-green) 30%, transparent);
+  padding: 6px 10px; font-size: 12px; color: var(--jg-text); max-width: 90%; line-height: 1.5;
+}
+.chat-msg--assistant .chat-msg-content {
+  background: var(--jg-hover); border: 1px solid var(--jg-border);
+  padding: 8px 10px; font-size: 12px; color: var(--jg-text); line-height: 1.6; white-space: pre-wrap;
+}
+.chat-msg--error .chat-msg-content {
+  background: color-mix(in oklch, var(--jg-red) 10%, transparent);
+  border: 1px solid color-mix(in oklch, var(--jg-red) 30%, transparent);
+  padding: 6px 10px; font-size: 12px; color: var(--jg-red);
+}
+.chat-msg--loading { color: var(--jg-text-faint); font-size: 11px; display: flex; align-items: center; gap: 6px; }
+.chat-apply-btn {
+  align-self: flex-start; font-size: 10px; font-family: var(--font-mono);
+  background: none; border: 1px solid var(--jg-border); color: var(--jg-text-faint);
+  padding: 2px 7px; cursor: pointer; display: flex; align-items: center; gap: 4px;
+  transition: color 0.12s, border-color 0.12s;
+}
+.chat-apply-btn:hover { color: var(--jg-orange); border-color: var(--jg-orange); }
+.chat-apply-btn .pi { font-size: 10px; }
+.chat-input-row {
+  display: flex; gap: 6px; padding: 8px 10px;
+  border-top: 1px solid var(--jg-border); flex-shrink: 0;
+  background: var(--jg-card);
+}
+.chat-input {
+  flex: 1; font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+  background: var(--jg-bg); border: 1px solid var(--jg-border);
+  color: var(--jg-text); padding: 6px 8px; outline: none; resize: none;
+}
+.chat-input:focus { border-color: var(--jg-green); }
 
 /* Read-only viewer */
 .plan-viewer-wrap { display: flex; flex-direction: column; flex: 1; overflow: hidden; }

@@ -186,6 +186,7 @@ module.exports = function register(app, io, ctx) {
     app.use('/api', require('../models')(deps));
     app.use('/api/projects', require('./init')(deps));
     app.use('/api/projects', require('./plan')(deps));
+    app.use('/api/projects', require('./chat')(deps));
     app.use('/api/projects', require('./manifest')(deps));
     app.use('/api/projects', require('./approve')(deps));
     app.use('/api/projects', require('./tasks')(deps));

@@ -430,6 +430,13 @@ async function runPostWorkPhases(description, workType, featureId, manifest, man
 async function cmdWork(descriptionParts = []) {
   // --resume: skip work loop, go straight to orchestration resume
   if (ORCHESTRATE_RESUME) {
+    if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
+      TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
+    }
+    resolveModelAndEffort();
+    if (MODE === 'autonomous') {
+      MODE = lib.readConfig(CONFIG_FILE, 'mode.autonomy', 'autonomous');
+    }
     const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
     if (!existing) {
       logError('No incomplete orchestration found to resume.');
