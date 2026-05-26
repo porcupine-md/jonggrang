@@ -1,17 +1,19 @@
 # Contributing to Jonggrang
 
-Senang kamu tertarik kontribusi! Panduan singkat supaya prosesnya lancar.
+You found this. That means you either broke something, want to build something, or just like reading contribution guides (weird flex, but okay).
+
+Here's how to make it painless for you, for us, and for the AI agents who will eventually review your PR.
 
 ---
 
-## Prinsip Utama
+## Core Principles
 
-Jonggrang adalah alat untuk **mendisiplinkan AI coding agent**. Maka kode Jonggrang sendiri juga harus disiplin. Setiap kontribusi harus:
+Jonggrang exists to **discipline AI coding agents**. So yes, we eat our own dog food. This codebase is held to the same standards. Every contribution should:
 
-1. **Punya issue dulu** — diskusikan sebelum coding. Hindari PR yang datang tiba-tiba tanpa konteks.
-2. **Satu PR, satu concern** — jangan gabung bugfix + fitur baru + refactor dalam satu PR.
-3. **Test kalau memungkinkan** — terutama untuk `lib/` dan perubahan logic.
-4. **Update docs kalau relevan** — kalau kamu ubah behavior, update `docs/` yang terkait.
+1. **Start with an issue** — discuss before coding. PRs that materialize from the void make us nervous.
+2. **One PR, one concern** — don't sneak three features, two bugfixes, and a refactor into one PR. We see you.
+3. **Test when you can** — especially for `lib/` and logic changes. AI agents are good at writing tests. Use them.
+4. **Update docs** — if you change behavior and the docs still say the old thing, you just created a time bomb for the next person.
 
 ---
 
@@ -28,35 +30,35 @@ make build
 
 ---
 
-## Workflow Kontribusi
+## Contribution Workflow
 
-### 1. Pilih atau buat issue
+### 1. Pick or open an issue
 
-Cek [GitHub Issues](https://github.com/porcupine-md/jonggrang/issues). Kalau belum ada yang cocok, buat issue baru. Jelaskan:
-- Apa yang ingin diubah/diperbaiki
-- Kenapa perlu
-- Kalau fitur baru: bagaimana perilaku yang diharapkan
+Check [GitHub Issues](https://github.com/porcupine-md/jonggrang/issues). If nothing fits, open a new one. Tell us:
+- What you want to change/fix
+- Why anyone should care
+- For features: what "done" looks like
 
 ### 2. Branch
 
 ```bash
-git checkout -b feat/nama-fitur     # fitur baru
-git checkout -b fix/nama-bug        # bugfix
-git checkout -b docs/apa-yang-diupdate  # dokumentasi
+git checkout -b feat/feature-name     # new feature
+git checkout -b fix/bug-name          # bugfix
+git checkout -b docs/whats-updated    # documentation
 ```
 
 ### 3. Commit
 
-Kami pakai conventional commits:
+We use conventional commits. It keeps the changelog readable and the bots happy:
 
 ```
-feat: tambah support --deep mode untuk plan staging
-fix: compaction gate crash saat context window kosong
-docs: update QUICKSTART dengan troubleshooting
-refactor: ekstrak feedback loop ke file sendiri
+feat: add --deep mode support for plan staging
+fix: compaction gate crash on empty context window
+docs: update QUICKSTART with troubleshooting
+refactor: extract feedback loop to separate file
 ```
 
-Bahasa commit: **campur Indonesia/Inggris boleh**, yang penting jelas dan deskriptif.
+Commit messages in **English please**. Doesn't need to be Shakespeare — just clear enough that someone six months from now won't curse your name.
 
 ### 4. Test & check
 
@@ -65,73 +67,73 @@ npm test            # run test suite
 npm run check       # syntax + structure check
 ```
 
-### 5. Buka Pull Request
+### 5. Open a Pull Request
 
-Deskripsi PR harus menjawab:
-- **What** — apa yang berubah
-- **Why** — kenapa berubah
-- **How to test** — langkah verifikasi
+Your PR description should answer three questions:
+- **What** — what actually changed
+- **Why** — what would break if we didn't do this
+- **How to test** — give us a script, a command, something we can copy-paste
 
-Setelah PR dibuka, maintainer akan review dalam 1-3 hari kerja.
+We'll review within 1-3 business days. If it takes longer, we're either on vacation or the AI agents staged a coup.
 
 ---
 
-## Panduan Teknis
+## Technical Guide
 
-### Area kontribusi dan file terkait
+### Where to touch what
 
-| Area | File | Cocok kalau kamu... |
-|------|------|--------------------|
-| CLI command baru | `bin/jonggrang.js`, `lib/jonggrang.js` | Mau tambah `jonggrang xyz` |
-| Orchestration phase | `lib/orchestration.js` | Mau ubah alur kerja |
-| Hook sistem | `hooks/{claude,opencode,pi}/` | Mau tambah enforcement rules |
-| Core skill | `skills/core/<nama>/SKILL.md` | Mau tambah prompt template |
-| Library skill | `skills/library/<domain>/<nama>/SKILL.md` | Mau tambah domain knowledge |
-| Dashboard UI | `client/src/` | Mau ubah tampilan web |
-| Dashboard API | `server.js` | Mau tambah endpoint |
-| Template init | `templates/` | Mau ubah hasil `jonggrang init` |
-| Dokumentasi | `docs/` | Mau perbaiki/terjemahkan docs |
+| Area | File | When you want to... |
+|------|------|-------------------|
+| New CLI command | `bin/jonggrang.js`, `lib/jonggrang.js` | Add `jonggrang xyz` |
+| Orchestration phase | `lib/orchestration.js` | Change how work flows |
+| Hook system | `hooks/{claude,opencode,pi}/` | Add enforcement rules |
+| Core skill | `skills/core/<name>/SKILL.md` | Add a prompt template |
+| Library skill | `skills/library/<domain>/<name>/SKILL.md` | Add domain knowledge |
+| Dashboard UI | `client/src/` | Change the web UI |
+| Dashboard API | `server.js` | Add endpoints |
+| Init templates | `templates/` | Change what `jonggrang init` spits out |
+| Documentation | `docs/` | Fix typos, translate, add guides |
 
-### Struktur skill
+### How to write a skill
 
-Kalau bikin skill baru, gunakan format:
+Skills are markdown files that teach AI agents how to do things. Here's the format:
 
 ```markdown
 ---
-name: nama-skill
-description: Apa yang dilakukan skill ini
+name: skill-name
+description: What this skill does — be specific
 type: scaffold
 tier: core
 project_types: [web-app, api]
-trigger: "kata kunci yang memicu skill ini"
+trigger: "keywords that should activate this skill"
 ---
 
 ## Context
-Background info yang dibutuhkan agent.
+What the agent needs to know before starting.
 
 ## Instructions
-1. Langkah pertama
-2. Langkah kedua
+1. Do this first
+2. Then this
 
 ## Validation
-- [ ] Cek yang harus dipenuhi
+- [ ] This must be true when the skill is done
 ```
 
-### Gaya kode
+### Code style (or: how to not make Ibnu sigh)
 
-- **JavaScript plain**, bukan TypeScript (kecuali `hooks/pi/` yang emang `.ts`)
-- **Jangan over-engineer** — fungsi kecil, satu tanggung jawab
-- **Nama yang jelas** — `compactionGate.js` lebih baik dari `util2.js`
-- **Komentar sparingly** — kode yang bersih menjelaskan dirinya sendiri
+- **Plain JavaScript** unless you're in `hooks/pi/` (that one's TypeScript, don't fight it)
+- **Small functions, single purpose** — if your function does three things, it's three functions wearing a trench coat
+- **Name things like you mean it** — `compactionGate.js` > `util2.js`
+- **Comment sparingly** — if you need a paragraph to explain what a function does, the function name is wrong
 
 ---
 
-## Butuh Bantuan?
+## Stuck?
 
-Buka [GitHub Issues](https://github.com/porcupine-md/jonggrang/issues) atau tanya langsung ke maintainer.
+Open a [GitHub Issue](https://github.com/porcupine-md/jonggrang/issues) or ping a maintainer. We don't bite. The AI agents might, but we keep them on a leash.
 
 ---
 
 ## License
 
-Dengan berkontribusi, kamu setuju bahwa kontribusimu dilisensikan di bawah [MIT License](LICENSE) yang sama dengan proyek ini.
+By contributing, you agree your work falls under the same [MIT License](LICENSE). That means anyone can use it, sell it, or build it into their thing — just don't sue us if something breaks.

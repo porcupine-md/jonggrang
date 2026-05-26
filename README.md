@@ -1,10 +1,10 @@
 # Jonggrang
 
-> AI Development Workflow Orchestrator — from idea to production-ready code.
+> AI agents write code fast. Too fast. Jonggrang makes sure they don't make a mess while doing it.
 
-Jonggrang is a CLI tool that orchestrates AI coding agents through a disciplined **Plan → Implement → Simplify → Test → Review** pipeline. It decomposes features into atomic tasks and executes them one-by-one with a fresh agent per task — no accumulated confusion, no drifting context.
+Jonggrang is a CLI tool that puts AI coding agents through a **Plan → Implement → Simplify → Test → Review** pipeline. It breaks features into atomic tasks, runs each one with a fresh agent, and refuses to let anything through until the quality gates are green.
 
-Supports four AI Coding Agents: [OpenCode](https://opencode.ai/), [Claude Code](https://claude.ai/code), [OpenAI Codex CLI](https://github.com/openai/codex), and **Jonggrang** (built on [Pi SDK](https://pi.dev/) — multi-provider, TypeScript-extensible).
+Works with four AI backends: [OpenCode](https://opencode.ai/), [Claude Code](https://claude.ai/code), [OpenAI Codex CLI](https://github.com/openai/codex), and **Jonggrang** (built on [Pi SDK](https://pi.dev/)). Pick your poison.
 
 ---
 
@@ -16,13 +16,15 @@ Jonggrang enforces a pipeline where every feature passes through the same gates:
 
 **Fresh context per task.** Each task starts with a clean agent instance. No stale assumptions carrying forward. **Hooks police in real-time** — secrets blocked, context overload prevented, exit refused until quality gates pass. **Simplify phase** revisits every changed file to reduce complexity before the PR opens.
 
-The agent will always take the shortest path. Jonggrang makes sure the shortest path is also the right one.
+Left unchecked, an AI agent will always take the shortest path — even if that path goes through a minefield. Jonggrang puts up the guardrails.
 
 → [Read the full philosophy & architecture](docs/PHILOSOPHY.md)
 
 ---
 
-## I Just Want to Use It
+## 🚀 I Just Want to Use It
+
+Five commands. That's all you need.
 
 ```bash
 # In your project directory:
@@ -47,7 +49,9 @@ jonggrang agent    # Full TUI chat with /plan, /work, /review, etc.
 
 ---
 
-## I Want to Set Up for Development
+## 🔧 I Want to Hack on It
+
+Come on in. The water's fine.
 
 ```bash
 git clone <repo-url> && cd jonggrang
@@ -109,32 +113,31 @@ jonggrang work --task task-003       # Execute specific task only
 }
 ```
 
-Two-layer: `~/.jonggrang/settings.json` (global) → `.jonggrang/jonggrang.json` (project overrides).
+Two-layer config: `~/.jonggrang/settings.json` (your defaults) → `.jonggrang/jonggrang.json` (this project's quirks).
 
 → [Full config reference](docs/CONFIG.md)
 
 ---
 
-## Documentation
+## 📚 More Reading
 
-| Doc | Content |
+| Doc | When you want to... |
 |-----|---------|
-| [QUICKSTART.md](docs/QUICKSTART.md) | Beginner's step-by-step guide |
-| [QUICKSETUP.md](docs/QUICKSETUP.md) | Development setup for contributors |
-| [PHILOSOPHY.md](docs/PHILOSOPHY.md) | Philosophy, pipeline, architecture deep-dive |
-| [JONGGRANG.md](docs/JONGGRANG.md) | Full specification |
-| [WORKFLOW.md](docs/WORKFLOW.md) | Detailed workflow documentation |
-| [SKILLS.md](docs/SKILLS.md) | Skill system reference |
-| [CONFIG.md](docs/CONFIG.md) | Configuration reference |
+| [QUICKSTART.md](docs/QUICKSTART.md) | Get building in 5 minutes |
+| [QUICKSETUP.md](docs/QUICKSETUP.md) | Set up your dev environment |
+| [PHILOSOPHY.md](docs/PHILOSOPHY.md) | Understand why this thing exists |
+| [JONGGRANG.md](docs/JONGGRANG.md) | Read the full blueprint |
+| [WORKFLOW.md](docs/WORKFLOW.md) | Grok the 16-phase pipeline |
+| [SKILLS.md](docs/SKILLS.md) | Teach the agents new tricks |
+| [CONFIG.md](docs/CONFIG.md) | Tweak every knob |
 
 ---
 
 ## Contributors
 
-Jonggrang dibuat dan dikelola oleh:
+- **[Eka Irawan (Ibnu)](https://github.com/anak10thn)** + **[Ahmad Anshorimuslim Syuhada (Ans)](https://github.com/ans-4175)**
 
-- **[Eka Irawan (Ibnu)](https://github.com/anak10thn)**
-- **[Ahmad Anshorimuslim Syuhada (Ans)](https://github.com/ans-4175)**
+→ [Full credits & backstory](AUTHORS.md)
 
 ---
 
@@ -142,4 +145,4 @@ Jonggrang dibuat dan dikelola oleh:
 
 MIT © Porcupine Team
 
-Lihat [LICENSE](LICENSE) untuk teks lengkap. Ringkasannya: **bebas pakai untuk apa pun, termasuk komersial, tanpa garansi. Kontributor dilindungi dari tuntutan.**
+See [LICENSE](LICENSE) for full text. TL;DR: **free to use for anything, including commercial, with no warranty. Contributors are protected from liability.**
