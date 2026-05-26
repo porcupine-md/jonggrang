@@ -260,6 +260,8 @@ async function loadPlans() {
       // refresh selected plan data
       const updated = data.find(p => p.id === selectedPlan.value.id);
       if (updated) selectPlan(updated);
+      else if (data.length > 0) selectPlan(data[0]);
+      else selectedPlan.value = null;
     }
   } catch {}
 }
@@ -413,10 +415,11 @@ onMounted(async () => {
     if (project_id !== projectId.value) return;
     const wasGenerating = generating.value;
     const wasRevising = revising.value;
+    const wasApproving = approving.value;
     generating.value = false;
     approving.value = false;
     revising.value = false;
-    if (wasGenerating || wasRevising) {
+    if (wasGenerating || wasRevising || wasApproving) {
       description.value = '';
       loadPlans();
     }

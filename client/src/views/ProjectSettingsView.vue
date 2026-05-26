@@ -26,6 +26,33 @@
         </div>
       </section>
 
+      <!-- Sandbox -->
+      <section class="settings-section">
+        <div class="section-title">Docker Sandbox</div>
+        <div class="section-desc">Run Agent and Terminal inside an isolated Docker container.</div>
+        <div class="section-content">
+          <label class="sandbox-toggle-row">
+            <input type="checkbox" v-model="sbx.enabled" />
+            <span>Enable Docker sandbox</span>
+          </label>
+          <div class="field-group" :class="{ 'field-disabled': !sbx.enabled }">
+            <label>Image <span class="override-hint">(leave blank to use global)</span></label>
+            <input v-model="sbx.image" :disabled="!sbx.enabled" :placeholder="globalSbx.image || 'orcinus/jonggrang-agent'" class="sandbox-image-input" />
+          </div>
+          <div class="field-group" :class="{ 'field-disabled': !sbx.enabled }">
+            <label>Shell <span class="override-hint">(leave blank to use global)</span></label>
+            <input v-model="sbx.shell" :disabled="!sbx.enabled" :placeholder="globalSbx.shell || '/bin/bash'" class="sandbox-image-input" />
+          </div>
+          <div v-if="sbxError" class="error-text">{{ sbxError }}</div>
+          <div v-if="sbxSaved" class="saved-text"><i class="pi pi-check" /> Saved</div>
+          <div class="section-footer">
+            <Button size="small" :disabled="sbxSaving" @click="saveSandbox">
+              <i class="pi pi-save" /> {{ sbxSaving ? 'Saving...' : 'Save Sandbox' }}
+            </Button>
+          </div>
+        </div>
+      </section>
+
       <!-- Secrets -->
       <section class="settings-section">
         <div class="section-title">Secrets</div>
@@ -86,6 +113,12 @@ const cfgSaving = ref(false);
 const cfgError = ref('');
 const cfgSaved = ref(false);
 
+const sbx = reactive({ enabled: false, image: '', shell: '' });
+const globalSbx = reactive({ image: '', shell: '' });
+const sbxSaving = ref(false);
+const sbxError = ref('');
+const sbxSaved = ref(false);
+
 const attachedSecrets = ref([]);
 const secretsSaving = ref(false);
 const secretsError = ref('');
@@ -106,6 +139,8 @@ onMounted(async () => {
       if (data.jonggrang_config?.tool) cfg.tool = data.jonggrang_config.tool;
       if (data.jonggrang_config?.autonomy) cfg.autonomy = data.jonggrang_config.autonomy;
       attachedSecrets.value = Array.isArray(data.secrets) ? [...data.secrets] : [];
+      if (data.sandbox) { sbx.enabled = !!data.sandbox.enabled; sbx.image = data.sandbox.image || ''; sbx.shell = data.sandbox.shell || ''; }
+      fetch('/api/settings/sandbox').then(r => r.json()).then(d => { globalSbx.image = d.image || ''; globalSbx.shell = d.shell || ''; }).catch(() => {});
     }
   } catch {}
   secretsLoading.value = false;
@@ -135,6 +170,26 @@ function toggleSecret(id) {
   const idx = attachedSecrets.value.indexOf(id);
   if (idx >= 0) attachedSecrets.value.splice(idx, 1);
   else attachedSecrets.value.push(id);
+}
+
+async function saveSandbox() {
+  sbxSaving.value = true;
+  sbxError.value = '';
+  sbxSaved.value = false;
+  try {
+    const res = await fetch(`/api/projects/${projectId.value}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sandbox: { enabled: sbx.enabled, image: sbx.image || null, shell: sbx.shell || null } }),
+    });
+    if (!res.ok) throw new Error('Save failed');
+    sbxSaved.value = true;
+    setTimeout(() => { sbxSaved.value = false; }, 2000);
+  } catch (e) {
+    sbxError.value = e.message;
+  } finally {
+    sbxSaving.value = false;
+  }
 }
 
 async function saveSecrets() {
@@ -193,6 +248,22 @@ async function saveSecrets() {
 .secret-desc { font-size: 11px; color: var(--jg-text-muted); }
 
 .loading-text { font-size: 12px; color: var(--jg-text-faint); }
+.sandbox-toggle-row {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  font-size: 12px; color: var(--jg-text-muted); margin-bottom: 0;
+}
+.sandbox-toggle-row input[type="checkbox"] { accent-color: var(--jg-green); }
+.sandbox-image-input {
+  width: 100%; padding: 6px 10px;
+  background: var(--jg-bg); border: 1px solid var(--jg-border);
+  color: var(--jg-text); font-family: inherit; font-size: 12px;
+  outline: none; margin-top: 4px;
+}
+.sandbox-image-input:focus { border-color: var(--jg-green); }
+.sandbox-hint { font-size: 11px; color: var(--jg-text-faint); margin-top: 4px; }
+.override-hint { font-size: 10px; color: var(--jg-text-faint); font-weight: 400; }
+.field-disabled { opacity: 0.45; }
+.sandbox-image-input:disabled { cursor: not-allowed; }
 .empty-secrets { font-size: 12px; color: var(--jg-text-faint); display: flex; align-items: center; gap: 8px; }
 .link { color: var(--jg-cyan); text-decoration: none; font-size: 12px; }
 .link:hover { text-decoration: underline; }

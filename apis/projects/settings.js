@@ -13,16 +13,23 @@ module.exports = function(deps) {
     if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
     const configPath = path.join(project.path, '.jonggrang', 'jonggrang.json');
     let jonggrang_config = {};
-    try { jonggrang_config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch {}
-    res.json({ jonggrang_config, secrets: project.secrets || [] });
+    try { jonggrang_config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch (err) {
+      if (err.code !== 'ENOENT') console.error('Failed to read project config:', err);
+    }
+    res.json({ jonggrang_config, secrets: project.secrets || [], sandbox: project.sandbox || {} });
   });
 
   router.put('/:id/settings', (req, res) => {
     const project = webState.getProject(req.params.id);
     if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
-    const { secrets, jonggrang_config } = req.body || {};
+    const { secrets, jonggrang_config, sandbox } = req.body || {};
     if (Array.isArray(secrets)) {
       try { webState.updateProject(req.params.id, { secrets }); } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
+    if (sandbox && typeof sandbox === 'object') {
+      try { webState.updateProject(req.params.id, { sandbox }); } catch (err) {
         return res.status(500).json({ error: err.message });
       }
     }
@@ -32,7 +39,9 @@ module.exports = function(deps) {
       try {
         fs.mkdirSync(jonggrangDir, { recursive: true });
         let existing = {};
-        try { existing = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch {}
+        try { existing = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch (err) {
+          if (err.code !== 'ENOENT') console.error('Failed to read existing project config:', err);
+        }
         Object.assign(existing, jonggrang_config);
         fs.writeFileSync(configPath, JSON.stringify(existing, null, 2), 'utf-8');
       } catch (err) {

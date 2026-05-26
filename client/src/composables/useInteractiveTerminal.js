@@ -102,8 +102,11 @@ export function useInteractiveTerminal({ projectId: _projectId, session, getSock
 
   function markRunning() {
     isRunning.value = true;
-    termInstance.value?.clear();
-    nextTick(() => fit());
+    nextTick(() => {
+      fit();
+      // Send a second resize after Pi has had time to initialize and respond to SIGWINCH
+      setTimeout(() => fit(), 300);
+    });
   }
 
   function markStopped() {
