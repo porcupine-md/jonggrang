@@ -121,7 +121,9 @@ module.exports = function(deps) {
         const id = req.params.id;
 
         // Always attempt container cleanup first — rm -f stops+removes in one shot
-        try { await sandbox.remove(id); } catch {}
+        try { await sandbox.remove(id); } catch (err) {
+            console.error('Sandbox remove error during project deletion:', err);
+        }
 
         const project = webState.getProject(id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });

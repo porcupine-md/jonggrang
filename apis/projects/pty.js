@@ -111,13 +111,18 @@ module.exports = function(deps) {
         res.json({ tool, running: activePtySessions.has(key) });
     });
 
-    router.post('/:id/agent/start', (req, res) => {
+    router.post('/:id/agent/start', async (req, res) => {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
 
         const { tool, cols = 80, rows = 24 } = req.body || {};
         const resolvedTool = tool || readProjectTool(project);
         const { cmd, args } = resolveAgentCommand(resolvedTool, project.sandbox?.enabled);
+
+        if (project.sandbox?.enabled) {
+            const running = await sandbox.isRunning(project.id);
+            if (!running) return res.status(503).json({ error: 'SANDBOX_NOT_RUNNING', message: 'Docker sandbox is not running. Start it first.' });
+        }
 
         try {
             spawnPty(project, 'agent', cmd, args, cols, rows);
@@ -142,7 +147,7 @@ module.exports = function(deps) {
 
     // ── Terminal routes ───────────────────────────────────────────
 
-    router.post('/:id/terminal/start', (req, res) => {
+    router.post('/:id/terminal/start', async (req, res) => {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
 
@@ -150,6 +155,11 @@ module.exports = function(deps) {
         const shell = project.sandbox?.enabled
             ? (project.sandbox.shell || webState.getSandboxConfig().shell || '/bin/bash')
             : (process.env.SHELL || 'bash');
+
+        if (project.sandbox?.enabled) {
+            const running = await sandbox.isRunning(project.id);
+            if (!running) return res.status(503).json({ error: 'SANDBOX_NOT_RUNNING', message: 'Docker sandbox is not running. Start it first.' });
+        }
 
         try {
             spawnPty(project, 'terminal', shell, [], cols, rows);

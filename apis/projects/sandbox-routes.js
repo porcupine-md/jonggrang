@@ -45,34 +45,31 @@ module.exports = function(deps) {
         io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
         res.json({ ok: true, status: 'starting' });
 
-        // If container exists (stopped) → docker start, otherwise full docker run
-        const containerStatus = await sandbox.exists(project.id);
-        if (containerStatus === 'exited' || containerStatus === 'created') {
-            sandbox.startExisting(project.id).then(() => {
+        try {
+            // If container exists (stopped) → docker start, otherwise full docker run
+            const containerStatus = await sandbox.exists(project.id);
+            if (containerStatus === 'exited' || containerStatus === 'created') {
+                await sandbox.startExisting(project.id);
                 startingSet.delete(project.id);
                 io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
-            }).catch((err) => {
-                startingSet.delete(project.id);
-                io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'error', message: err.message });
-            });
-            return;
-        }
+                return;
+            }
 
-        const secretVars = webState.getProjectSecretVars(project.id);
-        const globalConfig = webState.getSandboxConfig();
-        const sandboxConfig = {
-            image: project.sandbox?.image || globalConfig.image,
-            shell: project.sandbox?.shell || globalConfig.shell,
-        };
-        sandbox.start(project, sandboxConfig, secretVars, (line) => {
-            io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });
-        }).then(() => {
+            const secretVars = webState.getProjectSecretVars(project.id);
+            const globalConfig = webState.getSandboxConfig();
+            const sandboxConfig = {
+                image: project.sandbox?.image || globalConfig.image,
+                shell: project.sandbox?.shell || globalConfig.shell,
+            };
+            await sandbox.start(project, sandboxConfig, secretVars, (line) => {
+                io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });
+            });
             startingSet.delete(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
-        }).catch((err) => {
+        } catch (err) {
             startingSet.delete(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'error', message: err.message });
-        });
+        }
     });
 
     router.post('/:id/sandbox/restart', async (req, res) => {
@@ -107,23 +104,23 @@ module.exports = function(deps) {
         io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
         res.json({ ok: true, status: 'starting' });
 
-        await sandbox.remove(project.id);
-
-        const secretVars = webState.getProjectSecretVars(project.id);
-        const globalConfig = webState.getSandboxConfig();
-        const sandboxConfig = {
-            image: project.sandbox?.image || globalConfig.image,
-            shell: project.sandbox?.shell || globalConfig.shell,
-        };
-        sandbox.start(project, sandboxConfig, secretVars, (line) => {
-            io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });
-        }).then(() => {
+        try {
+            await sandbox.remove(project.id);
+            const secretVars = webState.getProjectSecretVars(project.id);
+            const globalConfig = webState.getSandboxConfig();
+            const sandboxConfig = {
+                image: project.sandbox?.image || globalConfig.image,
+                shell: project.sandbox?.shell || globalConfig.shell,
+            };
+            await sandbox.start(project, sandboxConfig, secretVars, (line) => {
+                io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });
+            });
             startingSet.delete(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
-        }).catch((err) => {
+        } catch (err) {
             startingSet.delete(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'error', message: err.message });
-        });
+        }
     });
 
     router.post('/:id/sandbox/stop', async (req, res) => {
