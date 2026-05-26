@@ -10,6 +10,42 @@ Inspired by the [Ralph Loop](https://github.com/snarktank/ralph), [Agent Orchest
 
 ---
 
+## Philosophy
+
+AI agents write code fast. Too fast. The bottleneck is no longer *writing* — it's *knowing when to stop, reflect, and clean up*.
+
+Jonggrang is built around one belief: **a codebase shaped by a disciplined process is cleaner than one shaped by raw speed.** Every feature passes through the same pipeline — not because every step is always necessary, but because skipping steps is how complexity accumulates silently.
+
+### The Pipeline Is the Quality Gate
+
+```
+Plan → Implement → Simplify → Test → Review → Hooks
+```
+
+Each stage has a specific job:
+
+- **Plan** — the agent reads your intent and produces a structured task list. You review it before a single line of code is written. Humans stay in the loop at the point where it costs the least to change course.
+
+- **Implement** — each task runs in a *fresh context*. No accumulated confusion, no prompt memory carrying forward wrong assumptions. The agent starts clean every time.
+
+- **Simplify** — after implementation, before the PR is opened, the agent revisits every changed file with a single mandate: *reduce complexity without changing behavior*. Rename the unclear variable. Collapse the redundant function. Remove the comment that just restates the code. This phase exists because the first pass is never the last word.
+
+- **Test** — the agent writes the tests, runs them, and verifies coverage. Tests are not an afterthought appended at the end; they are part of the definition of done for every task.
+
+- **Review** — a dedicated review pass reads the implementation as a future maintainer would. It asks: is this correct? is this maintainable? does it match the plan?
+
+- **Hooks** — shell hooks and agent extension points enforce invariants the agent cannot be trusted to self-police: no secrets in context, no direct file edits by an orchestrator that should be delegating, no agent exit until all quality gates are green.
+
+### Why This Matters
+
+An AI agent without structure produces a codebase that looks finished but is made of layers. Each feature adds another layer — slightly different naming conventions, subtly duplicated logic, tests that assert the wrong thing. It works until it doesn't.
+
+The pipeline is the answer to that. It is not bureaucracy — it is the minimum structure required to keep the output coherent over time.
+
+Jonggrang is opinionated because it has to be. The agent will always take the shortest path. The framework's job is to make sure the shortest path is also the right one.
+
+---
+
 ## How It Works
 
 ### Work Loop
