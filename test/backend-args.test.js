@@ -114,6 +114,29 @@ test('jonggrang: returns empty array (SDK resolves model/effort internally)', ()
   );
 });
 
+// ── Codex backend ────────────────────────────────────────────
+
+test('codex: --model alone', () => {
+  assert.deepStrictEqual(
+    buildAgentArgs({ tool: 'codex', model: 'codex-1', effort: '' }),
+    ['--model', 'codex-1']
+  );
+});
+
+test('codex: --effort alone → --config reasoning_effort', () => {
+  assert.deepStrictEqual(
+    buildAgentArgs({ tool: 'codex', model: '', effort: 'high' }),
+    ['--config', 'reasoning_effort=high']
+  );
+});
+
+test('codex: --model + --effort', () => {
+  assert.deepStrictEqual(
+    buildAgentArgs({ tool: 'codex', model: 'gpt-5.4', effort: 'medium' }),
+    ['--model', 'gpt-5.4', '--config', 'reasoning_effort=medium']
+  );
+});
+
 // ── Unknown tool ──────────────────────────────────────────────
 
 test('unknown tool: returns empty array without throwing', () => {

@@ -4,7 +4,7 @@
 
 Jonggrang is a CLI tool that orchestrates AI coding agents to handle your development workflow. It uses a **Work Loop** model — decompose a feature into tasks, implement them one-by-one with a fresh agent per task.
 
-Supports three AI agent backends: [OpenCode](https://opencode.ai/), [Claude Code](https://claude.ai/code), and **Jonggrang** (built on the [Pi](https://pi.dev/) SDK — multi-provider, TypeScript-extensible).
+Supports four AI agent backends: [OpenCode](https://opencode.ai/), [Claude Code](https://claude.ai/code), [OpenAI Codex CLI](https://github.com/openai/codex), and **Jonggrang** (built on the [Pi](https://pi.dev/) SDK — multi-provider, TypeScript-extensible).
 
 Inspired by the [Ralph Loop](https://github.com/snarktank/ralph), [Agent Orchestra](https://addyosmani.com/blog/code-agent-orchestra/) (Addy Osmani), and the [collapsed SDLC](https://boristane.com/blog/the-software-development-lifecycle-is-dead/) (Boris Tane).
 
@@ -121,7 +121,7 @@ Interactive wizard that sets up your project. Generates:
 - `AGENTS.md` — project knowledge for AI agents (human-curated)
 - `.jonggrang/jonggrang-tasks.json` — task board
 - `.jonggrang/progress.txt` — append-only learnings log
-- `.claude/skills/`, `.opencode/skills/`, `.jonggrang/skills/` — prompt templates filtered by your project type
+- `.claude/skills/`, `.opencode/skills/`, `.jonggrang/skills/`, `.codex/skills/` — prompt templates filtered by your project type
 - `.claude/settings.json` — Claude Code enforcement hooks
 - `.opencode/plugins/jonggrang.js` — OpenCode enforcement plugin
 - `.jonggrang/extensions/jonggrang.ts` — Jonggrang (Pi) enforcement extension
@@ -136,7 +136,7 @@ Interactive wizard that sets up your project. Generates:
 | `--team-size` | `2-5` | Team size (if team) |
 | `--state` | `new`, `existing` | New or existing project |
 | `--stack` | `nextjs-typescript`, `express-typescript`, `go`, `python-fastapi`, `library-typescript`, `rust`, `python`, `node-typescript` | Tech stack |
-| `--tool` | `opencode`, `claude`, `jonggrang` | AI agent tool (default: jonggrang) |
+| `--tool` | `opencode`, `claude`, `jonggrang`, `codex` | AI agent tool (default: jonggrang) |
 | `--autonomy` | `supervised`, `balanced`, `autonomous` | Default autonomy mode |
 | `--ci` | `github-actions`, `gitlab-ci`, `none` | CI/CD provider |
 | `--testing` | `vitest`, `jest`, `go-test`, `pytest`, `none` | Test framework |
@@ -204,14 +204,15 @@ jonggrang work --debug                            # dump raw JSON from opencode/
 jonggrang plan "add auth" --tool claude --model opus --effort xhigh
 jonggrang work --tool opencode --model anthropic/claude-opus-4-7 --effort high
 jonggrang work --tool jonggrang --model anthropic/claude-sonnet-4-5 --effort medium
+jonggrang work --tool codex --model codex-1 --effort high
 ```
 
 **`--model` / `--effort` backend mapping:**
 
-| jonggrang flag | `--tool claude` | `--tool opencode` | `--tool jonggrang` |
-|---|---|---|---|
-| `--model` | `--model <alias\|id>` e.g. `opus`, `claude-opus-4-7` | `--model <provider/model>` e.g. `anthropic/claude-opus-4-7` | `--model <provider/model>` e.g. `anthropic/claude-sonnet-4-5` |
-| `--effort` | `--effort low\|medium\|high\|max\|xhigh` | `--variant <level>` | SDK `thinkingLevel`: `off\|minimal\|low\|medium\|high\|xhigh` |
+| jonggrang flag | `--tool claude` | `--tool opencode` | `--tool jonggrang` | `--tool codex` |
+|---|---|---|---|---|
+| `--model` | `--model <alias\|id>` e.g. `opus`, `claude-opus-4-7` | `--model <provider/model>` e.g. `anthropic/claude-opus-4-7` | `--model <provider/model>` e.g. `anthropic/claude-sonnet-4-5` | `--model <name>` e.g. `codex-1`, `gpt-5.4` |
+| `--effort` | `--effort low\|medium\|high\|max\|xhigh` | `--variant <level>` | SDK `thinkingLevel`: `off\|minimal\|low\|medium\|high\|xhigh` | `--config reasoning_effort=<level>` |
 
 Resolution order: `--model` flag → `JONGGRANG_MODEL` env → `tools.<tool>.model` in `jonggrang.json` → `model` top-level → backend default.
 

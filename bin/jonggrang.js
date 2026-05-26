@@ -168,6 +168,7 @@ function checkDeps() {
         case 'git':      console.log('  Install git:      brew install git'); break;
         case 'opencode':  console.log('  Install opencode:  curl -fsSL https://opencode.ai/install | bash'); break;
         case 'claude':    console.log('  Install claude:    npm install -g @anthropic-ai/claude-code'); break;
+        case 'codex':     console.log('  Install codex:     npm install -g @openai/codex'); break;
         case '@earendil-works/pi-coding-agent': console.log('  Install Pi SDK:  npm install -g @earendil-works/pi-coding-agent'); break;
         default:         console.log(`  Install ${cmd}`); break;
       }
@@ -1598,6 +1599,7 @@ async function cmdInit() {
           { value: 'jonggrang', label: 'Jonggrang   — primary tool (Recommended)' },
           { value: 'claude',    label: 'Claude Code — primary tool' },
           { value: 'opencode',  label: 'OpenCode    — primary tool' },
+          { value: 'codex',     label: 'Codex       — OpenAI Codex CLI' },
         ],
       });
       if (isCancel(toolAnswer)) { cancel('Cancelled.'); return; }
@@ -1621,7 +1623,7 @@ async function cmdInit() {
   } else {
     const rl = createRL();
     if (!INIT_NAME)     INIT_NAME     = await ask(rl, 'Project name:',  path.basename(PROJECT_ROOT));
-    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'jonggrang', 'jonggrang|claude|opencode');
+    if (!INIT_TOOL)     INIT_TOOL     = await ask(rl, 'Primary AI tool:', 'jonggrang', 'jonggrang|claude|opencode|codex');
     if (!INIT_AUTONOMY) INIT_AUTONOMY = await ask(rl, 'Autonomy mode:',  'autonomous', 'supervised|balanced|autonomous');
     rl.close();
   }

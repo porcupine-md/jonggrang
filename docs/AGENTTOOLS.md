@@ -1,6 +1,6 @@
 # Adding a New Agent Tool to Jonggrang
 
-This guide covers every file and function you must touch to integrate a new AI agent backend into jonggrang. The three existing backends — `claude` (CLI spawn), `opencode` (CLI spawn with JSON streaming), and `jonggrang` (Pi SDK, in-process) — serve as reference implementations.
+This guide covers every file and function you must touch to integrate a new AI agent backend into jonggrang. The four existing backends — `claude` (CLI spawn), `opencode` (CLI spawn with JSON streaming), `codex` (CLI spawn with JSONL streaming), and `jonggrang` (Pi SDK, in-process) — serve as reference implementations.
 
 ---
 
@@ -10,7 +10,7 @@ Before starting, decide which pattern fits your tool:
 
 | Pattern | When to use | Examples |
 |---------|-------------|---------|
-| **CLI spawn** | Tool is a standalone binary invoked via command line | `claude`, `opencode` |
+| **CLI spawn** | Tool is a standalone binary invoked via command line | `claude`, `opencode`, `codex` |
 | **SDK in-process** | Tool is an npm package used as a library inside jonggrang's Node process | `jonggrang` (Pi SDK) |
 
 CLI spawn is simpler. SDK in-process gives tighter integration (event streaming, no extra process) but requires the SDK to be compatible with Node's dynamic `import()` from CJS.
@@ -390,6 +390,7 @@ Add a row to the backend mapping table:
   --tool claude:     --model opus|sonnet|haiku|best|<full-id>   --effort low|medium|high|max|xhigh
   --tool opencode:   --model anthropic/claude-sonnet-4-5-20250929  --effort high  (→ --variant)
   --tool jonggrang:  --model anthropic/claude-sonnet-4-5  --effort high  (→ SDK thinkingLevel)
+  --tool codex:      --model codex-1|gpt-5.4  --effort high  (→ --config reasoning_effort=high)
   --tool mytool:     --model <...>  --effort <...>  (→ <backend flag>)
 ```
 
