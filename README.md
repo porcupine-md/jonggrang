@@ -19,22 +19,33 @@ Jonggrang is built around one belief: **a codebase shaped by a disciplined proce
 ### The Pipeline Is the Quality Gate
 
 ```
-Plan → Implement → Simplify → Test → Review → Hooks
+                ┌─────────────────────────────────────┐
+                │              Hooks                  │
+                │  (active throughout — guards every  │
+                │   tool call, file edit, and exit)   │
+                └──────┬──────────────────────────────┘
+                       │ enforces invariants in real-time
+                       ▼
+Plan  →  Implement ⟲  →  Simplify  →  Test  →  Review
+               ▲____|
+          (loops until
+          quality gates
+             pass)
 ```
 
 Each stage has a specific job:
 
 - **Plan** — the agent reads your intent and produces a structured task list. You review it before a single line of code is written. Humans stay in the loop at the point where it costs the least to change course.
 
-- **Implement** — each task runs in a *fresh context*. No accumulated confusion, no prompt memory carrying forward wrong assumptions. The agent starts clean every time.
+- **Implement** — each task runs in a *fresh context*. No accumulated confusion, no prompt memory carrying forward wrong assumptions. The agent starts clean every time. **Hooks run here** — blocking secret exposure, enforcing delegation, preventing context overload, and refusing to let the agent exit until the loop conditions are met.
+
+- **Hooks** — not a final stage, but a continuous enforcement layer woven into the implement loop. Every tool call, every file edit, every agent exit passes through hooks first. They police what the agent cannot be trusted to police itself: no secrets leaking into context, no orchestrator making direct edits it should delegate, no agent spawning when the context window is near-full, no exit until review and tests are green.
 
 - **Simplify** — after implementation, before the PR is opened, the agent revisits every changed file with a single mandate: *reduce complexity without changing behavior*. Rename the unclear variable. Collapse the redundant function. Remove the comment that just restates the code. This phase exists because the first pass is never the last word.
 
 - **Test** — the agent writes the tests, runs them, and verifies coverage. Tests are not an afterthought appended at the end; they are part of the definition of done for every task.
 
 - **Review** — a dedicated review pass reads the implementation as a future maintainer would. It asks: is this correct? is this maintainable? does it match the plan?
-
-- **Hooks** — shell hooks and agent extension points enforce invariants the agent cannot be trusted to self-police: no secrets in context, no direct file edits by an orchestrator that should be delegating, no agent exit until all quality gates are green.
 
 ### Why This Matters
 
