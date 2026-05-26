@@ -6,6 +6,7 @@
         <Select v-model="form.tool" :options="[
           { label: 'OpenCode', value: 'opencode' },
           { label: 'Claude Code', value: 'claude' },
+          { label: 'OpenAI Codex', value: 'codex' },
           { label: 'Jonggrang (Pi)', value: 'jonggrang' },
         ]" optionLabel="label" optionValue="value" fluid />
       </div>
