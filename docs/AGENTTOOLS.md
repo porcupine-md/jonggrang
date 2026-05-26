@@ -26,7 +26,12 @@ lib/jonggrang.js             — 4 locations
   runAgent()                 — spawn / SDK logic
   generateConfig()           — skills.directory default
   runInit() skillTargets     — install skills on init
-lib/hooks.js                 — hook installer (optional)
+lib/orchestration.js         — 1 location
+  getChangedFilesForSimplify() — exclude tool config dir from Phase 9 file scope
+lib/hooks.js                 — hook system (optional but recommended)
+  EVENT_MAP                  — map abstract events → tool-specific event names
+  HOOK_DEFINITIONS           — add mytool_handler key to every hook definition
+  installHooksForTool()      — call new installer function
 bin/jonggrang.js             — 5 locations
   checkDeps()                — binary / SDK presence check
   checkDeps() switch         — install hint message
@@ -242,6 +247,60 @@ const EVENT_MAP = {
 
 **If your tool does not support hooks:** no changes to `lib/hooks.js` needed.
 
+**Hook definitions — add `mytool_handler` key to each entry:**
+
+Every hook definition in `HOOK_DEFINITIONS` has a handler key per backend (`claude_handler`, `opencode_handler`, `jonggrang_handler`). When your tool uses hooks, add `mytool_handler` to **every** hook entry so jonggrang knows which handler to call:
+
+```js
+const HOOK_DEFINITIONS = {
+  agent_first: {
+    event: 'pre_tool',
+    claude_script: 'hooks/claude/agent-first.sh',
+    opencode_handler: 'agentFirst',
+    jonggrang_handler: 'agentFirst',
+    mytool_handler: 'agentFirst',          // ADD — matches function name in hooks/mytool/plugin.js
+    match_tools: ['Edit', 'Write'],
+    blocking: true,
+  },
+  compaction_gate: {
+    event: 'pre_tool',
+    claude_script: 'hooks/claude/compaction-gate.sh',
+    opencode_handler: 'compactionGate',
+    jonggrang_handler: 'compactionGate',
+    mytool_handler: 'compactionGate',      // ADD
+    match_tools: ['Task'],
+    blocking: true,
+  },
+  // ... repeat for every other hook definition
+};
+```
+
+If your tool does not implement a particular hook, omit the `mytool_handler` key for that entry — jonggrang skips hooks with no handler for the active tool.
+
+---
+
+## 3b. `lib/orchestration.js` — Phase 9 file scope exclude
+
+**Function:** `getChangedFilesForSimplify()` — line ~404
+
+Phase 9 (Simplification) asks the agent to review and clean up files changed during the feature implementation. It gets this list from `git diff` and filters out jonggrang's own internal files so the agent only touches real source code — not orchestration state.
+
+**Current filter (line 405):**
+```js
+.filter(f => !f.startsWith('.jonggrang/'));
+```
+
+**When you add a new tool**, its config directory (`.mytool/`) must also be excluded — otherwise the agent may try to simplify plugin configs, skills files, or lock files it should never touch:
+
+```js
+.filter(f =>
+  !f.startsWith('.jonggrang/') &&
+  !f.startsWith('.mytool/')        // ADD — exclude your tool's config dir
+);
+```
+
+This is the **only place** in the codebase where tool config directories are explicitly excluded from agent file scope. The sensitive-file hooks (`block-sensitive-files.sh`, opencode plugin, jonggrang extension) only block security-sensitive files (SSH keys, certs, `.env` not in `.gitignore`) — they do not filter tool config directories.
+
 ---
 
 ## 4. `bin/jonggrang.js`
@@ -426,7 +485,8 @@ jonggrang work --tool mytool --model myprovider/my-model --effort high
 |------|-------------|
 | `lib/backend-args.js` | New `case 'mytool':` in `buildAgentArgs` |
 | `lib/jonggrang.js` | `resolveSkillsDir`, `runAgent`, `generateConfig`, `skillTargets` |
-| `lib/hooks.js` | `EVENT_MAP`, new installer function, `installHooksForTool` (if hooks needed) |
+| `lib/orchestration.js` | `getChangedFilesForSimplify()` — add `.mytool/` to Phase 9 exclude filter |
+| `lib/hooks.js` | `EVENT_MAP`, `HOOK_DEFINITIONS` (add `mytool_handler`), new installer, `installHooksForTool` (if hooks needed) |
 | `bin/jonggrang.js` | `checkDeps` (check + hint), `cmdInit` (select + ask), `cmdHelp` (text + table) |
 | `hooks/mytool/` | New directory with plugin/extension file (if hooks needed) |
 | `test/backend-args.test.js` | New test cases for `buildAgentArgs` |
