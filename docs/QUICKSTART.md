@@ -1,0 +1,209 @@
+# Quick Start Guide
+
+> For beginners. Get Jonggrang running and build your first feature in 5 minutes.
+
+---
+
+## Prerequisites
+
+Make sure you have these installed:
+
+```bash
+node --version     # ≥ 18
+git --version
+jq --version       # brew install jq (macOS) or apt install jq (Linux)
+```
+
+Pick and install an AI agent backend:
+
+```bash
+# Option A: OpenCode (free, recommended)
+curl -fsSL https://opencode.ai/install | bash
+
+# Option B: Claude Code (requires Anthropic account)
+npm install -g @anthropic-ai/claude-code
+
+# Option C: Jonggrang / Pi (multi-provider, most flexible)
+npm install -g @earendil-works/pi-coding-agent
+```
+
+---
+
+## Step 1: Initialize Your Project
+
+```bash
+cd your-project
+jonggrang init
+```
+
+This launches an interactive wizard. It will ask you:
+- Project name
+- Project type (web-app, api, cli, etc.)
+- Tech stack
+- Which AI tool to use
+
+Or skip the wizard:
+
+```bash
+jonggrang init --name my-app --type api --stack express-typescript --tool opencode --force
+```
+
+After init, you'll see new files:
+- `AGENTS.md` — edit this! Tell the AI about your project conventions
+- `.jonggrang/` — config, task board, progress log
+- `skills/` — AI prompt templates
+
+---
+
+## Step 2: Plan Your Feature
+
+Tell Jonggrang what you want to build:
+
+```bash
+jonggrang plan "user authentication with JWT and password reset"
+```
+
+The AI writes a plan to `.jonggrang/plan.md`. **Read and edit it** before continuing — this is your chance to correct the AI's assumptions before any code is written.
+
+---
+
+## Step 3: Approve the Plan
+
+```bash
+jonggrang approve
+```
+
+The AI decomposes your plan into atomic tasks. Each task is small enough for one AI context window, with clear acceptance criteria and dependency ordering.
+
+Check the task board:
+
+```bash
+jonggrang status
+```
+
+---
+
+## Step 4: Execute
+
+```bash
+jonggrang work
+```
+
+Jonggrang works through the task queue. Each task gets a **fresh AI agent** — no accumulated confusion between tasks.
+
+Watch it:
+- Implement the task
+- Run type checks and tests
+- Commit if everything passes
+- Log what it learned
+- Move to the next task
+
+---
+
+## Step 5: Review
+
+```bash
+jonggrang review
+```
+
+A comprehensive code review across all changes. The report is saved to `jonggrang-log/review-{timestamp}.md`.
+
+---
+
+## Common Workflows
+
+### I want to skip plan review (one-shot)
+
+```bash
+jonggrang work "add REST API for todos" --yes
+```
+
+This runs plan → approve → execute in one command. Good for well-defined, low-risk features.
+
+### I want to use Claude Code instead of OpenCode
+
+```bash
+jonggrang work --tool claude
+```
+
+Or set it permanently in `.jonggrang/jonggrang.json`:
+```json
+{ "tool": "claude" }
+```
+
+### I want more control (supervised mode)
+
+```bash
+jonggrang work --mode supervised
+```
+
+The agent will pause and ask for your input at key decision points.
+
+### I want full autonomy
+
+```bash
+jonggrang work --mode autonomous
+```
+
+The agent plans, implements, and commits everything. You review at the end.
+
+### I want to use the TUI chat
+
+```bash
+jonggrang agent
+```
+
+Opens a full interactive chat session. Use `/plan`, `/work`, `/review`, `/status` commands without leaving the chat.
+
+### I want a visual dashboard
+
+```bash
+jonggrang web
+```
+
+Opens a browser with a Kanban board, real-time agent logs, and diff viewer.
+
+---
+
+## Troubleshooting
+
+### "command not found: jonggrang"
+
+Install globally:
+```bash
+npm install -g jonggrang
+```
+
+Or use npx:
+```bash
+npx jonggrang init
+```
+
+### "No AI tool configured"
+
+Run `jonggrang init` first, or install one of the supported tools:
+```bash
+curl -fsSL https://opencode.ai/install | bash
+```
+
+### Task fails repeatedly
+
+```bash
+jonggrang work --task task-003   # Retry specific task
+jonggrang work --max-iterations 3  # Limit retries
+```
+
+Check `.jonggrang/progress.txt` for what the agent learned from failures.
+
+### Plan looks wrong
+
+Edit `.jonggrang/plan.md` directly before running `jonggrang approve`. The AI only reads it at approval time — you have full control until then.
+
+---
+
+## Next Steps
+
+- [Configure your project](CONFIG.md) — autonomy mode, hooks, CI
+- [Understand the philosophy](PHILOSOPHY.md) — why the pipeline exists
+- [Learn the skill system](SKILLS.md) — create custom AI behaviors
+- [Full command reference](../README.md#commands-at-a-glance)
