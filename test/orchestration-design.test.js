@@ -54,4 +54,24 @@ test('getActivePhases: default (no opts) excludes design phases — backward com
   assert.ok(!phases.includes(11.5));
 });
 
+// ── prompt builders ───────────────────────────────────────────
+const manifestStub = {
+  feature_id: 'settings-page-abc', description: 'Build a settings page', work_type: 'MEDIUM',
+  has_ui: true, design_artifact: './DESIGN.md', active_phases: [6.5, 7, 8, 11.5],
+  phases: { 6.5: { name: 'design-system', status: 'pending' }, 11.5: { name: 'design-verify-ui', status: 'pending' } },
+};
+test('buildDesignSystemPrompt mentions DESIGN.md, lint, Designer, and DESIGN_COMPLETE', () => {
+  const p = o.buildDesignSystemPrompt(manifestStub, process.cwd());
+  assert.match(p, /DESIGN\.md/);
+  assert.match(p, /DESIGN_COMPLETE/);
+  assert.match(p, /lint/i);
+  assert.match(p, /Designer/);
+});
+test('buildDesignVerifyUiPrompt mentions token compliance and DESIGN_UI_VERIFIED', () => {
+  const p = o.buildDesignVerifyUiPrompt(manifestStub, process.cwd());
+  assert.match(p, /DESIGN_UI_VERIFIED/);
+  assert.match(p, /DESIGN\.md/);
+  assert.match(p, /token/i);
+});
+
 process.exit(failed === 0 ? 0 : 1);
