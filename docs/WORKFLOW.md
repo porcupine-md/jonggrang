@@ -511,6 +511,8 @@ A domain is COMPLETE when **every** sub-phase it has is PASS. For `backend`, `ap
 
 If reviewer, tester, OR (for UI frontend) the design verifier FAILS a domain, that domain's failing sub-phase stays `FAIL` and **every *other* modified domain resets to PENDING** (so they get re-validated against the change). The failing domain itself returns to `PENDING` only when a new edit triggers `setDirtyBit`. Either way the loop must run again — exit stays blocked until every modified domain has all its sub-phases at PASS.
 
+> **How gate results are recorded.** Sub-phase results (`review`, `testing`, `design`) are flipped to PASS/FAIL through the web dashboard's `recordPhaseResult` endpoint (`server.js`), not by the orchestrate CLI loop itself. In pure CLI orchestrate runs the loop drives quality through its phases (9–12 review, 14 testing, 11.5 design-verify) rather than this dirty-bit gate; the gate is the work-loop / dashboard safety net that blocks a session from exiting with unverified changes. This applies equally to all three sub-phases — `design` is not special here.
+
 ### Loop Detection
 
 Jaccard similarity is tracked across output hashes. If the same output appears >90% similar to a previous attempt, the stuck counter increments. After 3 stuck iterations, the **Escalation Advisor** injects a diagnostic hint:

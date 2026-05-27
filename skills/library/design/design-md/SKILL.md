@@ -224,8 +224,9 @@ With a Design Brief + Narrative, the agent has the context to make **audience-aw
 2. Write the YAML tokens: `name`, `colors`, `typography`, `rounded`, `spacing`, `components`.
 
 ### Step 2 — Write DESIGN.md
-3. **Use token references** (`{colors.primary}`) in the `components:` section.
-4. **Write all prose sections** (Overview, Colors, Typography, Layout, Elevation, Shapes, Components, Do's and Don'ts).
+3. **Start from the scaffold** — copy `templates/starter.md` (shipped with this skill) as your skeleton; it pre-stubs the `design_brief`, `## Narrative`, and all canonical sections.
+4. **Use token references** (`{colors.primary}`) in the `components:` section.
+5. **Write all prose sections** (Overview, Colors, Typography, Layout, Elevation, Shapes, Components, Do's and Don'ts).
 
 ### Step 3 — Lint & Verify
 5. Run `npx @google/design.md lint DESIGN.md`. Fix errors.
@@ -250,7 +251,7 @@ npx -y @google/design.md lint DESIGN.md
 npx -y @google/design.md diff DESIGN.md DESIGN-v2.md
 
 # Export to Tailwind theme JSON
-npx -y @google/design.md export --format tailwind DESIGN.md > tailwind.theme.json
+npx -y @google/design.md export --format json-tailwind DESIGN.md > tailwind.theme.json
 
 # Export to W3C DTCG (Design Tokens Format Module) JSON
 npx -y @google/design.md export --format dtcg DESIGN.md > tokens.json
@@ -263,32 +264,19 @@ All commands accept `-` for stdin. `lint` returns exit 1 on errors. Use the
 `--format json` flag and parse the output if you need to report findings
 structurally.
 
-### Lint rule reference (what the 7 rules catch)
+### Lint rule reference (the 8 rules in v0.2.0)
 
 - `broken-ref` (error) — `{colors.missing}` points at a non-existent token
-- `duplicate-section` (error) — same `## Heading` appears twice
-- `invalid-color`, `invalid-dimension`, `invalid-typography` (error)
-- `wcag-contrast` (warning/info) — component `textColor` vs `backgroundColor`
-  ratio against WCAG AA (4.5:1) and AAA (7:1)
-- `unknown-component-property` (warning) — outside the whitelist above
+- `missing-primary` (warning) — colors are defined but there is no `primary`
+- `contrast-ratio` (warning) — component `textColor` vs `backgroundColor` below WCAG AA (4.5:1)
+- `orphaned-tokens` (warning) — color tokens defined but never referenced
+- `missing-typography` (warning) — colors defined but no typography
+- `section-order` (warning) — sections out of canonical order
+- `token-summary` (info) — count of tokens per section
+- `missing-sections` (info) — optional sections absent when tokens exist
 
 When the user cares about accessibility, call this out explicitly in your
 summary — WCAG findings are the most load-bearing reason to use the CLI.
-
-## Pitfalls
-
-- **Don't nest component variants.** `button-primary.hover` is wrong;
-  `button-primary-hover` as a sibling key is right.
-- **Hex colors must be quoted strings.** YAML will otherwise choke on `#` or
-  truncate values like `#1A1C1E` oddly.
-- **Negative dimensions need quotes too.** `letterSpacing: -0.02em` parses as
-  a YAML flow — write `letterSpacing: "-0.02em"`.
-- **Section order is enforced.** If the user gives you prose in a random order,
-  reorder it to match the canonical list before saving.
-- **`version: alpha` is the current spec version** (as of Apr 2026). The spec
-  is marked alpha — watch for breaking changes.
-- **Token references resolve by dotted path.** `{colors.primary}` works;
-  `{primary}` does not.
 
 ## Workflow: extracting DESIGN.md from user input
 

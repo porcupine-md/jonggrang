@@ -105,6 +105,12 @@ letter-spacing on display sizes; default tracking on body.
 Spacing scale is a 4px baseline. Use `md` (16px) for intra-component gaps,
 `lg` (24px) for inter-component gaps, `xl` (48px) for section breaks.
 
+## Elevation & Depth
+
+Flat by default — hierarchy comes from color contrast and spacing, not shadows.
+Reserve a single subtle shadow for floating overlays (modals, dropdowns, toasts)
+if needed; avoid shadow-heavy cards.
+
 ## Shapes
 
 Rounded corners are modest — `sm` on interactive elements, `md` on cards.

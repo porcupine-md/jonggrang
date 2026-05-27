@@ -1899,6 +1899,25 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       logSuccess(`Phase ${phaseNum} complete`);
     }
 
+    // Persist the Designer's emitted DESIGN.md to the project root (emit-pattern).
+    // The Designer has no Write tool, so it emits the spec as phase output; the
+    // platform copies it to the canonical, git-tracked artifact path.
+    if (phaseNum === orchestration.DESIGN_SYSTEM_PHASE && exitCode === 0) {
+      try {
+        const emitPath = path.join(outputDir, '06_5-designer-design-md.md');
+        const artifactRel = manifest.design_artifact || './DESIGN.md';
+        const artifactPath = path.join(PROJECT_ROOT, artifactRel);
+        if (fs.existsSync(emitPath) && fs.statSync(emitPath).size > 0) {
+          fs.copyFileSync(emitPath, artifactPath);
+          logSuccess(`Persisted DESIGN.md → ${artifactRel}`);
+        } else {
+          logWarn(`Designer emit not found (${emitPath}); ${artifactRel} not persisted.`);
+        }
+      } catch (e) {
+        logWarn(`Could not persist DESIGN.md: ${e.message}`);
+      }
+    }
+
     manifest = orchestration.readManifest(manifestPath);
 
     // Check if orchestration was failed/paused externally
