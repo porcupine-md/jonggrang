@@ -180,6 +180,17 @@ We enforce token hygiene programmatically. Before entering heavy execution phase
 
 **Result:** A bug fix completes in ~5 phases instead of 16. A new subsystem gets full treatment.
 
+#### Conditional Design Phases (`has_ui`)
+
+Beyond work-type skipping, two phases are gated by an orthogonal `has_ui` classification made at Triage (`classifyHasUi(description)`):
+
+| Phase | Name | Role | Purpose |
+|-------|------|------|---------|
+| 6.5 | DesignSystem | Designer | Author the `DESIGN.md` token spec (gather → extract → construct → self-lint). Human-pause in non-autonomous modes. |
+| 11.5 | DesignVerifyUI | Designer | Verify the implemented UI complies with DESIGN.md tokens (no hardcoded equivalents). |
+
+These phases run only when the feature touches UI. The gating is a separate `DESIGN_PHASES` skip-set applied in `getActivePhases(workType, { hasUi })` — independent of the work-type `PHASE_SKIP_MAP`. Non-UI work is deterministically unchanged; UI work deterministically gains exactly these two phases (handled by the conditional **Designer** role, which emits the artifact rather than editing files).
+
 #### Programmatic Context Tracking
 
 The compaction gate reads session transcripts to calculate usage:

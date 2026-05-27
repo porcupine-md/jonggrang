@@ -196,6 +196,30 @@ Example:
 
 ---
 
+### `design` — Design System Settings
+
+Controls the `DESIGN.md` design-artifact flow in **orchestrate mode**. The design phases (6.5 `design-system` and 11.5 `design-verify-ui`) auto-activate when Triage (phase 2) classifies the feature as `has_ui` (UI/frontend keyword heuristic). When the feature has no UI, these phases are skipped and the block has no effect.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | true | Allow design phases to auto-activate when triage classifies `has_ui` |
+| `artifact` | string | `./DESIGN.md` | Canonical token spec path, project root, git-tracked |
+| `lint` | boolean | true | Run `npx @google/design.md lint` during self-lint |
+| `wcag` | string | `AA` | Contrast threshold enforced against the tokens |
+
+```json
+{
+  "design": {
+    "enabled": true,
+    "artifact": "./DESIGN.md",
+    "lint": true,
+    "wcag": "AA"
+  }
+}
+```
+
+---
+
 ### Full Example
 
 ```json
@@ -247,6 +271,12 @@ Example:
     "security": true,
     "performance": true,
     "coverage": true
+  },
+  "design": {
+    "enabled": true,
+    "artifact": "./DESIGN.md",
+    "lint": true,
+    "wcag": "AA"
   }
 }
 ```
@@ -324,6 +354,8 @@ Persistent orchestration state for a feature run. Located at:
 | `feature_id` | string | Unique feature identifier |
 | `description` | string | Original orchestrate description |
 | `work_type` | string | `BUGFIX`, `SMALL`, `MEDIUM`, `LARGE` |
+| `has_ui` | boolean | Whether the feature touches UI/frontend (classified at Triage). Gates the design phases |
+| `design_artifact` | string | Path to the `DESIGN.md` token spec (`./DESIGN.md` when `has_ui`, `null` otherwise) |
 | `status` | string | `running`, `completed`, `failed`, `paused` |
 | `current_phase` | number | Currently executing phase (1-16) |
 | `active_phases` | array | Phases that will run (after skipping) |

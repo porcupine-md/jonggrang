@@ -287,11 +287,13 @@ The orchestrate command runs a deterministic 16-phase pipeline. Each phase is ex
 | 4 | SkillMap | Lead | Map tasks → skills via gateway | — |
 | 5 | Complexity | Lead | Deep complexity analysis, risk assessment | BUGFIX, SMALL |
 | 6 | Brainstorm | Lead | Generate alternative approaches **(human pause)** | BUGFIX, SMALL |
+| 6.5 | DesignSystem | Designer | Author DESIGN.md (gather → extract tokens → construct → self-lint) → DESIGN_COMPLETE **(human pause)** | non-UI work (`has_ui` false) |
 | 7 | Architect | Lead | Output architecture_plan_json → ARCHITECTURE_PLAN_COMPLETE | BUGFIX, SMALL |
 | 8 | Implement | Developer | Execute plan, typecheck+lint+test → IMPLEMENTATION_COMPLETE | — |
 | 9 | DesignVerify | Reviewer | Verify design matches architecture plan | BUGFIX, SMALL |
 | 10 | Compliance | Reviewer | AGENTS.md compliance, security patterns | — |
 | 11 | Quality | Reviewer | Code quality, test coverage gaps → REVIEW_COMPLETE | — |
+| 11.5 | DesignVerifyUI | Designer | Verify implemented UI complies with DESIGN.md tokens (no hardcoded equivalents) → DESIGN_UI_VERIFIED | non-UI work (`has_ui` false) |
 | 12 | TestPlan | TestLead | Output test_plan_json → TEST_PLAN_COMPLETE | BUGFIX |
 | 13 | Test | Tester | Execute test plan, run all tests | — |
 | 14 | Coverage | Tester | Enforce coverage thresholds | — |
@@ -309,6 +311,15 @@ LARGE   → run all 16 phases
 
 Work type is auto-classified by the Lead agent in phase 2 based on the description and discovered scope.
 
+### Design Phases — Gated by `has_ui`
+
+The two design phases — 6.5 `design-system` and 11.5 `design-verify-ui` — are **conditional** and orthogonal to work type. They only run when the feature touches UI. Triage (phase 2) classifies `has_ui` via `classifyHasUi(description)` (a UI/frontend keyword heuristic; an explicit `{hasUi}` hint overrides it). Gating is implemented through a separate `DESIGN_PHASES` skip-set in `getActivePhases(workType, { hasUi })`, **not** through the work-type `PHASE_SKIP_MAP`.
+
+- **`has_ui` false** → pipeline is unchanged (the standard 17 phases; design phases never appear).
+- **`has_ui` true** → the two design phases are added (+2), so the run has 19 phases. Phase 6.5 is a **human-pause** phase in non-autonomous modes, mirroring the brainstorming pause at phase 6.
+
+Both phases are handled by the **Designer** role, which emits `DESIGN.md` content (the platform persists it) rather than writing files directly.
+
 ### MANIFEST.yaml — Persistent State
 
 Located at `.jonggrang/.output/features/{id}/MANIFEST.yaml`, it survives session resets:
@@ -317,6 +328,8 @@ Located at `.jonggrang/.output/features/{id}/MANIFEST.yaml`, it survives session
 feature_id: feat-20260411-abc123
 description: "add payment flow"
 work_type: MEDIUM
+has_ui: false                # gates design phases; design_artifact is null when false
+design_artifact: null        # './DESIGN.md' when has_ui is true
 status: in_progress
 current_phase: 8
 active_phases: [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
@@ -366,6 +379,9 @@ Phase 13-14   → Tester
 | Reviewer | no | no (read-only) | REVIEW_COMPLETE |
 | TestLead | YES | no | TEST_PLAN_COMPLETE |
 | Tester | no | YES | ALL_TESTS_PASSING |
+| Designer | YES | no (read-only) | DESIGN_COMPLETE / DESIGN_UI_VERIFIED |
+
+The **Designer** is a conditional sixth role, active only on UI work (`has_ui`). It is not part of the standard assembly line. Its tools are `Read`, `Bash`, `Task` (forbidden: `Edit`, `Write`). It does not write source code — it **emits** `DESIGN.md` content the same way the Lead emits its architecture plan, and the platform persists it. It signals `DESIGN_COMPLETE` at phase 6.5 and `DESIGN_UI_VERIFIED` at phase 11.5.
 
 **Coordinator roles** (Lead, TestLead) can spawn sub-agents via the Task tool, but cannot directly edit files. They plan and delegate.
 
@@ -491,7 +507,9 @@ tests/**, *.test.*, *.spec.*      → testing
    → NO: block with message showing pending domains
 ```
 
-If reviewer OR tester FAILS any domain, **all domains reset to PENDING**. The loop must run again.
+A domain is COMPLETE when **every** sub-phase it has is PASS. For `backend`, `api`, and `database` that means `review=PASS AND testing=PASS` (unchanged). For the `frontend` domain on UI work (`has_ui`), a **third gate** is added: `design=PASS` — recorded by the Designer at phase 11.5. So a UI frontend domain requires `review=PASS AND testing=PASS AND design=PASS`. `activateFeedbackLoop(projectRoot, domain, { hasUi })` seeds the `design` sub-phase only for `frontend` + `hasUi`.
+
+If reviewer, tester, OR (for UI frontend) the design verifier FAILS any domain, **all domains reset to PENDING**. The loop must run again.
 
 ### Loop Detection
 

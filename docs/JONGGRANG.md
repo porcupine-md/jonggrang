@@ -96,7 +96,8 @@ project-root/
 │       ├── developer.md
 │       ├── reviewer.md
 │       ├── test-lead.md
-│       └── tester.md
+│       ├── tester.md
+│       └── designer.md         # Conditional 6th role (UI work)
 ├── .jonggrang/
 │   ├── jonggrang.json          # Project config
 │   ├── jonggrang-tasks.json    # Task board state
@@ -217,6 +218,8 @@ jonggrang orchestrate --resume
 
 A bug fix runs ~5 phases. A new subsystem gets all 16.
 
+**Conditional design phases (`has_ui`):** Independently of work type, two phases — 6.5 `design-system` (Designer authors DESIGN.md, sits between Brainstorming and Architecting) and 11.5 `design-verify-ui` (Designer verifies the UI against DESIGN.md tokens, sits in the review cluster before Code Quality) — are added when Triage classifies the feature as `has_ui`. This gating is orthogonal to `PHASE_SKIP_MAP`; it is a separate `DESIGN_PHASES` skip-set applied in `getActivePhases(workType, { hasUi })`. Non-UI work is unchanged; UI work runs +2 phases. Phase 6.5 is a human-pause in non-autonomous modes, mirroring Brainstorming.
+
 ---
 
 ## Five-Role Assembly Line
@@ -251,8 +254,11 @@ User → Orchestrator
 | **Reviewer** | Validates code against specs and patterns. | Read, Bash | Edit, Write, Task |
 | **Test Lead** | Analyzes implementation, designs test strategy. | Task, Read, TodoWrite | Edit, Write, Bash |
 | **Tester** | Writes and runs tests from the plan. | Edit, Write, Bash, Read | Task |
+| **Designer** *(conditional)* | Authors & verifies the DESIGN.md token spec. Never writes source code. | Read, Bash, Task | Edit, Write |
 
 **Key constraint:** Coordinators (Lead, Test Lead) can spawn sub-agents via `Task` but cannot touch files. Executors (Developer, Tester) can modify files but cannot spawn agents. This enforces the Thin Agent / Fat Platform model.
+
+**The Designer** ("Specialized Designer") is a **conditional sixth role**, activated only when the feature touches UI (`has_ui`). It is not part of the standard `ASSEMBLY_LINE`. Like the Lead, it cannot edit files — it **emits** its `DESIGN.md` artifact as phase output and the platform persists it (the emit-pattern). It runs at two phases: 6.5 (author DESIGN.md) and 11.5 (verify the implemented UI against the tokens).
 
 ### Completion Signals
 
@@ -265,6 +271,7 @@ Each agent outputs a completion signal only when success criteria are genuinely 
 | Reviewer | `REVIEW_COMPLETE` |
 | Test Lead | `TEST_PLAN_COMPLETE` |
 | Tester | `ALL_TESTS_PASSING` |
+| Designer *(UI work)* | `DESIGN_COMPLETE` (phase 6.5) / `DESIGN_UI_VERIFIED` (phase 11.5) |
 
 The orchestrator blocks on these signals. Hooks enforce that `ALL_TESTS_PASSING` cannot be output if tests are actually failing.
 

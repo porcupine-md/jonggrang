@@ -32,7 +32,8 @@ skills/
 │   ├── gateway-api/SKILL.md
 │   ├── gateway-testing/SKILL.md
 │   ├── gateway-database/SKILL.md
-│   └── gateway-deploy/SKILL.md
+│   ├── gateway-deploy/SKILL.md
+│   └── gateway-design/SKILL.md
 │
 └── library/                                 ← Hard Drive: JIT loaded via Gateway routing
     ├── backend/
@@ -51,6 +52,8 @@ skills/
     │   └── input-validation/SKILL.md
     ├── security/
     │   └── rate-limiting/SKILL.md
+    ├── design/
+    │   └── design-md/SKILL.md        (+ references/, templates/)
     └── deploy/
         ├── aws/SKILL.md
         ├── gcp/SKILL.md
@@ -112,6 +115,7 @@ The Gateway is the routing layer between agent intent and skill files. Instead o
 | test, spec, coverage, mock, fixture | testing | unit-testing-patterns, fixing-flaky-tests |
 | migration, query, schema, ORM | database | safe-migrations |
 | rate-limit, auth, token, security | security | rate-limiting |
+| design token, design system, design.md, palette, typography, WCAG, theme, visual identity | design | design-md |
 | deploy, release, host, server, cloud | deploy | aws, gcp, cloudflare, vercel, netlify, railway, coolify, fly, ssh-vps, kubernetes, docker-registry |
 
 ---
@@ -244,6 +248,7 @@ Jonggrang auto-detects the relevant core skill from the task description:
 | `gateway-testing` | testing/ library skills |
 | `gateway-database` | database/ library skills |
 | `gateway-deploy` | deploy/ library skills |
+| `gateway-design` | design/ library skills |
 
 ### Scaffold Skills
 
@@ -309,6 +314,12 @@ Jonggrang auto-detects the relevant core skill from the task description:
 | Skill | What It Teaches |
 |-------|----------------|
 | `rate-limiting` | express-rate-limit, Redis store, per-IP/per-user patterns |
+
+### Design
+
+| Skill | What It Teaches |
+|-------|----------------|
+| `design-md` | Authoring `DESIGN.md`: gather references, extract design tokens, construct the Design Brief + narrative, self-lint via `npx @google/design.md lint` + WCAG AA contrast |
 
 ### Deploy
 

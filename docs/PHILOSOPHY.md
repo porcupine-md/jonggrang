@@ -129,6 +129,7 @@ Jonggrang is built on a **Thin Agent / Fat Platform** model. The AI models are s
 | **Reviewer** | `*-reviewer` | Validates design, compliance, and quality. Rejects non-compliant work. | Review Report JSON |
 | **Test Lead** | `test-lead` | Analyzes implementation, designs test strategy. | Test Plan JSON |
 | **Tester** | `*-tester` | Writes and runs tests from the plan. | Test Results JSON |
+| **Designer** *(conditional, UI work)* | `designer` | Authors & verifies the DESIGN.md token spec. Never writes source code. | DESIGN.md (emitted) |
 
 **Tool restriction boundary:**
 
@@ -137,8 +138,11 @@ Jonggrang is built on a **Thin Agent / Fat Platform** model. The AI models are s
 | Lead, Test Lead | `Task`, `Read`, `TodoWrite` | `Edit`, `Write`, `Bash` |
 | Developer, Tester | `Edit`, `Write`, `Bash`, `Read` | `Task` |
 | Reviewer | `Read`, `Bash` | `Edit`, `Write`, `Task` |
+| Designer | `Read`, `Bash`, `Task` | `Edit`, `Write` |
 
-Coordinators plan. Executors implement. Never both.
+Coordinators plan. Executors implement. Never both. The **Designer** sits on the planning side of the boundary: like the Lead, it has no edit tools — it *emits* its `DESIGN.md` artifact and the platform persists it. It appears only on UI work and is not part of the standard five-role line.
+
+Just as the Reviewer and Tester enforce **code quality** as a gate the implementation must pass, the Designer enforces **design quality** the same way: the DESIGN.md token spec becomes the contract, and the implemented UI must comply with it (no hardcoded color/spacing/type equivalents) before the frontend domain can be considered done. Design quality is enforced, not merely suggested.
 
 ### Two-Tier Skill System
 
