@@ -48,4 +48,42 @@ test('design FAIL resets and blocks exit', () => {
   assert.strictEqual(fb.checkExitGate(root).allowed, false);
 });
 
+// ── setDirtyBit seeds the design sub-phase from the active manifest ──
+const o = require('../lib/orchestration');
+
+test('setDirtyBit seeds design sub-phase for frontend when manifest.has_ui', () => {
+  const root = tmpRoot();
+  o.createManifest(root, 'feat-ui', 'Build a settings page', 'MEDIUM', { hasUi: true });
+  fb.setDirtyBit(root, 'frontend');
+  const state = fb.readFeedbackState(root);
+  assert.ok(state.domain_phases.frontend.design, 'design sub-phase should be seeded');
+  assert.strictEqual(state.domain_phases.frontend.design.status, 'PENDING');
+});
+
+test('setDirtyBit does NOT seed design for backend, even with has_ui manifest', () => {
+  const root = tmpRoot();
+  o.createManifest(root, 'feat-ui', 'Build a settings page', 'MEDIUM', { hasUi: true });
+  fb.setDirtyBit(root, 'backend');
+  const state = fb.readFeedbackState(root);
+  assert.ok(!state.domain_phases.backend.design, 'backend must never get a design gate');
+});
+
+test('setDirtyBit does NOT seed design when manifest has no UI', () => {
+  const root = tmpRoot();
+  o.createManifest(root, 'feat-be', 'Add a queue worker', 'MEDIUM', { hasUi: false });
+  fb.setDirtyBit(root, 'frontend');
+  const state = fb.readFeedbackState(root);
+  assert.ok(!state.domain_phases.frontend.design, 'no design gate when has_ui is false');
+});
+
+test('setDirtyBit resets an existing design sub-phase to PENDING on new edits', () => {
+  const root = tmpRoot();
+  o.createManifest(root, 'feat-ui', 'Build a settings page', 'MEDIUM', { hasUi: true });
+  fb.activateFeedbackLoop(root, 'frontend', { hasUi: true });
+  fb.recordPhaseResult(root, 'frontend', 'design', 'PASS', 'designer');
+  fb.setDirtyBit(root, 'frontend'); // new frontend edit invalidates prior verification
+  const state = fb.readFeedbackState(root);
+  assert.strictEqual(state.domain_phases.frontend.design.status, 'PENDING');
+});
+
 process.exit(failed === 0 ? 0 : 1);

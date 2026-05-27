@@ -359,7 +359,8 @@ export default function (pi: ExtensionAPI) {
         let message = `FEEDBACK LOOP GATE:\n${gate.reason}\n\nTo unblock:\n`;
         message += `  1. Spawn reviewer agent for each modified domain\n`;
         message += `  2. Spawn tester agent for each modified domain\n`;
-        message += `  3. Both must return PASS status\n`;
+        message += `  3. For UI work (design gate on frontend), spawn the designer to verify UI vs DESIGN.md\n`;
+        message += `  4. Each gate shown above must return PASS status\n`;
         if (stuckCount > 3) {
           message += `\n=== ESCALATION ADVISOR ===\nAgent stuck for ${stuckCount} consecutive attempts.\n`;
           message += `Hint: Check feedback-loop-state.json — are reviewer/tester agents spawned?\n`;
