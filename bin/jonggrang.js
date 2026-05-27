@@ -1756,17 +1756,18 @@ async function cmdOrchestrate(descriptionParts) {
 
   // ── Classify work type ────────────────────────────────────────
   const workType = orchestration.classifyWorkType(description);
-  const activePhases = orchestration.getActivePhases(workType);
+  const hasUi = orchestration.classifyHasUi(description);
+  const activePhases = orchestration.getActivePhases(workType, { hasUi });
 
   logHeader(`Orchestrating: ${description}`);
-  logInfo(`Work type: ${workType}`);
+  logInfo(`Work type: ${workType}${hasUi ? ' (has UI — design phases active)' : ''}`);
   logInfo(`Active phases: ${activePhases.join(', ')}`);
   console.log('');
 
   // ── Create MANIFEST ───────────────────────────────────────────
   const featureId = orchestration.generateFeatureId(description);
   const { manifest, manifestPath } = orchestration.createManifest(
-    PROJECT_ROOT, featureId, description, workType
+    PROJECT_ROOT, featureId, description, workType, { hasUi }
   );
 
   logInfo(`Feature ID: ${featureId}`);
@@ -1833,11 +1834,25 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       process.exit(0);
     }
 
+    if (phaseNum === orchestration.DESIGN_SYSTEM_PHASE && activeMode !== 'autonomous') {
+      // DesignSystem — pause for human design input in non-autonomous modes
+      logInfo('\n[DESIGN SYSTEM PHASE — Human Input Required]');
+      logInfo(`Feature: ${manifest.description}`);
+      logInfo('Provide design references / preferences (URLs, screenshots, assets) before continuing.');
+      logInfo('Resume with: jonggrang work --resume');
+      orchestration.failPhase(manifestPath, phaseNum, 'Awaiting human input (design-system)');
+      process.exit(0);
+    }
+
     // ── Build phase prompt ────────────────────────────────────────
     let phaseContext;
     if (phaseNum === orchestration.SIMPLIFY_PHASE) {
       // Phase 9 (simplification) uses specialized prompt with file scope
       phaseContext = orchestration.buildSimplifyPrompt(manifest, PROJECT_ROOT);
+    } else if (phaseNum === orchestration.DESIGN_SYSTEM_PHASE) {
+      phaseContext = orchestration.buildDesignSystemPrompt(manifest, PROJECT_ROOT);
+    } else if (phaseNum === orchestration.DESIGN_VERIFY_UI_PHASE) {
+      phaseContext = orchestration.buildDesignVerifyUiPrompt(manifest, PROJECT_ROOT);
     } else {
       // All other phases use generic phase context
       phaseContext = orchestration.buildPhaseContext(manifest, phaseNum);
