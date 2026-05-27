@@ -1834,6 +1834,14 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       process.exit(0);
     }
 
+    if (orchestration.DESIGN_PHASES.has(phaseNum) && !lib.readConfig(CONFIG_FILE, 'design.enabled', true)) {
+      // Design phases are disabled in config — skip them quietly
+      logInfo(`Phase ${phaseNum}: design.enabled=false — skipping`);
+      orchestration.completePhase(manifestPath, phaseNum, { skipped: 'design.enabled=false' });
+      manifest = orchestration.readManifest(manifestPath);
+      continue;
+    }
+
     if (phaseNum === orchestration.DESIGN_SYSTEM_PHASE && activeMode !== 'autonomous') {
       // DesignSystem — pause for human design input in non-autonomous modes
       logInfo('\n[DESIGN SYSTEM PHASE — Human Input Required]');
