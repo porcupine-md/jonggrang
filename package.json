@@ -43,7 +43,7 @@
     "check": "bash scripts/check.sh",
     "check:quick": "bash scripts/check.sh --quick",
     "check:syntax": "bash scripts/check.sh --syntax-only",
-    "test": "node test/backend-args.test.js"
+    "test": "for f in test/*.test.js; do node \"$f\" || exit 1; done"
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0",
