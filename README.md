@@ -110,7 +110,7 @@ jonggrang work --task task-003       # Execute specific task only
   "tool": "opencode",          // opencode | claude | jonggrang | codex
   "mode": { "autonomy": "balanced" },
   "work": { "max_iterations": 10 },
-  "design": { "enabled": true, "artifact": "./DESIGN.md", "wcag": "AA" }  // DESIGN.md flow for UI work
+  "design": { "enabled": true }  // DESIGN.md flow for UI work (orchestrate mode)
 }
 ```
 

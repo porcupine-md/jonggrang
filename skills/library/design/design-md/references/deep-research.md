@@ -1,6 +1,5 @@
 # DESIGN.md — Condensed Research Reference
 
-> Source: Full report at `obs-brain/raw/design-md-deep-research.md` (40.8KB, 10 sections)
 > This is the agent-facing condensed version for quick lookups.
 
 ## Key Facts

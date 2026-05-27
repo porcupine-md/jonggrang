@@ -2,6 +2,16 @@
 version: alpha
 name: MyBrand
 description: One-sentence description of the visual identity.
+design_brief:
+  audience: "Who sees this — be specific (role, context, what they are NOT)"
+  emotional_target: "One dominant feeling on first impression (e.g. relief, confidence)"
+  behavioral_target: "The single primary action (e.g. start a free trial in 30 seconds)"
+  reference_fusion:
+    - source: "Reference A"
+      take: "what to borrow (e.g. palette / warmth)"
+    - source: "Reference B"
+      take: "what to borrow (e.g. typography / structure)"
+  anti_target: "What it must NOT look like (e.g. not corporate, not a generic template)"
 colors:
   primary: "#0F172A"
   secondary: "#64748B"
@@ -61,6 +71,21 @@ components:
 
 Describe the voice and feel of the brand in one or two paragraphs. What mood
 does it evoke? What emotional response should a user have on first impression?
+
+## Narrative
+
+Define the content flow before the visuals — tokens say *how* it looks, this
+says *in what order* the story unfolds. Replace with your own ordering:
+
+Hero (big claim + visual demo) → Outcome (what changes, not features)
+→ Who It's For (specific persona, placed early)
+→ Why It's Different (comparison framing) → How To Use (short, visual)
+→ Testimonials (specific: name, context, numbers) → CTA
+
+Tone rules:
+- One CTA per section, no more.
+- Avoid domain jargon — phrase it the way the audience would.
+- Lead with the outcome; let readers recognize themselves *after* they see the value.
 
 ## Colors
 

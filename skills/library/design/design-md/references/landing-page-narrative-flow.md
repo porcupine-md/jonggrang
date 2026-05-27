@@ -1,13 +1,13 @@
 # Landing Page Narrative Flow
 
-Template for Indonesian SaaS landing pages targeting non-technical business owners. Based on the v4 BukuCepat PO page that tested well.
+Template for SaaS landing pages targeting non-technical business owners. Based on a v4 App page that tested well.
 
 ## Section Flow (ordered)
 
-1. **Header** — Sticky, frosted glass, logo + 2 buttons (Masuk, Coba Gratis). Clean, minimal.
+1. **Header** — Sticky, frosted glass, logo + 2 buttons (Log In, Start Free). Clean, minimal.
 
 2. **Hero** 
-   - Badge: green dot + "Baru — [product name]" pill chip
+   - Badge: green dot + "New — [product name]" pill chip
    - H1: Pain-point question, 2 lines max, tight leading
    - Subtitle: 1-2 sentences, max 560px width, 70% opacity
    - 2 CTAs: Primary green + Secondary outline. ONE primary only.
@@ -15,29 +15,29 @@ Template for Indonesian SaaS landing pages targeting non-technical business owne
 3. **Problem / Before-After**
    - Section label: "Problem" (uppercase, green, small)
    - H2: Empathetic headline acknowledging the pain
-   - 2-column grid: "Sebelum [product]" (white bg, red ✕) vs "Pakai [product]" (green-light bg, green ✓)
+   - 2-column grid: "Before [product]" (white bg, red ✕) vs "With [product]" (green-light bg, green ✓)
    - 5 items each, specific and relatable
 
 4. **How It Works**
-   - Section label: "Cara Kerja"
+   - Section label: "How It Works"
    - 3-step cards with step numbers, icons, and short descriptions
    - Each card: cream bg, 24px radius, centered
 
 5. **Features Grid**
-   - Section label: "Fitur"
+   - Section label: "Features"
    - 3×2 grid of feature cards with icons
    - White bg section for contrast
 
 6. **Target Audience**
-   - Section label: "Untuk Siapa"
+   - Section label: "Who It's For"
    - 3 persona cards with emoji, title, and 1-line description
    - Green-light bg section for warmth
 
 7. **Testimonials**
-   - Section label: "Testimoni"
+   - Section label: "Testimonials"
    - 3 quote cards: italic quote + avatar + name + role
    - White border cards, real-sounding (not generic)
-   - Short, specific, dengan angka ("30+ orderan", "3 jam → 10 menit")
+   - Short, specific, with numbers ("30+ orders", "3 hours → 10 minutes")
 
 8. **Final CTA**
    - Graphite (#111b21) dark section
@@ -47,11 +47,11 @@ Template for Indonesian SaaS landing pages targeting non-technical business owne
 
 9. **Footer**
    - White bg, 3-column: brand + products + contact
-   - Bottom bar: copyright + "dibuat dengan ❤️"
+   - Bottom bar: copyright + "made with ❤️"
 
 ## Tone Rules
-- Casual, not corporate ("gue", "gak", "banget" OK in testimonials)
+- Casual, not corporate (informal contractions OK in testimonials)
 - Pain-first: lead with what's broken, then show the fix
-- Specific numbers everywhere ("20+ order per hari", "3 jam → 10 menit")
+- Specific numbers everywhere ("20+ orders per day", "3 hours → 10 minutes")
 - Emoji as visual anchors, not decoration
-- Never say "solusi" or "revolusioner" — these are hype words
+- Never say "solution" or "revolutionary" — these are hype words

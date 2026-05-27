@@ -1,12 +1,10 @@
-# DESIGN.md Pipeline Case Study: BukuCepat PO
+# DESIGN.md Pipeline Case Study: App
 
 ## Objective
-Generate a landing page for `po.bukucepat.id` (PO module) using design system extracted from `bukucepat.id` (main product landing page).
+Generate a landing page for App using design system extracted from App (main product landing page).
 
 ## Target Audience
-- Pebisnis PO yang kewalahan handle order di WA
-- Pekerja dengan side income jastip/PO
-- Bisnis PO yang mau scale up dari catatan manual
+- [Target Audience]
 
 ## Extracted Design System (Shadcn UI-based)
 - **Primary:** `#0f172a` (slate-900) — button backgrounds, CTA sections
@@ -32,13 +30,13 @@ Generate a landing page for `po.bukucepat.id` (PO module) using design system ex
 
 ### V2
 - **Fix:** Added explicit `background: #0f172a; color: #047857` in `<style>` block for all button variants
-- **Improvement:** Better hero copy ("Orderan numpuk, piutang gak ke-track, untung gak jelas?")
+- **Improvement:** Better hero copy ("Orders piling up, payments untracked, profit unclear?")
 - **Added:** Social proof section, card hover animations, icon box shadows
 - **Review:** All tokens match reference — minor refinements only
 
 ### V3 (Final)
 - **Polish:** Hero padding 120px top, scroll-behavior smooth, meta description, mobile responsive
-- **Added:** "Baru! Modul Purchase Order" chip in hero
+- **Added:** "New! Purchase Order module" chip in hero
 - **Result:** Single-file HTML (16KB), Tailwind CDN, all DESIGN.md tokens accurately rendered
 
 ## Key Lessons
@@ -48,13 +46,13 @@ Generate a landing page for `po.bukucepat.id` (PO module) using design system ex
 - Content adaptation matters as much as visual accuracy — match tone to target audience
 - 3 iterations is the sweet spot: v1 gets structure right, v2 fixes styling, v3 polishes
 
-## Landing Page Content Pattern (Indonesian SaaS Audience)
+## Landing Page Content Pattern (SaaS Audience)
 From this session, the user approved this content structure:
-- **Hero:** Pain-point question, not feature statement ("Orderan numpuk, piutang gak ke-track?")
+- **Hero:** Pain-point question, not feature statement ("Orders piling up, payments untracked?")
 - **Problem section:** Before/After comparison with relatable scenarios
 - **How it works:** 3-step numbered cards, one sentence per step
 - **Features:** 6-card grid, icon + short description, no paragraphs
 - **Who it's for:** 3 specific personas, NOT generic "small business owners"
-- **Trust:** Social proof even if placeholder ("Dipercaya Ratusan...")
-- **CTA:** Low-friction language ("Coba Gratis", not "Daftar Sekarang")
-- **Tone:** Casual Indonesian, emoji in headings OK, empowering not corporate
+- **Trust:** Social proof even if placeholder ("Trusted by hundreds...")
+- **CTA:** Low-friction language ("Start Free", not "Sign Up Now")
+- **Tone:** Casual, emoji in headings OK, empowering not corporate

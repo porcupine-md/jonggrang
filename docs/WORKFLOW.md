@@ -509,7 +509,7 @@ tests/**, *.test.*, *.spec.*      → testing
 
 A domain is COMPLETE when **every** sub-phase it has is PASS. For `backend`, `api`, and `database` that means `review=PASS AND testing=PASS` (unchanged). For the `frontend` domain on UI work (`has_ui`), a **third gate** is added: `design=PASS` — recorded by the Designer at phase 11.5. So a UI frontend domain requires `review=PASS AND testing=PASS AND design=PASS`. `activateFeedbackLoop(projectRoot, domain, { hasUi })` seeds the `design` sub-phase only for `frontend` + `hasUi`.
 
-If reviewer, tester, OR (for UI frontend) the design verifier FAILS any domain, **all domains reset to PENDING**. The loop must run again.
+If reviewer, tester, OR (for UI frontend) the design verifier FAILS a domain, that domain's failing sub-phase stays `FAIL` and **every *other* modified domain resets to PENDING** (so they get re-validated against the change). The failing domain itself returns to `PENDING` only when a new edit triggers `setDirtyBit`. Either way the loop must run again — exit stays blocked until every modified domain has all its sub-phases at PASS.
 
 ### Loop Detection
 

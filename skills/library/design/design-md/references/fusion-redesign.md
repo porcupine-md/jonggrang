@@ -29,10 +29,10 @@ When a single reference is too generic or produces "AI-looking" output, fuse 2-3
 
 7. **Deploy and review.** If it feels "AI," the palette or spacing is wrong. Adjust and redeploy.
 
-## V4 Example: BukuCepat PO
+## V4 Example: An App
 
 - **WhatsApp:** `#fcf5eb` cream bg, `#25d366` green CTA, `#dcf8c6` green-pale, flat design, pill shapes
 - **GitBook:** `#111b21` graphite dark, `#fe551b` orange accent, `General Sans` bold, tight hero spacing, confidence tone
-- **Fusion:** WhatsApp palette + GitBook structure + BukuCepat casual tone
+- **Fusion:** WhatsApp palette + GitBook structure + App casual tone
 
 Result: warm, human, professional — not a template.

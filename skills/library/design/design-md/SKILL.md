@@ -2,11 +2,11 @@
 name: design-md
 description: Author/extract/validate/export/integrate Google's DESIGN.md token spec files — full pipeline from reference websites, user prompts, or designer assets to agent-ready design systems with WCAG linting.
 version: 1.0.0
-author: Hermes Agent
+author: Coding Agent
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  agent:
     tags: [design, design-system, tokens, ui, accessibility, wcag, tailwind, dtcg, google]
     related_skills: [popular-web-designs, claude-design, excalidraw, architecture-diagram]
 ---
@@ -127,116 +127,116 @@ if the value type is valid. Unknown component properties produce a warning.
 
 ## ⚠️ MANDATORY: Design Brief (Soul Gate)
 
-**Sebelum menulis satu token pun, kamu WAJIB menggali dan menuliskan Design Brief.**
-Tanpa ini, DESIGN.md akan menghasilkan output yang akurat secara teknis tapi kosong secara emosional — generic, "AI banget", tidak memorable.
+**Before you write a single token, you MUST dig out and write down the Design Brief.**
+Without it, DESIGN.md produces output that is technically accurate but emotionally empty — generic, "AI-looking", not memorable.
 
-Design Brief adalah **preamble wajib** yang menjawab 5 pertanyaan sebelum ekstraksi dimulai:
+The Design Brief is a **mandatory preamble** that answers 5 questions before extraction begins:
 
-### 1. Siapa yang lihat ini? (Audience)
-Spesifik. Bukan "pebisnis" — tapi "pebisnis PO fashion di Bandung, jualan lewat WA & IG, 25-40 tahun, bukan akuntan, gak suka tools yang ribet."
+### 1. Who sees this? (Audience)
+Be specific. Not "business owners" — but "small online sellers who run their store over chat apps, 25-40, not accountants, who dislike fiddly tools."
 
-### 2. Apa yang harus mereka rasakan? (Emotional Target)
-Satu kata dominan: lega, percaya diri, penasaran, terhibur, aman.
+### 2. What should they feel? (Emotional Target)
+One dominant word: relief, confidence, curiosity, delight, safety.
 
-### 3. Apa yang harus mereka lakukan? (Behavioral Target)
-Satu tindakan primer: "coba gratis dalam 30 detik", bukan "eksplor fitur".
+### 3. What should they do? (Behavioral Target)
+One primary action: "start a free trial in 30 seconds", not "explore features".
 
-### 4. Referensi apa yang kita contek? (Reference Fusion)
-Minimal 2 sumber. Format:
+### 4. What references are we borrowing from? (Reference Fusion)
+At least 2 sources. Format:
 ```
-Referensi A (source) → ambil: [apa yang diambil]
-Referensi B (source) → ambil: [apa yang diambil]
+Reference A (source) → take: [what to take]
+Reference B (source) → take: [what to take]
 ```
 
-### 5. Apa yang HARUS dihindari? (Anti-target)
-"Nggak boleh keliatan kayak software akuntansi." "Jangan corporate." "Jangan template SaaS generic."
+### 5. What MUST be avoided? (Anti-target)
+"Must not look like accounting software." "Not corporate." "Not a generic SaaS template."
 
-### Implementation
+### Implementation Example
 
-Design Brief ditulis sebagai **YAML preamble + prose** di awal DESIGN.md:
+The Design Brief is written as a **YAML preamble + prose** at the top of DESIGN.md:
 
 ```yaml
 ---
-name: BukuCepat PO
+name: App
 design_brief:
-  audience: "Pebisnis PO & jastiper Indonesia, 25-40 tahun, bukan akuntan, jualan lewat chat"
-  emotional_target: "Lega — akhirnya ada tools yang ngerti cara kerja mereka tanpa bikin pusing"
-  behavioral_target: "Coba gratis dalam 30 detik pertama, langsung lihat hasil dari 1 chat order"
+  audience: "Small-business owners, 25-40, not accountants, who run their business over chat"
+  emotional_target: "Relief — finally a tool that fits how they actually work, without the headache"
+  behavioral_target: "Start a free trial in the first 30 seconds and immediately see the result of a single action"
   reference_fusion:
-    - source: "bukucepat.id"
+    - source: "the product's own brand site"
       take: "brand identity & trust signal"
     - source: "WhatsApp"
       take: "warmth (#fcf5eb), familiarity, green CTA (#25d366), pill shapes"
     - source: "GitBook"
       take: "confident narrative flow, outcome-first structure, bold graphite typography"
-  anti_target: "Jangan keliatan seperti software akuntansi. Jangan corporate. Jangan template SaaS."
+  anti_target: "Must not look like accounting software. Not corporate. Not a generic SaaS template."
 colors:
   primary: "#25d366"
   # ...
 ---
 ```
 
-**Agent enforcement rule:** Jika Design Brief belum lengkap (5 pertanyaan belum terjawab), JANGAN lanjut ke token extraction. Tanya user dulu. Kalau user gak bisa jawab, infer dari konteks produk + reference fusion, lalu konfirmasi ke user.
+**Agent enforcement rule:** If the Design Brief is incomplete (the 5 questions are not yet answered), DO NOT proceed to token extraction. Ask the user first. If the user can't answer, infer from the product context + reference fusion, then confirm with the user.
 
 ### Narrative Structure (First-Class Section)
 
-Setelah Design Brief + Overview, tambahkan `## Narrative` section yang mendefinisikan struktur konten:
+After the Design Brief + Overview, add a `## Narrative` section that defines the content structure:
 
 ```markdown
 ## Narrative
 
-Flow section landing page:
-Hero (big claim + visual demo) → Outcome (yang berubah, bukan fitur)
-→ Untuk Siapa (persona spesifik, early placement)
-→ Kenapa Beda (comparison framing) → Cara Pakai (singkat, visual)
-→ Testimoni (spesifik: nama, kota, angka) → CTA
+Landing page section flow:
+Hero (big claim + visual demo) → Outcome (what changes, not features)
+→ Who It's For (specific persona, early placement)
+→ Why It's Different (comparison framing) → How To Use (short, visual)
+→ Testimonials (specific: name, city, numbers) → CTA
 
 Tone rules:
-- Casual Indonesian, "kamu" bukan "Anda"
-- Emoji di heading boleh (💬, 🚀, ✅) — audiens UMKM
-- Jangan jargon akuntansi: ganti "piutang" jadi "siapa yang belum bayar"
-- Satu CTA per section, jangan lebih
+- Casual, friendly tone — second person ("you"), not formal
+- Emoji in headings OK (💬, 🚀, ✅) — for a consumer / SMB audience
+- Avoid domain jargon: replace "accounts receivable" with "who hasn't paid yet"
+- One CTA per section, no more
 
-Persona placement: "Untuk Siapa" muncul SETELAH outcome section, bukan di akhir.
-Ini penting — pembaca perlu lihat dulu value-nya, baru identifikasi dirinya.
+Persona placement: "Who It's For" appears AFTER the outcome section, not at the end.
+This matters — readers need to see the value first, then recognize themselves.
 ```
 
 ### Why This Matters
 
-Tanpa Design Brief + Narrative, agent akan:
-- Generate warna akurat tapi gak tau kenapa warna itu dipilih
-- Bikin layout sesuai token tapi gak tau urutan section yang optimal
-- Hasilkan UI yang "secara teknis benar" tapi "gak ada soul-nya"
+Without a Design Brief + Narrative, an agent will:
+- Generate accurate colors but not know why those colors were chosen
+- Build a layout that matches the tokens but not know the optimal section order
+- Produce UI that is "technically correct" but "has no soul"
 
-Dengan Design Brief + Narrative, agent punya konteks untuk membuat keputusan desain yang **audience-aware** — bukan cuma token-accurate.
+With a Design Brief + Narrative, the agent has the context to make **audience-aware** design decisions — not just token-accurate ones.
 
 ---
 
 ## Workflow: authoring a new DESIGN.md
 
-### Step 0 — Design Brief (WAJIB)
-1. Jawab 5 pertanyaan Design Brief di atas. Tanya user untuk yang gak jelas.
-2. Tulis `design_brief:` di YAML preamble.
-3. Tulis `## Narrative` section di markdown body.
+### Step 0 — Design Brief (MANDATORY)
+1. Answer the 5 Design Brief questions above. Ask the user about anything unclear.
+2. Write `design_brief:` in the YAML preamble.
+3. Write the `## Narrative` section in the markdown body.
 
 ### Step 1 — Extract Tokens
-1. Dari reference website (Mode B), prompt user (Mode A), designer assets (Mode C), atau multi-reference fusion (Mode D).
-2. Tulis YAML tokens: `name`, `colors`, `typography`, `rounded`, `spacing`, `components`.
+1. From a reference website (Mode B), user prompt (Mode A), designer assets (Mode C), or multi-reference fusion (Mode D).
+2. Write the YAML tokens: `name`, `colors`, `typography`, `rounded`, `spacing`, `components`.
 
 ### Step 2 — Write DESIGN.md
-3. **Gunakan token references** (`{colors.primary}`) di `components:` section.
-4. **Tulis semua prose sections** (Overview, Colors, Typography, Layout, Elevation, Shapes, Components, Do's and Don'ts).
+3. **Use token references** (`{colors.primary}`) in the `components:` section.
+4. **Write all prose sections** (Overview, Colors, Typography, Layout, Elevation, Shapes, Components, Do's and Don'ts).
 
 ### Step 3 — Lint & Verify
 5. Run `npx @google/design.md lint DESIGN.md`. Fix errors.
-6. Cross-check extracted tokens vs reference (browser console).
+6. Cross-check extracted tokens vs the reference (browser console).
 
-### Step 4 — Export (opsional)
-7. Jika user punya existing project, generate Tailwind/DTCG exports.
+### Step 4 — Export (optional)
+7. If the user has an existing project, generate Tailwind/DTCG exports.
 
 ### Step 5 — Implement & Review
-8. Generate UI dari DESIGN.md. Lihat [5-Phase Pipeline](#workflow-5-phase-designmd--landing-page-pipeline) untuk workflow lengkap.
-9. Kalau output masih "gak enak" padahal token akurat → **cek Design Brief dan Narrative, bukan token.**
+8. Generate UI from DESIGN.md. See the [5-Phase Pipeline](#workflow-5-phase-designmd--landing-page-pipeline) for the full workflow.
+9. If the output still "feels off" even though the tokens are accurate → **check the Design Brief and Narrative, not the tokens.**
 
 ## Workflow: lint / diff / export
 
@@ -380,7 +380,7 @@ Reference B (source) → take: typography style + shape language
 Reference C (source) → take: narrative structure / flow
 ```
 
-Example (BukuCepat PO): `bukucepat.id` (brand identity & trust) + `WhatsApp`
+Example (App): `App.id` (brand identity & trust) + `WhatsApp`
 (warmth `#fcf5eb`, green CTA `#25d366`, pill shapes) + `GitBook` (confident
 outcome-first narrative flow).
 
@@ -476,7 +476,7 @@ Tokens are the **source of truth**; prose provides **guidance**. Agents should r
 | **Claude Code** | `CLAUDE.md` at root + `DESIGN.md` at root. Claude auto-reads CLAUDE.md. |
 | **Cursor** | `.cursorrules` + `DESIGN.md`. Cursor indexes all project files. |
 | **GitHub Copilot** | `.github/copilot-instructions.md` + `DESIGN.md`. Copilot reads workspace. |
-| **Hermes Agent** | `CLAUDE.md` or `AGENTS.md` + this skill |
+| **Coding Agent** | `CLAUDE.md` or `AGENTS.md` + this skill |
 | **Gemini CLI** | Project context auto-indexed, `DESIGN.md` at root |
 | **Generic agent** | Inject DESIGN.md content into system prompt |
 
@@ -519,38 +519,38 @@ npx @google/design.md export --format dtcg DESIGN.md > tokens.json
 
 ## When to NOT use DESIGN.md
 
-DESIGN.md adalah tool untuk **design system persistence** antar agent dan session. 
-Jangan pakai DESIGN.md kalau:
+DESIGN.md is a tool for **design system persistence** across agents and sessions.
+Don't use DESIGN.md when:
 
-- **Single-file project** — satu landing page HTML. Lebih cepat iterasi langsung di HTML/CSS.
-- **Referensi visual lemah** — kalau reference site-nya sendiri desainnya generic, extracting tokens justru menghasilkan output yang lebih generic.
-- **Eksplorasi cepat** — kalau belum tahu mau look seperti apa, bypass DESIGN.md, bikin 2-3 varian visual, baru formalize token setelah arah desain jelas.
-- **Narrative-heavy content** — DESIGN.md hanya menangkap visual tokens, bukan struktur narasi. Landing page bagus = 20% visual + 60% narasi + 20% taste.
+- **Single-file project** — one HTML landing page. It's faster to iterate directly in HTML/CSS.
+- **Weak visual reference** — if the reference site itself looks generic, extracting tokens just produces even more generic output.
+- **Quick exploration** — if you don't yet know what the look should be, bypass DESIGN.md, build 2-3 visual variants, then formalize tokens once the direction is clear.
+- **Narrative-heavy content** — DESIGN.md only captures visual tokens, not narrative structure. A good landing page = 20% visual + 60% narrative + 20% taste.
 
 ### Multi-Reference Fusion
 
-Jangan cuma extract dari 1 referensi — fusi 2–3 sumber menghasilkan output yang
-lebih distinctive. Lihat [Mode D](#mode-d-multi-reference-fusion-2-sources--1-designmd)
-untuk workflow lengkap (role assignment, fusion matrix, reconciliation).
+Don't extract from just one reference — fusing 2–3 sources produces more
+distinctive output. See [Mode D](#mode-d-multi-reference-fusion-2-sources--1-designmd)
+for the full workflow (role assignment, fusion matrix, reconciliation).
 
-Contoh: BukuCepat PO = bukucepat.id (brand identity) + WhatsApp (warmth + green palette) + GitBook (confident narrative flow, outcome-first structure).
+Example: App = the product's own brand site (brand identity) + WhatsApp (warmth + green palette) + GitBook (confident narrative flow, outcome-first structure).
 
 ### Taste Calibration Rule
 
-Kalau implementasi dari DESIGN.md yang sudah akurat secara teknis (lint 0 errors, token match) masih terasa "gak enak" atau "AI banget" — **masalahnya bukan di token. Masalahnya di narasi atau komposisi.** Jangan tambah token. Ubah struktur konten.
+If an implementation from a DESIGN.md that is already technically accurate (lint 0 errors, tokens match) still "feels off" or "AI-looking" — **the problem isn't the tokens. It's the narrative or composition.** Don't add tokens. Change the content structure.
 
 ## Workflow: content/narrative structure (NEW)
 
-DESIGN.md saat ini fokus pada visual tokens. Untuk landing page, narrative structure minimal sebaiknya:
+DESIGN.md currently focuses on visual tokens. For a landing page, the minimum narrative structure should be:
 
 ```
-Hero (big claim, visual demo) → Outcome (yang berubah, bukan fitur) 
-→ Untuk Siapa (persona spesifik, early placement) 
-→ Kenapa Beda (comparison framing) → Cara Pakai (singkat, visual) 
-→ Testimoni (spesifik: nama, kota, angka) → CTA
+Hero (big claim, visual demo) → Outcome (what changes, not features) 
+→ Who It's For (specific persona, early placement) 
+→ Why It's Different (comparison framing) → How To Use (short, visual) 
+→ Testimonials (specific: name, city, numbers) → CTA
 ```
 
-Ini mencontek GitBook pattern: outcome-first, bukan feature-list. Target audience gak butuh dijelasin fitur — mereka butuh lihat apa yang berubah setelah pakai.
+This borrows the GitBook pattern: outcome-first, not a feature list. The target audience doesn't need features explained — they need to see what changes after they use it.
 
 When generating DESIGN.md from incomplete input, these defaults apply:
 
@@ -656,10 +656,10 @@ Iterate phases 3–5 until review shows only minor refinements.
 
 When generating a landing page from DESIGN.md:
 - Adapt narrative to the target audience, not just the reference site's audience
-- Use pain-point first headlines ("Orderan numpuk, piutang gak ke-track?")
-- Include social proof section (even "Dipercaya Ratusan..." is better than none)
-- CTA should be low-friction ("Coba Gratis", not "Daftar Sekarang")
-- Indonesian audience: casual tone, emoji in headings OK, no corporate jargon
+- Use pain-point-first headlines ("Orders piling up, payments slipping through the cracks?")
+- Include a social proof section (even "Trusted by hundreds..." is better than none)
+- CTA should be low-friction ("Start Free", not "Sign Up Now")
+- Match tone to the audience: casual where it fits, emoji in headings OK, no corporate jargon
 
 ### Folder structure for pipeline runs
 
@@ -688,5 +688,5 @@ When generating a landing page from DESIGN.md:
   the spec itself is Apache-2.0.
 - Deep research reference: `references/deep-research.md` (40KB, 10 sections)
 - Fusion redesign technique: `references/fusion-redesign.md` — when single-reference extraction produces generic output, fuse 2-3 references for tasteful results
-- Landing page narrative flow: `references/landing-page-narrative-flow.md` — battle-tested section structure for Indonesian SaaS landing pages
-- Full pipeline example: `references/pipeline-example.md` (BukuCepat PO case study)
+- Landing page narrative flow: `references/landing-page-narrative-flow.md` — battle-tested section structure for SaaS landing pages
+- Full pipeline example: `references/pipeline-example.md` (App case study)
