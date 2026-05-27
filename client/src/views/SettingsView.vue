@@ -55,6 +55,52 @@
         <InputText v-model="sbx.shell" placeholder="/bin/bash" style="width:100%" />
         <p class="hint">Shell binary inside the container (e.g. /bin/bash, /bin/sh).</p>
       </div>
+
+      <!-- Volume Mounts -->
+      <div class="form-group">
+        <div class="vol-header">
+          <label>Volume Mounts</label>
+          <button class="vol-add-btn" @click="startAddVolume"><i class="pi pi-plus" /> Add</button>
+        </div>
+        <div class="vol-list" v-if="sbx.volumes.length > 0 || addingVolume">
+          <div v-for="vol in sbx.volumes" :key="vol.id" class="vol-row">
+            <label class="vol-toggle" :title="vol.enabled ? 'Disable' : 'Enable'">
+              <input type="checkbox" :checked="vol.enabled" @change="toggleVolume(vol)" />
+            </label>
+            <span class="vol-path">
+              <span v-if="vol.label" class="vol-label">{{ vol.label }}</span>
+              <span class="vol-source">{{ vol.source }}</span>
+              <i class="pi pi-arrow-right vol-arrow" />
+              <span class="vol-dest">{{ vol.destination }}</span>
+            </span>
+            <span :class="['vol-badge', `vol-badge--${vol.type || 'bind'}`]">{{ vol.type || 'bind' }}</span>
+            <span v-if="vol.readonly" class="vol-badge vol-badge--ro">ro</span>
+            <span v-if="vol.error" class="vol-error-icon" :title="vol.error"><i class="pi pi-exclamation-triangle" /></span>
+            <button class="vol-del-btn" @click="removeVolume(vol.id)" title="Remove"><i class="pi pi-times" /></button>
+          </div>
+
+          <!-- Add form row -->
+          <div v-if="addingVolume" class="vol-add-row">
+            <input v-model="newVol.source" placeholder="Source path (host)" class="vol-input" />
+            <i class="pi pi-arrow-right vol-arrow" />
+            <input v-model="newVol.destination" placeholder="Destination (container)" class="vol-input" />
+            <select v-model="newVol.type" class="vol-select">
+              <option value="bind">bind</option>
+              <option value="nfs">nfs</option>
+              <option value="tmpfs">tmpfs</option>
+            </select>
+            <label class="vol-ro-check" title="Read-only">
+              <input type="checkbox" v-model="newVol.readonly" /> ro
+            </label>
+            <button class="vol-confirm-btn" @click="confirmAddVolume"><i class="pi pi-check" /></button>
+            <button class="vol-del-btn" @click="cancelAddVolume"><i class="pi pi-times" /></button>
+          </div>
+        </div>
+        <div v-else class="vol-empty">No extra volumes configured.</div>
+        <div v-if="volCheckError" class="error-text" style="margin-top:4px"><i class="pi pi-exclamation-triangle" /> {{ volCheckError }}</div>
+        <p class="hint">Applied to all sandbox containers. Project-level volumes are added on top.</p>
+      </div>
+
       <div v-if="sbxError" class="error-text"><i class="pi pi-times-circle" /> {{ sbxError }}</div>
       <div v-if="sbxOk" class="ok-text"><i class="pi pi-check-circle" /> Saved!</div>
       <Button :disabled="sbxSaving" @click="saveSandbox" :icon="sbxSaving ? 'pi pi-spin pi-spinner' : 'pi pi-check'" :label="sbxSaving ? 'Saving…' : 'Save'" />
@@ -96,19 +142,108 @@ const saving = ref(false);
 const saveError = ref('');
 const saveOk = ref(false);
 
-const sbx = reactive({ image: '', shell: '' });
+const sbx = reactive({ image: '', shell: '', volumes: [] });
 const sbxSaving = ref(false);
 const sbxError = ref('');
 const sbxOk = ref(false);
+
+const addingVolume = ref(false);
+const newVol = reactive({ source: '', destination: '', type: 'bind', readonly: false });
+const volCheckError = ref('');
 
 onMounted(async () => {
   await workspace.fetch();
   workspacePath.value = workspace.path;
   try {
     const res = await fetch('/api/settings/sandbox');
-    if (res.ok) { const d = await res.json(); sbx.image = d.image || ''; sbx.shell = d.shell || ''; }
+    if (res.ok) {
+      const d = await res.json();
+      sbx.image = d.image || '';
+      sbx.shell = d.shell || '';
+      sbx.volumes = Array.isArray(d.volumes) ? d.volumes : [];
+    }
   } catch {}
 });
+
+function startAddVolume() {
+  newVol.source = '';
+  newVol.destination = '';
+  newVol.type = 'bind';
+  newVol.readonly = false;
+  volCheckError.value = '';
+  addingVolume.value = true;
+}
+
+function cancelAddVolume() {
+  addingVolume.value = false;
+  volCheckError.value = '';
+}
+
+async function confirmAddVolume() {
+  volCheckError.value = '';
+  if (!newVol.destination) {
+    volCheckError.value = 'Destination is required.';
+    return;
+  }
+  if (newVol.type !== 'tmpfs' && !newVol.source) {
+    volCheckError.value = 'Source path is required.';
+    return;
+  }
+  // Check source existence (skip for tmpfs)
+  if (newVol.type !== 'tmpfs') {
+    try {
+      const r = await fetch('/api/settings/sandbox/volumes/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: newVol.source }),
+      });
+      const d = await r.json();
+      if (!d.exists) {
+        volCheckError.value = `Path not found on host: ${newVol.source}`;
+        return;
+      }
+    } catch {
+      volCheckError.value = 'Could not verify path.';
+      return;
+    }
+  }
+  sbx.volumes.push({
+    id: Date.now().toString(36),
+    source: newVol.source,
+    destination: newVol.destination,
+    type: newVol.type,
+    readonly: newVol.readonly,
+    enabled: true,
+  });
+  addingVolume.value = false;
+}
+
+function removeVolume(id) {
+  sbx.volumes = sbx.volumes.filter(v => v.id !== id);
+}
+
+async function toggleVolume(vol) {
+  const enabling = !vol.enabled;
+  if (enabling && vol.type !== 'tmpfs' && vol.source) {
+    try {
+      const r = await fetch('/api/settings/sandbox/volumes/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: vol.source }),
+      });
+      const d = await r.json();
+      if (!d.exists) {
+        vol.error = `Path not found: ${vol.source}`;
+        return;
+      }
+    } catch {
+      vol.error = 'Could not verify path.';
+      return;
+    }
+  }
+  vol.error = null;
+  vol.enabled = enabling;
+}
 
 async function saveSandbox() {
   sbxSaving.value = true;
@@ -118,7 +253,11 @@ async function saveSandbox() {
     const res = await fetch('/api/settings/sandbox', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: sbx.image || 'orcinus/jonggrang-agent', shell: sbx.shell || '/bin/bash' }),
+      body: JSON.stringify({
+        image: sbx.image || 'orcinus/jonggrang-agent',
+        shell: sbx.shell || '/bin/bash',
+        volumes: sbx.volumes,
+      }),
     });
     if (!res.ok) throw new Error('Save failed');
     sbxOk.value = true;
@@ -170,4 +309,58 @@ async function saveWorkspace() {
 }
 .about-row:last-child { border-bottom: none; }
 .about-val { color: var(--jg-text); font-size: 12px; }
+
+/* Volume mounts */
+.vol-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.vol-header label { font-size: 11px; color: var(--jg-text-faint); }
+.vol-add-btn {
+  background: none; border: 1px solid var(--jg-border); color: var(--jg-text-muted);
+  font-size: 11px; padding: 2px 8px; cursor: pointer; display: flex; align-items: center; gap: 4px;
+}
+.vol-add-btn:hover { border-color: var(--jg-green); color: var(--jg-green); }
+.vol-list { display: flex; flex-direction: column; gap: 2px; }
+.vol-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; border: 1px solid var(--jg-border);
+  font-size: 11px; color: var(--jg-text-muted);
+}
+.vol-row:hover { background: var(--jg-hover); }
+.vol-toggle input[type="checkbox"] { accent-color: var(--jg-green); cursor: pointer; }
+.vol-path { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; overflow: hidden; }
+.vol-label { font-size: 11px; color: var(--jg-text-muted); white-space: nowrap; flex-shrink: 0; }
+.vol-source, .vol-dest { font-family: monospace; font-size: 11px; color: var(--jg-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vol-arrow { font-size: 10px; color: var(--jg-text-faint); flex-shrink: 0; }
+.vol-badge {
+  font-size: 9px; padding: 1px 5px; border: 1px solid var(--jg-border);
+  color: var(--jg-text-faint); white-space: nowrap; flex-shrink: 0;
+}
+.vol-badge--nfs { border-color: var(--jg-cyan); color: var(--jg-cyan); }
+.vol-badge--tmpfs { border-color: var(--jg-yellow, #d4a800); color: var(--jg-yellow, #d4a800); }
+.vol-badge--ro { border-color: var(--jg-text-faint); }
+.vol-del-btn {
+  background: none; border: none; color: var(--jg-text-faint);
+  cursor: pointer; padding: 2px 4px; flex-shrink: 0;
+}
+.vol-del-btn:hover { color: var(--jg-red, #e06c75); }
+.vol-confirm-btn {
+  background: none; border: none; color: var(--jg-green);
+  cursor: pointer; padding: 2px 4px; flex-shrink: 0;
+}
+.vol-error-icon { color: var(--jg-yellow, #d4a800); cursor: help; }
+.vol-empty { font-size: 11px; color: var(--jg-text-faint); padding: 6px 0; }
+.vol-add-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; border: 1px dashed var(--jg-green);
+}
+.vol-input {
+  flex: 1; min-width: 0; background: var(--jg-bg); border: 1px solid var(--jg-border);
+  color: var(--jg-text); font-family: monospace; font-size: 11px; padding: 3px 6px; outline: none;
+}
+.vol-input:focus { border-color: var(--jg-green); }
+.vol-select {
+  background: var(--jg-bg); border: 1px solid var(--jg-border);
+  color: var(--jg-text); font-size: 11px; padding: 3px 4px; outline: none;
+}
+.vol-ro-check { font-size: 11px; color: var(--jg-text-faint); display: flex; align-items: center; gap: 3px; white-space: nowrap; cursor: pointer; }
+.vol-ro-check input { accent-color: var(--jg-green); }
 </style>

@@ -60,6 +60,7 @@ module.exports = function(deps) {
             const sandboxConfig = {
                 image: project.sandbox?.image || globalConfig.image,
                 shell: project.sandbox?.shell || globalConfig.shell,
+                volumes: [...webState.getVolumes(), ...(project.sandbox?.volumes || [])],
             };
             await sandbox.start(project, sandboxConfig, secretVars, (line) => {
                 io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });
@@ -111,6 +112,7 @@ module.exports = function(deps) {
             const sandboxConfig = {
                 image: project.sandbox?.image || globalConfig.image,
                 shell: project.sandbox?.shell || globalConfig.shell,
+                volumes: [...webState.getVolumes(), ...(project.sandbox?.volumes || [])],
             };
             await sandbox.start(project, sandboxConfig, secretVars, (line) => {
                 io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });

@@ -55,6 +55,7 @@ const legacyCtx = { PROJECT_ROOT, JONGGRANG_HOME, lib, orchestration, compaction
 const cleanupLegacy = require('./apis/legacy')(app, io, legacyCtx);
 
 webState.cleanupStaleImports();
+webState.initVolumes();
 
 const projectsCtx = { JONGGRANG_HOME, webState, orchestration };
 const cleanupProjects = require('./apis/projects')(app, io, projectsCtx);
