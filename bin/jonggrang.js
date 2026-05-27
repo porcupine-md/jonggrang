@@ -1649,9 +1649,9 @@ async function cmdInit() {
   logSuccess('Generated opencode.json');
   logSuccess('Generated AGENTS.md');
   logSuccess('Generated CLAUDE.md');
-  logSuccess('Installed .claude/agents/ (lead, developer, reviewer, test-lead, tester)');
+  logSuccess('Installed .claude/agents/ (lead, developer, reviewer, test-lead, tester, designer)');
   logSuccess('Installed .claude/SKILL.md');
-  logSuccess('Installed .opencode/agents/ (lead, developer, reviewer, test-lead, tester)');
+  logSuccess('Installed .opencode/agents/ (lead, developer, reviewer, test-lead, tester, designer)');
   logSuccess('Installed .opencode/SKILL.md');
 
   logSuccess('Generated .jonggrang/jonggrang-tasks.json');
