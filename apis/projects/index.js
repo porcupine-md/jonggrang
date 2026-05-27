@@ -59,6 +59,9 @@ module.exports = function register(app, io, ctx) {
 
     function startProjectWatcher(project) {
         if (projectWatchers.has(project.id)) return;
+        // Skip projects whose path isn't on disk yet (e.g., still importing).
+        // mkdirSync below would otherwise create the target dir and race the git clone.
+        if (!fs.existsSync(project.path)) return;
         const jonggrangDir = path.join(project.path, '.jonggrang');
         try { fs.mkdirSync(jonggrangDir, { recursive: true }); } catch {}
         const watcher = chokidar.watch(jonggrangDir, { ignoreInitial: true, depth: 3 });

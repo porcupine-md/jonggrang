@@ -30,74 +30,96 @@ module.exports = function(deps) {
         }
     });
 
+    function runGitClone(url, ref, targetPath, onProgress) {
+        return new Promise((resolve, reject) => {
+            const args = ['clone', '--progress', url, targetPath];
+            if (ref) args.push('--branch', ref);
+            const child = spawn('git', args, {
+                env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+                stdio: ['pipe', 'pipe', 'pipe'],
+            });
+            let lastStderr = '';
+            child.stderr.on('data', d => {
+                const msg = d.toString().trim();
+                if (msg) {
+                    lastStderr = msg;
+                    onProgress(msg);
+                }
+            });
+            child.on('error', reject);
+            child.on('close', code => code === 0 ? resolve() : reject(new Error(lastStderr || `git clone failed (exit ${code})`)));
+        });
+    }
+
+    function runGitInit(cwd) {
+        return new Promise((resolve, reject) => {
+            const child = spawn('git', ['init'], { cwd, stdio: 'pipe' });
+            child.on('error', reject);
+            child.on('close', code => code === 0 ? resolve() : reject(new Error(`git init failed (exit ${code})`)));
+        });
+    }
+
     router.post('/projects/import', async (req, res) => {
         const { name, source } = req.body || {};
-        if (!name || !source) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'name and source required' } });
+        if (!name || !source) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'name and source required' } });
+        }
         if (!['git', 'local', 'fresh'].includes(source.type)) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'source.type must be git|local|fresh' } });
         }
 
+        const path = deps.path;
         const workspacePath = webState.getWorkspacePath();
         fs.mkdirSync(workspacePath, { recursive: true });
 
-        const existing = webState.listProjects().find(p => p.name === name);
-        if (existing) return res.status(409).json({ error: { code: 'NAME_COLLISION', message: `Project "${name}" already exists` } });
+        if (webState.listProjects().some(p => p.name === name)) {
+            return res.status(409).json({ error: { code: 'NAME_COLLISION', message: `Project "${name}" already exists` } });
+        }
 
-        const path = deps.path;
-        const id = webState.generateId('proj');
-        const targetPath = source.type === 'local' && source.link_mode === 'reference'
+        const isReferenceLocal = source.type === 'local' && source.link_mode === 'reference';
+        const targetPath = isReferenceLocal
             ? path.resolve(source.path)
             : path.join(workspacePath, name);
 
-        const record = {
+        // For non-reference imports we own targetPath. If something is already there,
+        // it's leftover from a previous failed/interrupted attempt — wipe it up front
+        // so git clone / fresh init won't fail. Fail loudly if we can't.
+        if (!isReferenceLocal && fs.existsSync(targetPath)) {
+            try {
+                fs.rmSync(targetPath, { recursive: true, force: true });
+            } catch (err) {
+                return res.status(500).json({
+                    error: { code: 'CLEANUP_FAILED', message: `Could not clear leftover path ${targetPath}: ${err.message}` },
+                });
+            }
+        }
+
+        const id = webState.generateId('proj');
+        const now = new Date().toISOString();
+        webState.createProject({
             id,
             name,
             path: targetPath,
             source,
             init_status: 'importing',
             lanes: { main: { id: 'main', path: targetPath, branch: 'main', is_main: true } },
-            created_at: new Date().toISOString(),
-            last_opened_at: new Date().toISOString(),
-        };
-        webState.createProject(record);
+            created_at: now,
+            last_opened_at: now,
+        });
 
         res.status(202).json({ id, job_id: id });
 
+        const emit = (phase, message) => io.to(`project:${id}`).emit('import.progress', { project_id: id, phase, message });
+
         setImmediate(async () => {
             try {
-                io.to(`project:${id}`).emit('import.progress', { project_id: id, phase: 'prepare', message: 'Preparing project...' });
+                emit('prepare', 'Preparing project...');
 
                 if (source.type === 'git') {
-                    // Remove leftover directory from a previous failed clone so git doesn't reject the target
-                    if (fs.existsSync(targetPath)) {
-                        await new Promise((res2, rej) => {
-                            const rm = spawn('rm', ['-rf', targetPath], { stdio: 'pipe' });
-                            rm.on('close', c => c === 0 ? res2() : rej(new Error(`Failed to remove existing directory: ${targetPath}`)));
-                        });
-                    }
-                    const gitArgs = ['clone', '--progress', source.url, targetPath];
-                    if (source.ref) gitArgs.push('--branch', source.ref);
-                    const child = spawn('git', gitArgs, {
-                        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-                        stdio: ['pipe', 'pipe', 'pipe'],
-                    });
-                    await new Promise((resolve, reject) => {
-                        let lastStderr = '';
-                        child.stderr.on('data', d => {
-                            const msg = d.toString().trim();
-                            lastStderr = msg;
-                            io.to(`project:${id}`).emit('import.progress', { project_id: id, phase: 'clone', message: msg });
-                        });
-                        child.on('close', code => code === 0 ? resolve() : reject(new Error(lastStderr || `git clone failed (${code})`)));
-                    });
+                    await runGitClone(source.url, source.ref, targetPath, msg => emit('clone', msg));
                 } else if (source.type === 'fresh') {
                     fs.mkdirSync(targetPath, { recursive: true });
-                    if (source.git_init !== false) {
-                        await new Promise((res2, rej) => {
-                            const g = spawn('git', ['init'], { cwd: targetPath, stdio: 'pipe' });
-                            g.on('close', c => c === 0 ? res2() : rej(new Error('git init failed')));
-                        });
-                    }
+                    if (source.git_init !== false) await runGitInit(targetPath);
                 }
 
                 const detected = webState.detectStack(targetPath);
@@ -105,11 +127,9 @@ module.exports = function(deps) {
                 io.to(`project:${id}`).emit('import.done', { project_id: id, detected });
                 startProjectWatcher(webState.getProject(id));
             } catch (err) {
-                // Remove the project record — don't leave failed imports as zombie entries
                 try { stopProjectWatcher(id); } catch {}
                 try { webState.deleteProject(id); } catch {}
-                // Clean up any partial files created during the attempt
-                if (source.type !== 'local') {
+                if (!isReferenceLocal) {
                     try { fs.rmSync(targetPath, { recursive: true, force: true }); } catch {}
                 }
                 io.to(`project:${id}`).emit('import.error', { project_id: id, message: err.message });
