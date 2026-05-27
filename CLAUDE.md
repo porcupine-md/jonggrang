@@ -85,6 +85,7 @@ For small changes (typo fix, internal bug fix, refactor without API/CLI/config i
 - **Small, verifiable steps** beat one large commit touching many things.
 - **No extra features, abstractions, or error handling** beyond what the task requires. A bug fix does not need surrounding cleanup.
 - **Verify before claiming done.** For CLI/hook changes, actually run the command. For docs changes, reread the section you edited.
+- **UI work reads `DESIGN.md` first.** When a task touches UI/frontend, read the project-root `DESIGN.md` and use its tokens — never hardcode equivalent color, spacing, or type values.
 - **Commit convention** follows recent history (`chore:`, `docs:`, `feat:`, `fix:`). See `git log --oneline -20`.
 
 ---
