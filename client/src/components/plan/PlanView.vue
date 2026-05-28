@@ -609,7 +609,7 @@ onMounted(async () => {
     }
   });
 
-  socket.on('process.exited', ({ project_id }) => {
+  socket.on('process.exited', ({ project_id, code }) => {
     if (project_id !== projectId.value) return;
     const wasGenerating = generating.value;
     const wasRevising = revising.value;
@@ -617,6 +617,9 @@ onMounted(async () => {
     generating.value = false;
     approving.value = false;
     revising.value = false;
+    if (wasApproving && code !== 0) {
+      genError.value = 'Approve failed — no new tasks were created. Re-run "Approve & Decompose".';
+    }
     if (wasGenerating || wasRevising || wasApproving) {
       description.value = '';
       loadPlans();

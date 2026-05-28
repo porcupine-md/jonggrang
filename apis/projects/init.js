@@ -49,7 +49,9 @@ module.exports = function(deps) {
         webState.updateProject(project.id, { init_status: 'initializing' });
         res.status(202).json({ job_id: project.id });
 
-        const child = spawnForProject(project, initArgs);
+        // init always runs on the host — the sandbox container is started later, after
+        // .jonggrang/jonggrang.json exists on disk to be mounted in.
+        const child = spawnForProject(project, initArgs, {}, { local: true });
         wireProjectProcess(project.id, child, 'init');
         child.on('close', (code) => {
             if (code === 0) {

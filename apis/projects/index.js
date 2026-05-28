@@ -1,5 +1,7 @@
 'use strict';
 
+const sandbox = require('../../lib/sandbox');
+
 module.exports = function register(app, io, ctx) {
     const { JONGGRANG_HOME, webState, orchestration } = ctx;
 
@@ -15,7 +17,38 @@ module.exports = function register(app, io, ctx) {
 
     // ── Helpers ──────────────────────────────────────────────────
 
-    function spawnForProject(project, args, extraEnv = {}) {
+    // Spawn `jonggrang <args>` for a project.
+    // If project.sandbox.enabled → docker exec into the project container
+    // so the agent runs in isolation. Otherwise spawn locally on the host.
+    // Pass `{ local: true }` to force host execution (init bootstrap).
+    function spawnForProject(project, args, extraEnv = {}, opts = {}) {
+        const secretVars = webState.getProjectSecretVars(project.id);
+
+        if (project.sandbox?.enabled && !opts.local) {
+            const containerName = sandbox.getContainerName(project.id);
+            const containerPath = sandbox.getContainerPath(project);
+            const envFlags = [];
+            const envForContainer = {
+                JONGGRANG_PROJECT_ROOT: containerPath,
+                JONGGRANG_MODE: 'autonomous',
+                NO_UPDATE_NOTIFIER: '1',
+                FORCE_COLOR: '0',
+                ...secretVars,
+                ...extraEnv,
+            };
+            for (const [k, v] of Object.entries(envForContainer)) {
+                envFlags.push('--env', `${k}=${v}`);
+            }
+            const dockerArgs = [
+                'exec', '-i',
+                '--workdir', containerPath,
+                ...envFlags,
+                containerName,
+                'jonggrang', ...args,
+            ];
+            return spawn('docker', dockerArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+        }
+
         const nodeCli = path.join(__dirname, '..', '..', 'bin', 'jonggrang.js');
         return spawn('node', [nodeCli, ...args], {
             cwd: project.path,
@@ -26,6 +59,7 @@ module.exports = function register(app, io, ctx) {
                 JONGGRANG_MODE: 'autonomous',
                 NO_UPDATE_NOTIFIER: '1',
                 FORCE_COLOR: '0',
+                ...secretVars,
                 ...extraEnv,
             },
             stdio: ['pipe', 'pipe', 'pipe'],

@@ -1218,7 +1218,15 @@ async function cmdApprove(args, opts = {}) {
   // Generate featureId BEFORE running the agent so we can stamp new tasks
   const featureId = orchestration.generateFeatureId(featureName);
 
-  // Snapshot existing task IDs so we can identify newly created ones
+  // Snapshot existing task IDs (only those committed to a completed feature).
+  // Orphan tasks (feature_id: null) are leftovers from a previous partial approve
+  // that never reached the archive step — purge them now so the agent gets a
+  // clean slate and won't hit "task already exists" errors.
+  const tasksBeforeClean = lib.getTasks(TASKS_FILE);
+  if (tasksBeforeClean?.tasks?.some(t => t.feature_id == null)) {
+    const cleaned = { ...tasksBeforeClean, tasks: tasksBeforeClean.tasks.filter(t => t.feature_id != null) };
+    lib.writeJSON(TASKS_FILE, cleaned);
+  }
   const existingTaskIds = new Set(
     (lib.getTasks(TASKS_FILE)?.tasks || []).map(t => t.id)
   );
