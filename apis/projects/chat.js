@@ -25,16 +25,10 @@ module.exports = function(deps) {
         const { message, history = [] } = req.body || {};
         if (!message?.trim()) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'message required' } });
 
-        const MAX_PLAN_BYTES = 32_768; // 32 KB
         const planPath = path.join(project.path, '.jonggrang', 'plan.md');
         let planContent = '(no plan yet)';
         try {
-            if (fs.existsSync(planPath)) {
-                planContent = fs.readFileSync(planPath, 'utf-8');
-                if (Buffer.byteLength(planContent, 'utf-8') > MAX_PLAN_BYTES) {
-                    planContent = planContent.slice(0, MAX_PLAN_BYTES) + '\n\n[...plan truncated — too large to embed]';
-                }
-            }
+            if (fs.existsSync(planPath)) planContent = fs.readFileSync(planPath, 'utf-8');
         } catch {}
 
         try {
