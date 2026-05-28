@@ -9,15 +9,18 @@ import { useManifestStore } from './manifest.js';
 export const useWsStore = defineStore('ws', () => {
   const socket = ref(null);
   const connected = ref(false);
+  const connecting = ref(false);
   const subscribed = ref(new Set());
 
   function connect() {
-    if (socket.value?.connected) return;
+    if (socket.value?.connected || connecting.value) return;
+    connecting.value = true;
 
     const s = io({ path: '/socket.io', transports: ['websocket', 'polling'] });
 
-    s.on('connect', () => { connected.value = true; });
-    s.on('disconnect', () => { connected.value = false; });
+    s.on('connect', () => { connected.value = true; connecting.value = false; });
+    s.on('connect_error', () => { connecting.value = false; });
+    s.on('disconnect', () => { connected.value = false; connecting.value = false; });
 
     // Multi-project events
     s.on('subscribed', ({ project_id, snapshot }) => {
@@ -111,8 +114,9 @@ export const useWsStore = defineStore('ws', () => {
     socket.value?.disconnect();
     socket.value = null;
     connected.value = false;
+    connecting.value = false;
     subscribed.value.clear();
   }
 
-  return { socket, connected, subscribed, connect, subscribe, unsubscribe, disconnect };
+  return { socket, connected, connecting, subscribed, connect, subscribe, unsubscribe, disconnect };
 });

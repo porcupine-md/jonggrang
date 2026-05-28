@@ -25,10 +25,16 @@ module.exports = function(deps) {
         const { message, history = [] } = req.body || {};
         if (!message?.trim()) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'message required' } });
 
+        const MAX_PLAN_BYTES = 32_768; // 32 KB
         const planPath = path.join(project.path, '.jonggrang', 'plan.md');
         let planContent = '(no plan yet)';
         try {
-            if (fs.existsSync(planPath)) planContent = fs.readFileSync(planPath, 'utf-8');
+            if (fs.existsSync(planPath)) {
+                planContent = fs.readFileSync(planPath, 'utf-8');
+                if (Buffer.byteLength(planContent, 'utf-8') > MAX_PLAN_BYTES) {
+                    planContent = planContent.slice(0, MAX_PLAN_BYTES) + '\n\n[...plan truncated — too large to embed]';
+                }
+            }
         } catch {}
 
         try {
@@ -81,8 +87,18 @@ module.exports = function(deps) {
                 `## User message\n${message}`,
             ].filter(Boolean).join('\n');
 
+            let disposed = false;
+            const dispose = () => {
+                if (disposed) return;
+                disposed = true;
+                try { session.dispose(); } catch {}
+            };
+
             const response = await new Promise((resolve, reject) => {
-                const timer = setTimeout(() => reject(new Error('Chat timed out after 60s')), 60_000);
+                const timer = setTimeout(() => {
+                    dispose();
+                    reject(new Error('Chat timed out after 60s'));
+                }, 60_000);
                 session.subscribe((event) => {
                     if (event.type === 'agent_end') {
                         clearTimeout(timer);
@@ -92,9 +108,13 @@ module.exports = function(deps) {
                         reject(new Error(event.error?.message || 'Agent error'));
                     }
                 });
-                session.sendUserMessage(userContent).catch(reject);
+                session.sendUserMessage(userContent).catch((err) => {
+                    clearTimeout(timer);
+                    reject(err);
+                });
             });
 
+            dispose();
             res.json({ content: response });
         } catch (err) {
             res.status(500).json({ error: { code: 'CHAT_ERROR', message: err.message } });

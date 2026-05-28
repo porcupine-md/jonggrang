@@ -2,6 +2,10 @@
 
 const { Router } = require('express');
 
+const VALID_PLAN_TOOL   = ['claude', 'opencode', 'codex', 'jonggrang'];
+const VALID_PLAN_EFFORT = ['minimal', 'moderate', 'deep'];
+const MAX_STRING_LEN    = 100;
+
 module.exports = function(deps) {
     const { fs, path, webState, orchestration, spawnForProject, wireProjectProcess } = deps;
     const router = Router();
@@ -161,6 +165,16 @@ module.exports = function(deps) {
 
         const { description, deep, tool, model, effort } = req.body || {};
         if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
+
+        if (tool && !VALID_PLAN_TOOL.includes(tool)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `tool must be one of: ${VALID_PLAN_TOOL.join(', ')}` } });
+        }
+        if (model && typeof model === 'string' && model.length > MAX_STRING_LEN) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'model must be under 100 characters' } });
+        }
+        if (effort && !VALID_PLAN_EFFORT.includes(effort)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `effort must be one of: ${VALID_PLAN_EFFORT.join(', ')}` } });
+        }
 
         const args = ['plan', description, ...(deep ? ['--deep'] : [])];
         if (tool)   args.push('--tool', tool);

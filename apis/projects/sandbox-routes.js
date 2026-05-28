@@ -31,7 +31,7 @@ module.exports = function(deps) {
         if (!project.sandbox?.enabled) return res.status(400).json({ error: 'SANDBOX_DISABLED' });
 
         if (startingSet.has(project.id)) {
-            return res.json({ ok: true, status: 'starting' });
+            return res.status(202).json({ job_id: project.id, status: 'starting' });
         }
 
         startingSet.add(project.id);
@@ -43,7 +43,7 @@ module.exports = function(deps) {
         }
 
         io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
-        res.json({ ok: true, status: 'starting' });
+        res.status(202).json({ job_id: project.id, status: 'starting' });
 
         try {
             // If container exists (stopped) → docker start, otherwise full docker run
@@ -78,11 +78,11 @@ module.exports = function(deps) {
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
         if (!project.sandbox?.enabled) return res.status(400).json({ error: 'SANDBOX_DISABLED' });
 
-        if (startingSet.has(project.id)) return res.json({ ok: true, status: 'starting' });
+        if (startingSet.has(project.id)) return res.status(202).json({ job_id: project.id, status: 'starting' });
 
         startingSet.add(project.id);
         io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
-        res.json({ ok: true, status: 'starting' });
+        res.status(202).json({ job_id: project.id, status: 'starting' });
 
         try {
             await sandbox.restart(project.id);
@@ -99,11 +99,11 @@ module.exports = function(deps) {
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
         if (!project.sandbox?.enabled) return res.status(400).json({ error: 'SANDBOX_DISABLED' });
 
-        if (startingSet.has(project.id)) return res.json({ ok: true, status: 'starting' });
+        if (startingSet.has(project.id)) return res.status(202).json({ job_id: project.id, status: 'starting' });
 
         startingSet.add(project.id);
         io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'starting' });
-        res.json({ ok: true, status: 'starting' });
+        res.status(202).json({ job_id: project.id, status: 'starting' });
 
         try {
             await sandbox.remove(project.id);

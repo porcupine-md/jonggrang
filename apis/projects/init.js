@@ -2,6 +2,12 @@
 
 const { Router } = require('express');
 
+const VALID_INIT_TYPE = ['api', 'cli', 'web-app', 'library'];
+const VALID_INIT_STACK = ['node-typescript', 'express-typescript', 'nextjs-typescript', 'python-fastapi', 'go', 'rust'];
+const VALID_INIT_TOOL = ['claude', 'opencode', 'codex', 'jonggrang'];
+const VALID_INIT_AUTONOMY = ['manual', 'supervised', 'autonomous'];
+const MAX_STRING_LEN = 100;
+
 module.exports = function(deps) {
     const { io, fs, path, webState, spawnForProject, wireProjectProcess, startProjectWatcher } = deps;
     const router = Router();
@@ -14,6 +20,19 @@ module.exports = function(deps) {
         }
 
         const { type = 'api', stack = 'node-typescript', tool = 'opencode', autonomy = 'autonomous', sandbox } = req.body || {};
+
+        if (!VALID_INIT_TYPE.includes(type)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `type must be one of: ${VALID_INIT_TYPE.join(', ')}` } });
+        }
+        if (!VALID_INIT_STACK.includes(stack)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `stack must be one of: ${VALID_INIT_STACK.join(', ')}` } });
+        }
+        if (!VALID_INIT_TOOL.includes(tool)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `tool must be one of: ${VALID_INIT_TOOL.join(', ')}` } });
+        }
+        if (!VALID_INIT_AUTONOMY.includes(autonomy)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `autonomy must be one of: ${VALID_INIT_AUTONOMY.join(', ')}` } });
+        }
         const initArgs = [
             'init', '--force',
             '--name', project.name,

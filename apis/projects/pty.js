@@ -37,9 +37,13 @@ module.exports = function(deps) {
     function spawnPty(project, session, cmd, args, cols, rows) {
         const key = `${project.id}:${session}`;
 
-        // Kill existing session if any
+        // Kill existing session if any — emit replaced first so UI can ignore stale exit
         const existing = activePtySessions.get(key);
         if (existing) {
+            io.to(`project:${project.id}`).emit('pty.replaced', {
+                project_id: project.id,
+                session,
+            });
             try { existing.kill(); } catch {}
             activePtySessions.delete(key);
         }

@@ -47,7 +47,7 @@ module.exports = function(deps) {
                 }
             });
             child.on('error', reject);
-            child.on('close', code => code === 0 ? resolve() : reject(new Error(lastStderr || `git clone failed (exit ${code})`)));
+            child.on('close', code => code === 0 ? resolve() : reject(new Error(`git clone failed (exit ${code}): ${lastStderr}`)));
         });
     }
 
