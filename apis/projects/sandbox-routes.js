@@ -52,6 +52,7 @@ module.exports = function(deps) {
                 image: project.sandbox?.image || globalConfig.image,
                 shell: project.sandbox?.shell || globalConfig.shell,
                 volumes: [...webState.getVolumes(), ...(project.sandbox?.volumes || [])],
+                network: project.sandbox?.network || globalConfig.network,
             };
             const configuredImage = sandboxConfig.image || 'orcinus/jonggrang-agent';
 
@@ -120,6 +121,7 @@ module.exports = function(deps) {
                 image: project.sandbox?.image || globalConfig.image,
                 shell: project.sandbox?.shell || globalConfig.shell,
                 volumes: [...webState.getVolumes(), ...(project.sandbox?.volumes || [])],
+                network: project.sandbox?.network || globalConfig.network,
             };
             await sandbox.start(project, sandboxConfig, secretVars, (line) => {
                 io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });
