@@ -46,6 +46,8 @@ Each task runs in a *fresh context*. No accumulated confusion, no prompt memory 
 ### Simplify
 After implementation, before the PR is opened, the agent revisits every changed file with a single mandate: *reduce complexity without changing behavior*. Rename the unclear variable. Collapse the redundant function. Remove the comment that just restates the code. This phase exists because the first pass is never the last word.
 
+To keep this phase from overflowing a small context window, the agent is fed the **diff** of the changed files (not asked to read every file in full) and only opens a whole file when it needs more surrounding context. The orchestrator measures the total diff *before spawning*: if it stays under `SIMPLIFY_DIFF_BUDGET` (a token threshold), one agent handles all files; if it exceeds the budget, the phase splits into **one fresh agent per file**, so each session's load is bounded by a single file rather than the sum of the change. The split is decided deterministically in code — never left to the model to notice mid-run, by which point it would already have compacted.
+
 ### Test
 The agent writes the tests, runs them, and verifies coverage. Tests are not an afterthought appended at the end; they are part of the definition of done for every task.
 
