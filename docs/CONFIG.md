@@ -200,14 +200,14 @@ Example:
 
 Controls the `DESIGN.md` design-artifact flow in **orchestrate mode**. The design phases (6.5 `design-system` and 11.5 `design-verify-ui`) auto-activate when Triage (phase 2) classifies the feature as `has_ui` (UI/frontend keyword heuristic). When the feature has no UI, these phases are skipped and the block has no effect.
 
-| Field | Type | Default | Status | Description |
-|-------|------|---------|--------|-------------|
-| `enabled` | boolean | true | **Wired** | Allow design phases to auto-activate when triage classifies `has_ui`. Set `false` to skip phases 6.5/11.5 entirely. |
-| `artifact` | string | `./DESIGN.md` | Planned | Intended canonical token spec path. The path is currently hardcoded to `./DESIGN.md` in the manifest/prompts; setting another value has no effect yet. |
-| `lint` | boolean | true | Planned | Intended toggle for `npx @google/design.md lint`. The Designer prompt always instructs a lint pass today; this flag is not yet read. |
-| `wcag` | string | `AA` | Planned | Intended contrast threshold. The prompt hardcodes WCAG AA today; this flag is not yet read. |
+All four fields are read at orchestrate start (`createManifest`) and carried on the MANIFEST, so the design phases and Designer prompts honor them.
 
-> **Only `enabled` is honored today.** `artifact`, `lint`, and `wcag` are documented for forward intent but not yet wired into orchestrate — changing them currently has no effect.
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | true | Allow design phases to auto-activate when triage classifies `has_ui`. Set `false` to skip phases 6.5/11.5 entirely. |
+| `artifact` | string | `./DESIGN.md` | Canonical token spec path (relative to project root). Threaded into the MANIFEST (`design_artifact`); the Designer emits to it, the platform persists it there, and phase 11.5 verifies against it. |
+| `lint` | boolean | true | Toggle the `npx @google/design.md lint` step in the Designer prompts. When `false`, the lint instruction is dropped and the Designer self-checks WCAG contrast only. |
+| `wcag` | string | `AA` | Contrast threshold injected into the Designer prompts (e.g. `AAA`). |
 
 ```json
 {

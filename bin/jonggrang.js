@@ -1767,7 +1767,13 @@ async function cmdOrchestrate(descriptionParts) {
   // ── Create MANIFEST ───────────────────────────────────────────
   const featureId = orchestration.generateFeatureId(description);
   const { manifest, manifestPath } = orchestration.createManifest(
-    PROJECT_ROOT, featureId, description, workType, { hasUi }
+    PROJECT_ROOT, featureId, description, workType, {
+      hasUi,
+      artifact: lib.readConfig(CONFIG_FILE, 'design.artifact', './DESIGN.md'),
+      // readConfig coerces to string, so compare against 'false' to get a real boolean.
+      lint: lib.readConfig(CONFIG_FILE, 'design.lint', 'true') !== 'false',
+      wcag: lib.readConfig(CONFIG_FILE, 'design.wcag', 'AA'),
+    }
   );
 
   logInfo(`Feature ID: ${featureId}`);
@@ -1852,6 +1858,19 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       process.exit(0);
     }
 
+    if (phaseNum === orchestration.DESIGN_VERIFY_UI_PHASE) {
+      // Backstop for the 6.5 hard fail: never verify UI against a missing or
+      // empty DESIGN.md (e.g. resumed run, or artifact deleted out of band).
+      const artifactRel = manifest.design_artifact || './DESIGN.md';
+      const artifactPath = path.join(PROJECT_ROOT, artifactRel);
+      if (!fs.existsSync(artifactPath) || fs.statSync(artifactPath).size === 0) {
+        orchestration.failPhase(manifestPath, phaseNum, `${artifactRel} missing or empty; cannot verify UI against design tokens.`);
+        logError(`${artifactRel} missing or empty — skipping design verification. Re-run the design-system phase.`);
+        logWarn('Resume with: jonggrang work --resume');
+        process.exit(1);
+      }
+    }
+
     // ── Build phase prompt ────────────────────────────────────────
     let phaseContext;
     if (phaseNum === orchestration.SIMPLIFY_PHASE) {
@@ -1903,18 +1922,28 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     // The Designer has no Write tool, so it emits the spec as phase output; the
     // platform copies it to the canonical, git-tracked artifact path.
     if (phaseNum === orchestration.DESIGN_SYSTEM_PHASE && exitCode === 0) {
+      const emitPath = path.join(outputDir, '06_5-designer-design-md.md');
+      const artifactRel = manifest.design_artifact || './DESIGN.md';
+      const artifactPath = path.join(PROJECT_ROOT, artifactRel);
+      // Hard fail on a missing/empty emit or a copy error: phase 11.5
+      // (design-verify-ui) must NOT run against an absent, empty, or stale
+      // DESIGN.md — that would be a false verification of UI against tokens
+      // that were never written this run.
+      const failDesignSystem = (reason) => {
+        orchestration.failPhase(manifestPath, phaseNum, reason);
+        logError(`${reason} Failing phase to avoid false design verification at 11.5.`);
+        logWarn('Resume with: jonggrang work --resume');
+        process.exit(1);
+      };
       try {
-        const emitPath = path.join(outputDir, '06_5-designer-design-md.md');
-        const artifactRel = manifest.design_artifact || './DESIGN.md';
-        const artifactPath = path.join(PROJECT_ROOT, artifactRel);
         if (fs.existsSync(emitPath) && fs.statSync(emitPath).size > 0) {
           fs.copyFileSync(emitPath, artifactPath);
           logSuccess(`Persisted DESIGN.md → ${artifactRel}`);
         } else {
-          logWarn(`Designer emit not found (${emitPath}); ${artifactRel} not persisted.`);
+          failDesignSystem(`Designer emit missing or empty (${emitPath}); ${artifactRel} not persisted.`);
         }
       } catch (e) {
-        logWarn(`Could not persist DESIGN.md: ${e.message}`);
+        failDesignSystem(`Could not persist DESIGN.md: ${e.message};`);
       }
     }
 
