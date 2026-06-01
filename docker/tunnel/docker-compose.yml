@@ -1,0 +1,19 @@
+services:
+  tunnel:
+    image: orcinus/jonggrang-tunnel
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jonggrang-tunnel
+    restart: unless-stopped
+    ports:
+      - "${TUNNEL_PORT:-2222}:22"
+    volumes:
+      - ~/.ssh/authorized_keys:/root/.ssh/authorized_keys:ro
+    networks:
+      - jonggrang
+
+networks:
+  jonggrang:
+    external: true
+    name: jonggrang

@@ -1948,6 +1948,70 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
 // WEB DASHBOARD
 // ============================================================
 
+function cmdWebTunnel(args) {
+  const { spawnSync } = require('child_process');
+
+  // SSH flags that consume the next argument
+  const SSH_VALUE_FLAGS = new Set([
+    '-b', '-D', '-E', '-e', '-F', '-I', '-i', '-J',
+    '-l', '-m', '-o', '-p', '-Q', '-R', '-S', '-w', '-W',
+  ]);
+
+  let destination = null;
+  let connectSpecs = null;
+  const sshPassthrough = [];
+
+  let idx = 0;
+  while (idx < args.length) {
+    const arg = args[idx];
+    if (arg === '-c') {
+      // -c is our flag: comma-separated host:port specs
+      connectSpecs = args[++idx];
+    } else if (!arg.startsWith('-') && destination === null) {
+      destination = arg;
+    } else {
+      sshPassthrough.push(arg);
+      if (SSH_VALUE_FLAGS.has(arg) && idx + 1 < args.length) {
+        sshPassthrough.push(args[++idx]);
+      }
+    }
+    idx++;
+  }
+
+  if (!destination) {
+    logError('Usage: jonggrang web tunnel [user@]host -c host:port,... [ssh-opts]');
+    logError('  -c   comma-separated list of host:port to forward (local port = remote port)');
+    logError('  All other ssh flags (e.g. -i, -p) are passed through unchanged.');
+    process.exit(1);
+  }
+
+  // always forward jonggrang web dashboard port
+  const forwardFlags = ['-L', '7777:host.docker.internal:7777'];
+  if (connectSpecs) {
+    for (const spec of connectSpecs.split(',')) {
+      const s = spec.trim();
+      const lastColon = s.lastIndexOf(':');
+      if (lastColon === -1) {
+        logError(`Invalid tunnel spec "${s}" — expected host:port`);
+        process.exit(1);
+      }
+      const host = s.slice(0, lastColon);
+      const port = s.slice(lastColon + 1);
+      if (!port || isNaN(Number(port))) {
+        logError(`Invalid port in tunnel spec "${s}"`);
+        process.exit(1);
+      }
+      forwardFlags.push('-L', `${port}:${host}:${port}`);
+    }
+  }
+
+  const sshArgs = ['-N', ...forwardFlags, ...sshPassthrough, destination];
+  logInfo(`ssh ${sshArgs.join(' ')}`);
+
+  const result = spawnSync('ssh', sshArgs, { stdio: 'inherit' });
+  process.exit(result.status ?? 0);
+}
+
 function cmdWeb() {
   const WEB_DIR = path.resolve(__dirname, '..');
   const serverFile = path.join(WEB_DIR, 'server.js');
@@ -3202,6 +3266,11 @@ async function main() {
   if (command === 'bot-reviewer') {
     const { runBotReviewer } = require('../lib/bot-reviewer');
     await runBotReviewer(rest);
+    return;
+  }
+
+  if (command === 'web' && rest[0] === 'tunnel') {
+    cmdWebTunnel(rest.slice(1));
     return;
   }
 
