@@ -1872,16 +1872,23 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       process.exit(0);
     }
 
-    // ── Build phase prompt ────────────────────────────────────────
-    let phaseContext;
+    // ── Build phase prompt(s) ─────────────────────────────────────
+    // Most phases run a single agent. The simplify phase may split into
+    // one fresh agent per changed file when the total diff is large
+    // (see orchestration.planSimplify) — each unit is a separate run.
+    let phaseUnits;
     if (phaseNum === orchestration.SIMPLIFY_PHASE) {
-      // Phase 9 (simplification) uses specialized prompt with file scope
-      phaseContext = orchestration.buildSimplifyPrompt(manifest, PROJECT_ROOT);
+      const plan = orchestration.planSimplify(manifest, PROJECT_ROOT);
+      if (plan.mode === 'per-file') {
+        logInfo(`Simplify: total diff ~${plan.totalTokens} tokens > budget — splitting into ${plan.units.length} per-file agents`);
+        phaseUnits = plan.units.map(u => ({ core: u.prompt, label: u.file }));
+      } else {
+        phaseUnits = [{ core: plan.prompt, label: null }];
+      }
     } else {
-      // All other phases use generic phase context
-      phaseContext = orchestration.buildPhaseContext(manifest, phaseNum);
+      phaseUnits = [{ core: orchestration.buildPhaseContext(manifest, phaseNum), label: null }];
     }
-    
+
     const agentsContent = lib.fileExists(paths.agentsFile)
       ? fs.readFileSync(paths.agentsFile, 'utf8') : '';
     const progressContent = lib.fileExists(paths.progressFile)
@@ -1890,22 +1897,27 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
     fs.mkdirSync(outputDir, { recursive: true });
 
-    const prompt = [
-      phaseContext,
+    const buildPrompt = (core) => [
+      core,
       agentsContent ? `\n## Project Conventions (AGENTS.md)\n${agentsContent}` : '',
       progressContent ? `\n## Recent Learnings (progress.txt)\n${progressContent}` : '',
       `\n## Output Directory\nWrite all output files to: ${outputDir}/`,
     ].filter(Boolean).join('\n');
 
     if (DRY_RUN) {
-      logInfo(`[DRY RUN] Phase ${phaseNum} prompt (${prompt.length} chars)`);
+      logInfo(`[DRY RUN] Phase ${phaseNum}: ${phaseUnits.length} agent run(s)`);
       orchestration.completePhase(manifestPath, phaseNum, { dry_run: true });
       manifest = orchestration.readManifest(manifestPath);
       continue;
     }
 
-    // ── Run agent ─────────────────────────────────────────────────
-    const exitCode = await lib.runAgent(prompt, activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+    // ── Run agent(s) ──────────────────────────────────────────────
+    let exitCode = 0;
+    for (const unit of phaseUnits) {
+      if (unit.label) logInfo(`  → simplify: ${unit.label}`);
+      exitCode = await lib.runAgent(buildPrompt(unit.core), activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      if (exitCode !== 0) break;
+    }
 
     if (exitCode !== 0) {
       logWarn(`Phase ${phaseNum} agent exited with code ${exitCode}`);
