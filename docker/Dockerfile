@@ -42,7 +42,8 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN npm install -g --no-fund --no-audit \
     jonggrang \
     @anthropic-ai/claude-code \
-    opencode-ai
+    opencode-ai \
+    @openai/codex
 
 # ── Default workdir ───────────────────────────────────────────────────────────
 WORKDIR /workspace
