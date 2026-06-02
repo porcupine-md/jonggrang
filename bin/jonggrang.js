@@ -64,6 +64,7 @@ let VERBOSE = process.env.JONGGRANG_VERBOSE === 'true';
 let DRY_RUN = process.env.JONGGRANG_DRY_RUN === 'false';
 let DEBUG   = process.env.JONGGRANG_DEBUG === 'true';
 let WEB_PORT = parseInt(process.env.JONGGRANG_WEB_PORT || '7777', 10);
+let WEB_HOST = process.env.JONGGRANG_WEB_HOST || '127.0.0.1';
 let WEB_OPEN = true;
 let WORKTREE_MODE = false;
 let GROUP_TASK_IDS = [];
@@ -2084,22 +2085,25 @@ function cmdWeb() {
       JONGGRANG_HOME: JONGGRANG_HOME,
       JONGGRANG_PROJECT_ROOT: PROJECT_ROOT,
       PORT: String(WEB_PORT),
+      HOST: WEB_HOST,
     },
     stdio: 'inherit',
   });
 
   // Open browser after short delay
+  const dashboardUrl = `http://${WEB_HOST}:${WEB_PORT}`;
   if (WEB_OPEN) {
     setTimeout(() => {
-      const url = `http://localhost:${WEB_PORT}`;
-      logSuccess(`Dashboard ready at ${url}`);
-      try {
-        const openCmd = process.platform === 'darwin' ? 'open'
-          : process.platform === 'win32' ? 'start'
-          : 'xdg-open';
-        spawn(openCmd, [url], { stdio: 'ignore', detached: true }).unref();
-      } catch { /* ignore if browser fails to open */ }
+      logSuccess(`Dashboard ready at ${dashboardUrl}`);
+      const openCmd = process.platform === 'darwin' ? 'open'
+        : process.platform === 'win32' ? 'start'
+        : 'xdg-open';
+      const browser = spawn(openCmd, [dashboardUrl], { stdio: 'ignore', detached: true });
+      browser.on('error', () => { /* xdg-open not available, ignore */ });
+      browser.unref();
     }, 1000);
+  } else {
+    logSuccess(`Dashboard ready at ${dashboardUrl}`);
   }
 
   // Forward signals to child
@@ -3301,7 +3305,9 @@ async function main() {
       case '--testing':       INIT_TESTING = rest[++i]; break;
       case '--force':         INIT_FORCE = true; break;
       case '--port':          WEB_PORT = parseInt(rest[++i], 10); break;
-      case '--no-open':       WEB_OPEN = false; break;
+      case '--host':          WEB_HOST = rest[++i]; break;
+      case '--no-open':
+      case '--no-browser':    WEB_OPEN = false; break;
       case '--resume':        ORCHESTRATE_RESUME = true; break;
       case '--role':          ORCHESTRATE_ROLE = rest[++i]; break;
       case '--skip-gates':    SKIP_GATES = true; break;
