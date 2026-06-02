@@ -45,6 +45,9 @@ RUN npm install -g --no-fund --no-audit \
     opencode-ai \
     @openai/codex
 
+# ── Git safe directory (allow mounted workspaces owned by any user) ───────────
+RUN git config --global --add safe.directory '*'
+
 # ── Default workdir ───────────────────────────────────────────────────────────
 WORKDIR /workspace
 
