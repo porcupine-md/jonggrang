@@ -2006,6 +2006,9 @@ function cmdWebTunnel(args) {
     }
   }
 
+  // default to tunnel container port unless -p already provided
+  if (!sshPassthrough.includes('-p')) sshPassthrough.unshift('-p', '2222');
+
   const sshArgs = ['-N', ...forwardFlags, ...sshPassthrough, destination];
   logInfo(`ssh ${sshArgs.join(' ')}`);
 
