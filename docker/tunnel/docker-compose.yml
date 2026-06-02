@@ -6,6 +6,8 @@ services:
       dockerfile: Dockerfile
     container_name: jonggrang-tunnel
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${TUNNEL_PORT:-2222}:22"
     volumes:
