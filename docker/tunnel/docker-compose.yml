@@ -9,7 +9,7 @@ services:
     ports:
       - "${TUNNEL_PORT:-2222}:22"
     volumes:
-      - ~/.ssh/authorized_keys:/root/.ssh/authorized_keys:ro
+      - ~/ssh/authorized_keys:/root/.ssh/authorized_keys:ro
     networks:
       - jonggrang
 
