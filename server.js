@@ -148,6 +148,7 @@ process.on('SIGTERM', () => { cleanupAll(); process.exit(0); });
 
 // ── START SERVER ──────────────────────────────────────────────
 const portEnv = process.env.PORT;
+const HOST = process.env.HOST || '127.0.0.1';
 let envPort = null;
 if (portEnv !== undefined) {
     const parsedPort = Number(portEnv);
@@ -160,8 +161,8 @@ if (portEnv !== undefined) {
 (async () => {
     try {
         const PORT = envPort !== null ? envPort : await findAvailablePort(7777, 7999);
-        server.listen(PORT, () => {
-            console.log(`Jonggrang dashboard on http://localhost:${PORT}`);
+        server.listen(PORT, HOST, () => {
+            console.log(`Jonggrang dashboard on http://${HOST}:${PORT}`);
             console.log(`Project root: ${PROJECT_ROOT}`);
         });
     } catch (err) {

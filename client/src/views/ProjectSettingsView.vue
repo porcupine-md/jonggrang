@@ -43,6 +43,10 @@
             <label>Shell <span class="override-hint">(leave blank to use global)</span></label>
             <input v-model="sbx.shell" :disabled="!sbx.enabled" :placeholder="globalSbx.shell || '/bin/bash'" class="sandbox-image-input" />
           </div>
+          <div class="field-group" :class="{ 'field-disabled': !sbx.enabled }">
+            <label>Docker Network <span class="override-hint">(leave blank to use global)</span></label>
+            <input v-model="sbx.network" :disabled="!sbx.enabled" :placeholder="globalSbx.network || 'jonggrang'" class="sandbox-image-input" />
+          </div>
 
           <!-- Volume Mounts (project-level) -->
           <div class="field-group">
@@ -160,8 +164,8 @@ const cfgSaving = ref(false);
 const cfgError = ref('');
 const cfgSaved = ref(false);
 
-const sbx = reactive({ enabled: false, image: '', shell: '', volumes: [] });
-const globalSbx = reactive({ image: '', shell: '', volumes: [] });
+const sbx = reactive({ enabled: false, image: '', shell: '', network: '', volumes: [] });
+const globalSbx = reactive({ image: '', shell: '', network: '', volumes: [] });
 const sbxSaving = ref(false);
 const sbxError = ref('');
 const sbxSaved = ref(false);
@@ -194,11 +198,13 @@ onMounted(async () => {
         sbx.enabled = !!data.sandbox.enabled;
         sbx.image = data.sandbox.image || '';
         sbx.shell = data.sandbox.shell || '';
+        sbx.network = data.sandbox.network || '';
         sbx.volumes = Array.isArray(data.sandbox.volumes) ? data.sandbox.volumes : [];
       }
       fetch('/api/settings/sandbox').then(r => r.json()).then(d => {
         globalSbx.image = d.image || '';
         globalSbx.shell = d.shell || '';
+        globalSbx.network = d.network || '';
         globalSbx.volumes = Array.isArray(d.volumes) ? d.volumes : [];
       }).catch(() => {});
     }
@@ -301,7 +307,7 @@ async function saveSandbox() {
     const res = await fetch(`/api/projects/${projectId.value}/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sandbox: { enabled: sbx.enabled, image: sbx.image || null, shell: sbx.shell || null, volumes: sbx.volumes } }),
+      body: JSON.stringify({ sandbox: { enabled: sbx.enabled, image: sbx.image || null, shell: sbx.shell || null, network: sbx.network || null, volumes: sbx.volumes } }),
     });
     if (!res.ok) throw new Error('Save failed');
     sbxSaved.value = true;

@@ -1,0 +1,21 @@
+Port 22
+ListenAddress 0.0.0.0
+
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile /root/.ssh/authorized_keys
+
+AllowTcpForwarding yes
+GatewayPorts yes
+X11Forwarding no
+
+# keep connections alive
+ClientAliveInterval 30
+ClientAliveCountMax 10
+
+UseDNS no
+LogLevel INFO

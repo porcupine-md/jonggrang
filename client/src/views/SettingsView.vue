@@ -55,6 +55,11 @@
         <InputText v-model="sbx.shell" placeholder="/bin/bash" style="width:100%" />
         <p class="hint">Shell binary inside the container (e.g. /bin/bash, /bin/sh).</p>
       </div>
+      <div class="form-group">
+        <label>Docker Network</label>
+        <InputText v-model="sbx.network" placeholder="jonggrang" style="width:100%" />
+        <p class="hint">Docker network semua sandbox container akan dikoneksikan. Default: jonggrang.</p>
+      </div>
 
       <!-- Volume Mounts -->
       <div class="form-group">
@@ -142,7 +147,7 @@ const saving = ref(false);
 const saveError = ref('');
 const saveOk = ref(false);
 
-const sbx = reactive({ image: '', shell: '', volumes: [] });
+const sbx = reactive({ image: '', shell: '', network: '', volumes: [] });
 const sbxSaving = ref(false);
 const sbxError = ref('');
 const sbxOk = ref(false);
@@ -160,6 +165,7 @@ onMounted(async () => {
       const d = await res.json();
       sbx.image = d.image || '';
       sbx.shell = d.shell || '';
+      sbx.network = d.network || '';
       sbx.volumes = Array.isArray(d.volumes) ? d.volumes : [];
     }
   } catch {}
@@ -256,6 +262,7 @@ async function saveSandbox() {
       body: JSON.stringify({
         image: sbx.image || 'orcinus/jonggrang-agent',
         shell: sbx.shell || '/bin/bash',
+        network: sbx.network || 'jonggrang',
         volumes: sbx.volumes,
       }),
     });
