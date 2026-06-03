@@ -11,6 +11,7 @@ const routes = [
       { path: 'plan', component: () => import('../components/plan/PlanView.vue') },
       { path: 'pipeline', component: () => import('../views/PipelineView.vue') },
       { path: 'tasks', component: () => import('../components/kanban/KanbanBoard.vue') },
+      { path: 'orchestrate', component: () => import('../views/OrchestrationView.vue') },
       { path: 'logs', component: () => import('../components/log/LogStream.vue') },
       { path: 'changelog', component: () => import('../views/ChangelogView.vue') },
       { path: 'agent',    component: () => import('../views/AgentView.vue') },

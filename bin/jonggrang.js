@@ -583,6 +583,11 @@ async function cmdWork(descriptionParts = []) {
     let taskId;
     if (taskQueue.length > 0) {
       taskId = taskQueue.shift();
+    } else if (GROUP_TASK_IDS.length > 0) {
+      // Group/worktree mode: only ever run the assigned tasks. Do NOT fall back
+      // to getNextTask, which would pick up other plans' tasks from this
+      // worktree's tasks.json copy and break per-plan isolation.
+      taskId = null;
     } else {
       taskId = lib.getNextTask(TASKS_FILE);
     }
@@ -1727,15 +1732,45 @@ async function cmdInit() {
     // git was already initialized by runInit if needed
   }
 
-  // Update .gitignore to exclude ephemeral files
+  // Update .gitignore to exclude ephemeral state and parallel worktrees.
+  // NOTE: .jonggrang/.output/ stays TRACKED on purpose — plans + manifests are
+  // committed and travel with each plan's branch on push.
   const gitignorePath = path.join(PROJECT_ROOT, '.gitignore');
-  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n`;
+  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n.jonggrang/.worktree/\n`;
   try {
-    const existing = lib.fileExists(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
+    let existing = lib.fileExists(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
     if (!existing.includes('.jonggrang/.ephemeral')) {
       fs.appendFileSync(gitignorePath, jonggrangIgnoreBlock);
+    } else if (!existing.includes('.jonggrang/.worktree')) {
+      // Block already present from an older init — append just the worktree line.
+      fs.appendFileSync(gitignorePath, `.jonggrang/.worktree/\n`);
     }
   } catch {}
+
+  // Ensure the repo has at least one commit so parallel worktrees can branch
+  // from HEAD. A fresh clone of an empty remote (or `git init`) has no commit;
+  // repos that already have history are left untouched.
+  try {
+    execSync('git rev-parse HEAD', { cwd: PROJECT_ROOT, stdio: 'pipe' });
+  } catch {
+    try {
+      execSync('git add -A', { cwd: PROJECT_ROOT, stdio: 'pipe' });
+      execSync('git commit -m "chore: initial jonggrang scaffolding"', {
+        cwd: PROJECT_ROOT,
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME:     process.env.GIT_AUTHOR_NAME     || 'jonggrang',
+          GIT_AUTHOR_EMAIL:    process.env.GIT_AUTHOR_EMAIL    || 'jonggrang@local',
+          GIT_COMMITTER_NAME:  process.env.GIT_COMMITTER_NAME  || 'jonggrang',
+          GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || 'jonggrang@local',
+        },
+      });
+      logSuccess('Created initial commit (empty repository)');
+    } catch (err) {
+      logWarn(`Could not create initial commit: ${err.message}`);
+    }
+  }
 
   console.log('');
   logSuccess('Project ready!');

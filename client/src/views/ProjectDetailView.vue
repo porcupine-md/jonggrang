@@ -21,6 +21,10 @@
             <span v-if="manifest.data" class="snav-chip">{{ pipelineProgress }}</span>
           </RouterLink>
           <RouterLink :to="`/projects/${id}/tasks`" class="snav-link"><i class="pi pi-list-check" /> Tasks</RouterLink>
+          <RouterLink :to="`/projects/${id}/orchestrate`" class="snav-link">
+            <i class="pi pi-share-alt" /> Parallel Run
+            <span v-if="orchestration.running" class="snav-chip">live</span>
+          </RouterLink>
           <RouterLink :to="`/projects/${id}/logs`" class="snav-link"><i class="pi pi-desktop" /> Logs</RouterLink>
         </template>
         <!-- Always visible -->
@@ -117,6 +121,7 @@ import { useProjectsStore } from '../stores/projects.js';
 import { useTasksStore } from '../stores/tasks.js';
 import { useWsStore } from '../stores/ws.js';
 import { useManifestStore } from '../stores/manifest.js';
+import { useOrchestrationStore } from '../stores/orchestration.js';
 import InitWizard from '../components/project/InitWizard.vue';
 
 const route = useRoute();
@@ -131,6 +136,7 @@ const sandboxLogTail = ref('');
 const containerName = computed(() => project.value ? `jonggrang-${id.value}` : '');
 
 const manifest = useManifestStore();
+const orchestration = useOrchestrationStore();
 const project = computed(() => projects.byId[id.value] || null);
 const derivedState = computed(() => project.value?.derived_state);
 const isWorkMode = computed(() => {
@@ -187,6 +193,7 @@ onMounted(async () => {
     await projects.fetchOne(id.value);
     tasks.setProject(id.value);
     await tasks.fetchTasks(id.value);
+    orchestration.setProject(id.value);
     ws.subscribe(id.value);
     manifest.fetch(id.value);
 
@@ -222,6 +229,7 @@ watch(id, async (newId, oldId) => {
     await projects.fetchOne(newId);
     tasks.setProject(newId);
     await tasks.fetchTasks(newId);
+    orchestration.setProject(newId);
     ws.subscribe(newId);
   }
 });
