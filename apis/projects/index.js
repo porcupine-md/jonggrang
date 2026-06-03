@@ -233,6 +233,7 @@ module.exports = function register(app, io, ctx) {
     app.use('/api/projects', require('./tasks')(deps));
     app.use('/api/projects', require('./work')(deps));
     app.use('/api/projects', require('./orchestration-run')(deps));
+    app.use('/api/projects', require('./base')(deps));
     app.use('/api/projects', require('./pty')(deps));
     app.use('/api/projects', require('./sandbox-routes')(deps));
     app.use('/api', require('../secrets')(deps));

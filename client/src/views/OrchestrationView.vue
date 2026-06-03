@@ -6,6 +6,14 @@
         <p class="orch-sub">Each plan runs in its own git worktree + branch, in parallel. Review changes per plan, then push each branch.</p>
       </div>
       <div class="orch-head-actions">
+        <button
+          class="orch-btn orch-btn--base"
+          :disabled="pushingBase || !base.has_remote"
+          :title="base.has_remote ? 'Commit plans/tasks to the base branch and push' : 'No remote configured'"
+          @click="pushBase"
+        >
+          <i class="pi pi-cloud-upload" /> {{ pushingBase ? 'Pushing…' : `Push plans → ${base.branch || 'main'}` }}
+        </button>
         <span v-if="orch.hasRun" class="orch-status" :class="`os--${orch.status}`">{{ orch.status }}</span>
         <button v-if="!orch.running" class="orch-btn orch-btn--primary" :disabled="busy" @click="start">
           <i class="pi pi-play" /> Start parallel run
@@ -17,6 +25,7 @@
     </header>
 
     <p v-if="error" class="orch-error">{{ error }}</p>
+    <p v-if="notice" class="orch-notice">{{ notice }}</p>
 
     <div v-if="!orch.hasRun" class="orch-empty">
       <i class="pi pi-sitemap" />
@@ -98,7 +107,10 @@ const { requestJson } = useJonggrangApi();
 
 const busy = ref(false);
 const pushing = ref(null);
+const pushingBase = ref(false);
+const base = reactive({ branch: 'main', has_remote: false, dirty: false });
 const error = ref('');
+const notice = ref('');
 const diff = reactive({ open: false, featureId: null, title: '', branch: '', files: [], file: null, content: '', loading: false });
 
 const pid = () => route.params.id;
@@ -108,6 +120,23 @@ async function refresh() {
     const view = await requestJson(`/api/projects/${pid()}/orchestration`);
     if (view && Array.isArray(view.groups) && view.groups.length) orch.hydrate(view);
   } catch { /* idle */ }
+  try {
+    const b = await requestJson(`/api/projects/${pid()}/base`);
+    if (b) Object.assign(base, b);
+  } catch { /* ignore */ }
+}
+
+async function pushBase() {
+  pushingBase.value = true; error.value = ''; notice.value = '';
+  try {
+    const res = await requestJson(`/api/projects/${pid()}/base/push`, { method: 'POST' });
+    notice.value = `Plans pushed to ${res.branch}${res.committed ? ' (new commit)' : ' (up to date)'}`;
+    base.dirty = false;
+  } catch (e) {
+    error.value = e.message || 'Failed to push plans';
+  } finally {
+    pushingBase.value = false;
+  }
 }
 
 onMounted(() => {
@@ -201,6 +230,8 @@ async function push(g) {
 .orch-btn--push:hover:not(:disabled) { color: var(--jg-green); border-color: var(--jg-green); }
 
 .orch-error { color: var(--jg-red); font-size: 12px; margin: 0 0 12px; }
+.orch-notice { color: var(--jg-green); font-size: 12px; margin: 0 0 12px; }
+.orch-btn--base:hover:not(:disabled) { color: var(--jg-green); border-color: var(--jg-green); }
 .orch-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 60px 0; color: var(--jg-text-faint); font-size: 13px; }
 .orch-empty .pi { font-size: 28px; }
 

@@ -134,6 +134,37 @@
         </div>
       </section>
 
+      <!-- Git SSH Key -->
+      <section class="settings-section">
+        <div class="section-title">Git SSH Key</div>
+        <div class="section-desc">Private key mounted into the sandbox for in-container <code>git push</code>. Resolution: this project key → global key → <code>~/.ssh/id_rsa</code>. Restart the sandbox after changing.</div>
+        <div class="section-content">
+          <div class="ssh-status">
+            Active key: <strong>{{ sshKey.source }}</strong>
+            <span v-if="sshKey.path" class="ssh-path">{{ sshKey.path }}</span>
+          </div>
+          <div v-if="sshKey.fingerprint" class="ssh-fp">{{ sshKey.fingerprint }}</div>
+          <label class="ssh-label">Paste a per-project private key (optional — overrides global/default)</label>
+          <textarea
+            v-model="sshKeyInput"
+            class="ssh-input"
+            rows="4"
+            spellcheck="false"
+            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
+          ></textarea>
+          <div v-if="sshError" class="error-text">{{ sshError }}</div>
+          <div v-if="sshSaved" class="saved-text"><i class="pi pi-check" /> Saved — restart the sandbox to apply</div>
+          <div class="section-footer">
+            <Button size="small" :disabled="sshSaving || !sshKeyInput.trim()" @click="saveSshKey">
+              <i class="pi pi-save" /> {{ sshSaving ? 'Saving...' : 'Save key' }}
+            </Button>
+            <Button size="small" severity="secondary" :disabled="sshSaving || !sshKey.has_project_key" @click="clearSshKey">
+              <i class="pi pi-times" /> Remove project key
+            </Button>
+          </div>
+        </div>
+      </section>
+
     </div>
   </div>
 </template>
@@ -180,7 +211,43 @@ const secretsError = ref('');
 const secretsSaved = ref(false);
 const secretsLoading = ref(false);
 
+const sshKey = reactive({ source: 'none', path: null, has_project_key: false, fingerprint: '' });
+const sshKeyInput = ref('');
+const sshSaving = ref(false);
+const sshError = ref('');
+const sshSaved = ref(false);
+
 const allSecrets = computed(() => secretsStore.list);
+
+async function loadSshKey() {
+  try {
+    const r = await fetch(`/api/projects/${projectId.value}/ssh-key`);
+    if (r.ok) Object.assign(sshKey, await r.json());
+  } catch {}
+}
+
+async function saveSshKey() {
+  sshSaving.value = true; sshError.value = ''; sshSaved.value = false;
+  try {
+    const r = await fetch(`/api/projects/${projectId.value}/ssh-key`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: sshKeyInput.value }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || 'Failed to save key');
+    Object.assign(sshKey, d); sshKeyInput.value = ''; sshSaved.value = true;
+  } catch (e) { sshError.value = e.message; } finally { sshSaving.value = false; }
+}
+
+async function clearSshKey() {
+  sshSaving.value = true; sshError.value = ''; sshSaved.value = false;
+  try {
+    const r = await fetch(`/api/projects/${projectId.value}/ssh-key`, { method: 'DELETE' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || 'Failed');
+    Object.assign(sshKey, d);
+  } catch (e) { sshError.value = e.message; } finally { sshSaving.value = false; }
+}
 
 onMounted(async () => {
   secretsLoading.value = true;
@@ -208,6 +275,7 @@ onMounted(async () => {
         globalSbx.volumes = Array.isArray(d.volumes) ? d.volumes : [];
       }).catch(() => {});
     }
+    await loadSshKey();
   } catch {}
   secretsLoading.value = false;
 });
@@ -395,6 +463,19 @@ async function saveSecrets() {
 .link { color: var(--jg-cyan); text-decoration: none; font-size: 12px; }
 .link:hover { text-decoration: underline; }
 .saved-text { font-size: 11px; color: var(--jg-green); display: flex; align-items: center; gap: 4px; }
+
+/* SSH key */
+.ssh-status { font-size: 12px; color: var(--jg-text-muted); margin-bottom: 4px; }
+.ssh-status strong { color: var(--jg-text); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
+.ssh-path { font-family: monospace; font-size: 11px; color: var(--jg-text-faint); margin-left: 8px; }
+.ssh-fp { font-family: monospace; font-size: 10px; color: var(--jg-text-faint); margin-bottom: 8px; word-break: break-all; }
+.ssh-label { display: block; font-size: 11px; color: var(--jg-text-faint); margin: 8px 0 4px; }
+.ssh-input {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  background: var(--jg-bg); border: 1px solid var(--jg-border); border-radius: var(--radius);
+  color: var(--jg-text-muted); font-family: monospace; font-size: 11px; padding: 8px;
+}
+.ssh-input:focus { outline: none; border-color: var(--jg-green); }
 
 /* Volume mounts */
 .vol-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }

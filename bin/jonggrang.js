@@ -1766,7 +1766,10 @@ async function cmdInit() {
           GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || 'jonggrang@local',
         },
       });
-      logSuccess('Created initial commit (empty repository)');
+      // Normalize the base branch to `main` (git's default is often `master`).
+      // Safe here: we only reach this branch when the repo had no commit.
+      try { execSync('git branch -M main', { cwd: PROJECT_ROOT, stdio: 'pipe' }); } catch {}
+      logSuccess('Created initial commit on main (empty repository)');
     } catch (err) {
       logWarn(`Could not create initial commit: ${err.message}`);
     }
