@@ -35,6 +35,27 @@ const io = new Server(server, {
 app.use(cors({ origin: (origin, cb) => cb(null, isOriginTrusted(origin)) }));
 app.use(express.json({ limit: '1mb' }));
 
+// ── RATE LIMITER ──────────────────────────────────────────────
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60_000;
+const RATE_LIMIT_MAX = 200;
+app.use((req, res, next) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const entry = rateLimitMap.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+    if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + RATE_LIMIT_WINDOW; }
+    entry.count++;
+    rateLimitMap.set(ip, entry);
+    if (entry.count > RATE_LIMIT_MAX) return res.status(429).json({ error: 'Too many requests. Slow down.' });
+    next();
+});
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of rateLimitMap) {
+        if (now > entry.resetAt) rateLimitMap.delete(ip);
+    }
+}, 300_000).unref();
+
 // ── PROJECT / HOME PATHS ──────────────────────────────────────
 const PROJECT_ROOT = process.env.JONGGRANG_PROJECT_ROOT || path.resolve(__dirname, '..');
 
@@ -64,12 +85,6 @@ const cleanupProjects = require('./apis/projects')(app, io, projectsCtx);
 const distPath = path.join(__dirname, 'client', 'dist');
 app.use(express.static(distPath));
 
-// ── GLOBAL API ERROR HANDLER ──────────────────────────────────
-app.use('/api', (err, req, res, _next) => {
-    console.error(`[jonggrang:api:error] ${req.method} ${req.path}:`, err.message);
-    res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
-});
-
 // ── SPA FALLBACK ──────────────────────────────────────────────
 app.get('*', (req, res) => {
     if (req.path.startsWith('/api/')) {
@@ -91,26 +106,11 @@ app.get('*', (req, res) => {
     }
 });
 
-// ── RATE LIMITER ──────────────────────────────────────────────
-const rateLimitMap = new Map();
-const RATE_LIMIT_WINDOW = 60_000;
-const RATE_LIMIT_MAX = 200;
-app.use((req, res, next) => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-    const entry = rateLimitMap.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
-    if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + RATE_LIMIT_WINDOW; }
-    entry.count++;
-    rateLimitMap.set(ip, entry);
-    if (entry.count > RATE_LIMIT_MAX) return res.status(429).json({ error: 'Too many requests. Slow down.' });
-    next();
+// ── GLOBAL API ERROR HANDLER ──────────────────────────────────
+app.use('/api', (err, req, res, _next) => {
+    console.error(`[jonggrang:api:error] ${req.method} ${req.path}:`, err.message);
+    res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
 });
-setInterval(() => {
-    const now = Date.now();
-    for (const [ip, entry] of rateLimitMap) {
-        if (now > entry.resetAt) rateLimitMap.delete(ip);
-    }
-}, 300_000).unref();
 
 // ── PORT FINDER ───────────────────────────────────────────────
 function findAvailablePort(start, end) {

@@ -9,18 +9,24 @@ module.exports = function(deps) {
   const { webState } = deps;
   const router = Router();
 
+  function projectOr404(req, res) {
+    const project = webState.getProject(req.params.id);
+    if (!project) res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
+    return project;
+  }
+
   // ── SSH key for in-container git push ────────────────────────────
   // GET returns only status (never the private key).
   router.get('/:id/ssh-key', (req, res) => {
-    const project = webState.getProject(req.params.id);
-    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
+    const project = projectOr404(req, res);
+    if (!project) return;
     res.json(sandbox.sshKeyStatus(project.id));
   });
 
   // PUT { key } writes a per-project private key (chmod 600). Restart sandbox to apply.
   router.put('/:id/ssh-key', (req, res) => {
-    const project = webState.getProject(req.params.id);
-    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
+    const project = projectOr404(req, res);
+    if (!project) return;
     const { key } = req.body || {};
     if (!key || typeof key !== 'string') {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'key (PEM/OpenSSH private key) required' } });
@@ -35,15 +41,15 @@ module.exports = function(deps) {
 
   // DELETE removes the per-project key (falls back to global → ~/.ssh/id_rsa).
   router.delete('/:id/ssh-key', (req, res) => {
-    const project = webState.getProject(req.params.id);
-    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
+    const project = projectOr404(req, res);
+    if (!project) return;
     sandbox.removeProjectSshKey(project.id);
     res.json({ ok: true, ...sandbox.sshKeyStatus(project.id) });
   });
 
   router.get('/:id/settings', (req, res) => {
-    const project = webState.getProject(req.params.id);
-    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
+    const project = projectOr404(req, res);
+    if (!project) return;
     const configPath = path.join(project.path, '.jonggrang', 'jonggrang.json');
     let jonggrang_config = {};
     try { jonggrang_config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch (err) {
@@ -53,8 +59,8 @@ module.exports = function(deps) {
   });
 
   router.put('/:id/settings', (req, res) => {
-    const project = webState.getProject(req.params.id);
-    if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } });
+    const project = projectOr404(req, res);
+    if (!project) return;
     const { secrets, jonggrang_config, sandbox } = req.body || {};
     if (Array.isArray(secrets)) {
       try { webState.updateProject(req.params.id, { secrets }); } catch (err) {

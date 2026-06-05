@@ -15,10 +15,15 @@ module.exports = function(deps) {
     const { webState, io } = deps;
     const router = Router();
 
-    // Base branch info for the UI.
-    router.get('/:id/base', (req, res) => {
+    function projectOr404(req, res) {
         const project = webState.getProject(req.params.id);
-        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+        if (!project) res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+        return project;
+    }
+
+    router.get('/:id/base', (req, res) => {
+        const project = projectOr404(req, res);
+        if (!project) return;
         try {
             const branch = lib.resolveBaseBranch(project.path);
             res.json({
@@ -33,15 +38,15 @@ module.exports = function(deps) {
 
     // Commit the current plan/task/manifest state on the base branch and push it.
     router.post('/:id/base/push', async (req, res) => {
-        const project = webState.getProject(req.params.id);
-        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+        const project = projectOr404(req, res);
+        if (!project) return;
         if (!lib.hasRemote(project.path)) {
             return res.status(422).json({ error: { code: 'NO_REMOTE', message: 'No "origin" remote configured' } });
         }
         try {
             const branch = lib.resolveBaseBranch(project.path);
             // Make sure we're on the base branch before committing/pushing.
-            try { execSync(`git checkout "${branch}"`, { cwd: project.path, stdio: 'pipe' }); } catch {}
+        try { execSync(`git checkout "${branch}"`, { cwd: project.path, stdio: 'pipe' }); } catch {}
             const committed = lib.commitBaseState(project.path, 'chore: update plans & tasks');
             await lib.pushBranch(project.path, branch);
             io.to(`project:${project.id}`).emit('base.pushed', { project_id: project.id, branch, committed });
