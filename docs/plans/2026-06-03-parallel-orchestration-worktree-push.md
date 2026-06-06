@@ -119,7 +119,7 @@ POST /api/projects/:id/orchestration/start
 - **Worktree base**: forked from current `HEAD` (`baseSha`), which includes tracked `.jonggrang/.output/` (plans + manifests travel with each branch).
 - **Persistence**: survives page navigation / socket reconnect (matches today). Not server-restart (out of scope; consistent with current `activeWork`).
 - **Orchestrator is the sole `tasks.json` writer** during a run (parses worker signals) — prevents races.
-- **Commit granularity**: one commit per plan on completion (simple, predictable). Can iterate to per-task later.
+- **Commit granularity**: per-task commits are produced by the AGENT (instructed via `templates/CLAUDE.md.template` "Commit with: git commit -m type(scope): description" + `skills/core/orchestrating-feature`), NOT by the orchestrator. The orchestrator's per-group `commitWorktreeCtx` is only a safety-net that sweeps leftover working-tree changes the agent didn't commit (e.g. task board / progress.txt) so they reach the branch + diff.
 
 ## 9. Edge cases
 
