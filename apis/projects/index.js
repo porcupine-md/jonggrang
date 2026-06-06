@@ -171,7 +171,7 @@ module.exports = function register(app, io, ctx) {
                     planMtime = fs.statSync(planPath).mtimeMs;
                 }
                 const running = activeWork.has(project_id);
-                const orchestration = deps.orchestrationRunView ? deps.orchestrationRunView(project) : null;
+                const orchView = deps.orchestrationRunView ? deps.orchestrationRunView(project) : null;
                 socket.emit('subscribed', {
                     project_id,
                     snapshot: {
@@ -181,7 +181,7 @@ module.exports = function register(app, io, ctx) {
                         plan_content: planContent,
                         plan_mtime: planMtime,
                         process: running ? { command: 'work' } : null,
-                        orchestration,
+                        orchestration: orchView,
                     },
                 });
                 if (!projectWatchers.has(project_id)) startProjectWatcher(project);

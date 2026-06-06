@@ -2,24 +2,13 @@
 
 // Parallel orchestration manager.
 //
-// Runs every plan (a group of tasks sharing one feature_id) in its own git
-// worktree + branch, in parallel. Within a plan, tasks run serially in
-// dependency order. The parent process here is the SINGLE writer of the main
-// tasks.json: each worktree worker runs `jonggrang work --worktree` which emits
-// task_status JSON signals instead of writing tasks.json (anti-race), and we
-// translate those into the main board so the kanban updates live.
+// Runs every plan (group of tasks sharing one feature_id) in its own git
+// worktree + branch, in parallel. The parent process is the SINGLE writer of
+// tasks.json: workers emit task_status JSON signals via stdout, which we
+// translate into the main board so the kanban updates live.
 //
-// Two execution contexts (see buildCtx):
-//   - host:      git ops + worker run on the host (cwd = host paths).
-//   - container: when project.sandbox.enabled, EVERYTHING (worktree create,
-//                agent work, commit, diff, push) runs INSIDE the project's
-//                Docker container via `docker exec`, using container paths. The
-//                project dir is bind-mounted, so files are shared with the host.
-//
-// Run state lives in-memory (deps.activeRuns) so it survives page navigation /
-// socket reconnect. A serialized snapshot is mirrored to
-// .jonggrang/.ephemeral/orchestration-run.json so diff/push keep working and a
-// fresh subscriber can be re-hydrated.
+// Two execution contexts (host vs Docker container). For sandbox projects
+// everything runs INSIDE the container via `docker exec`.
 
 const { Router } = require('express');
 const { spawn, execFile, execFileSync } = require('child_process');
@@ -54,6 +43,12 @@ module.exports = function(deps) {
     const { fs, webState, io, JONGGRANG_HOME, activeRuns } = deps;
     const router = Router();
 
+    function projectOr404(req, res) {
+        const project = webState.getProject(req.params.id);
+        if (!project) res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+        return project;
+    }
+
     // ── execution context (host vs sandbox container) ─────────────
 
     function buildCtx(project) {
@@ -87,8 +82,8 @@ module.exports = function(deps) {
         return execFileSync('git', argv, { cwd, encoding: 'utf8', maxBuffer: GIT_MAXBUF });
     }
 
-    // Container-only: make git usable on the bind-mounted repo (dubious ownership)
-    // and ensure a committer identity exists for our + the agent's commits.
+    // Container-only: ensure git is usable on the bind-mounted repo
+    // and a committer identity exists.
     function prepareContainerGit(ctx) {
         if (ctx.mode !== 'container') return;
         try { gitSync(ctx, ctx.root, ['config', '--global', '--add', 'safe.directory', '*']); } catch {}
@@ -122,8 +117,9 @@ module.exports = function(deps) {
     function changedFilesCtx(ctx, wt, baseSha) {
         const out = gitSync(ctx, wt, ['diff', '--name-status', baseSha]);
         return out.split('\n').filter(Boolean).map(line => {
-            const [status, ...rest] = line.split('\t');
-            return { status, file: rest.join('\t') };
+            const tabIdx = line.indexOf('\t');
+            if (tabIdx < 0) return { status: line.trim(), file: '' };
+            return { status: line.slice(0, tabIdx), file: line.slice(tabIdx + 1) };
         });
     }
 
@@ -131,8 +127,7 @@ module.exports = function(deps) {
         return gitSync(ctx, wt, file ? ['diff', baseSha, '--', file] : ['diff', baseSha]);
     }
 
-    // Does the container have an ssh client? (Some agent images ship git but not
-    // openssh-client, in which case in-container SSH push is impossible.)
+    // Does the container have an ssh client?
     function containerHasSsh(container) {
         return new Promise((resolve) => {
             execFile('docker', ['exec', container, 'sh', '-c', 'command -v ssh >/dev/null 2>&1 && echo yes || echo no'],
@@ -195,8 +190,6 @@ module.exports = function(deps) {
         if (!running) throw new Error('container did not become ready');
         return true;
     }
-
-    // ── helpers ───────────────────────────────────────────────────
 
     const tasksFileOf  = (project) => path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
     const snapshotPath = (project) => path.join(project.path, '.jonggrang', '.ephemeral', 'orchestration-run.json');
@@ -374,8 +367,8 @@ module.exports = function(deps) {
     // ── routes ────────────────────────────────────────────────────
 
     router.post('/:id/orchestration/start', async (req, res) => {
-        const project = webState.getProject(req.params.id);
-        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+        const project = projectOr404(req, res);
+        if (!project) return;
 
         if (deps.activeWork?.has(project.id)) {
             return res.status(409).json({ error: { code: 'PROCESS_ALREADY_RUNNING', message: 'A work process is already running' } });
@@ -450,8 +443,8 @@ module.exports = function(deps) {
     });
 
     router.post('/:id/orchestration/cancel', (req, res) => {
-        const project = webState.getProject(req.params.id);
-        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+        const project = projectOr404(req, res);
+        if (!project) return;
         const run = activeRuns.get(project.id);
         if (!run) return res.json({ cancelled: false, message: 'No active run' });
         for (const group of Object.values(run.groups)) {
@@ -470,14 +463,14 @@ module.exports = function(deps) {
     });
 
     router.get('/:id/orchestration', (req, res) => {
-        const project = webState.getProject(req.params.id);
-        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+        const project = projectOr404(req, res);
+        if (!project) return;
         res.json(currentRunView(project) || { project_id: project.id, status: 'idle', groups: [] });
     });
 
     router.get('/:id/orchestration/groups/:featureId/diff', (req, res) => {
-        const project = webState.getProject(req.params.id);
-        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+        const project = projectOr404(req, res);
+        if (!project) return;
         const view = currentRunView(project);
         const g = view?.groups?.find(x => x.feature_id === req.params.featureId);
         if (!g) return res.status(404).json({ error: { code: 'GROUP_NOT_FOUND', message: 'Group not found in current run' } });
@@ -493,8 +486,8 @@ module.exports = function(deps) {
     });
 
     router.post('/:id/orchestration/groups/:featureId/push', async (req, res) => {
-        const project = webState.getProject(req.params.id);
-        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+        const project = projectOr404(req, res);
+        if (!project) return;
         const ctx = buildCtx(project);
 
         if (!lib.hasRemote(project.path)) {
