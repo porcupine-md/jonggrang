@@ -630,6 +630,14 @@ async function cmdWork(descriptionParts = []) {
         updateTaskMode(taskId, 'blocked');
         consecutiveFails = 0;
         lastFailedTask = '';
+      } else if (GROUP_TASK_IDS.length > 0) {
+        // Group/worktree mode never falls back to getNextTask, so a task that
+        // got reverted to pending would be dropped from the queue and the run
+        // would falsely report "All tasks completed". Re-queue it to retry
+        // within this run (bounded by kill_after_fails above) — keep going
+        // until every group task is genuinely completed or blocked.
+        logWarn(`Re-queuing ${taskId} for retry (attempt ${consecutiveFails}/${killAfter}).`);
+        taskQueue.push(taskId);
       }
     }
 

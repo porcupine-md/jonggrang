@@ -99,8 +99,10 @@ module.exports = function(deps) {
                         const done = (s) => s === 'completed' || s === 'skipped';
                         const rs = runGroups[name]?.status;
                         if (taskStatuses.every(done)) status = 'done';
-                        else if (taskStatuses.some(s => s === 'failed') || rs === 'failed') status = 'failed';
-                        else if (taskStatuses.some(s => s === 'in_progress') || rs === 'running' || rs === 'queued') status = 'in_progress';
+                        else if (taskStatuses.some(s => s === 'failed' || s === 'blocked') || rs === 'failed') status = 'failed';
+                        // in_progress if work is active OR has partially progressed
+                        // (some tasks already done, but not all) — not "approved".
+                        else if (taskStatuses.some(s => s === 'in_progress') || rs === 'running' || rs === 'queued' || taskStatuses.some(done)) status = 'in_progress';
                         else status = 'approved';
                     }
 
