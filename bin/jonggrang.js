@@ -3434,7 +3434,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+main().then(() => {
+  // runAgent (Pi backend) disposes each session, but the SDK can leave residual
+  // async handles that keep the event loop alive. Exit once here, after the whole
+  // command finished — NOT inside runAgent (that killed the work loop after one
+  // task). setImmediate lets buffered stdout flush to a piped parent first.
+  setImmediate(() => process.exit(process.exitCode || 0));
+}).catch((err) => {
   logError(err.message);
   process.exit(1);
 });
