@@ -464,6 +464,7 @@ The web dashboard runs **each plan as one group** — every task sharing a `feat
 - The orchestration **manager (server-side)** is the single writer of the main `jonggrang-tasks.json`: each worktree worker runs `jonggrang work --worktree --group-tasks <ids> --branch <name>` and emits `task_status` JSON signals instead of writing the board, so parallel workers never race. The kanban updates live from the manager's writes.
 - On completion, the manager **commits** the worktree to its branch. The user reviews the plan's **Changes** tab (file list + diff) and **pushes the branch** to `origin` (pending manual worktree changes are committed first; same branch name, never `main`/`master`, no auto-merge).
 - A run **survives page navigation** (in-memory run + socket replay + a `.ephemeral/orchestration-run.json` snapshot), matching the single-work-process guarantee. The plan list shows a **live badge** per running plan.
+- **Push plans → base branch** (plan list footer) commits the plan/task/manifest state, **rebases onto `origin/<base>` first** (identical untracked init-scaffolding files are cleared, state-file conflicts resolve in favor of local state — the manager is the single writer), then pushes. A moved `main` (e.g. merged PRs) never causes a rejected push; real conflicts return a clear error instead of guessing.
 
 ```
 Plan: simple-api      (task-001..005, blocked_by chain) → worktree feat/simple-api      (serial within)

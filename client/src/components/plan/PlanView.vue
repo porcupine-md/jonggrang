@@ -424,7 +424,8 @@ async function pushBase() {
     const res = await fetch(`/api/projects/${projectId.value}/base/push`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || 'Failed to push plans');
-    baseNotice.value = `Plans pushed to ${data.branch}${data.committed ? ' (new commit)' : ' (up to date)'}`;
+    baseNotice.value = `Plans pushed to ${data.branch}` +
+      `${data.committed ? ' (new commit' : ' (up to date'}${data.rebased ? ', rebased on origin)' : ')'}`;
     base.dirty = false;
   } catch (e) {
     baseError.value = e.message;
