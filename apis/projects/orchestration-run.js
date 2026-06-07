@@ -113,7 +113,7 @@ module.exports = function(deps) {
         gitSync(ctx, wt, ['add', '-A']);
         const status = gitSync(ctx, wt, ['status', '--porcelain']).trim();
         if (!status) return false;
-        gitSync(ctx, wt, ['commit', '-m', message]);
+        gitSync(ctx, wt, ['commit', '-m', message, '-m', lib.COAUTHOR_TRAILER]);
         return true;
     }
 

@@ -1755,7 +1755,7 @@ async function cmdInit() {
   } catch {
     try {
       execSync('git add -A', { cwd: PROJECT_ROOT, stdio: 'pipe' });
-      execSync('git commit -m "chore: initial jonggrang scaffolding"', {
+      execSync(`git commit -m "chore: initial jonggrang scaffolding" -m "${lib.COAUTHOR_TRAILER}"`, {
         cwd: PROJECT_ROOT,
         stdio: 'pipe',
         env: {
