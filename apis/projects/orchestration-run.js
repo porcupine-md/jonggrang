@@ -109,10 +109,19 @@ module.exports = function(deps) {
         return { worktreePath: wt, hostWorktreePath: ctx.hostWt(g.featureId), branch, baseSha };
     }
 
+    // Paths kept OUT of feature-branch commits and the run diff: jonggrang's
+    // own runtime state (seeded into every worktree, tracked on main via "Push
+    // plans") and installed dependencies. Feature branches carry CODE only —
+    // otherwise merged PRs drag .jonggrang/jonggrang-tasks.json + node_modules
+    // into main and later collide with local state on rebase.
+    const DIFF_EXCLUDES = [':(exclude).jonggrang', ':(exclude).jonggrang/**', ':(exclude)node_modules', ':(exclude)node_modules/**'];
+
     function commitWorktreeCtx(ctx, wt, message) {
         gitSync(ctx, wt, ['add', '-A']);
-        const status = gitSync(ctx, wt, ['status', '--porcelain']).trim();
-        if (!status) return false;
+        // Unstage runtime state + deps so the feature commit is code-only.
+        try { gitSync(ctx, wt, ['reset', '-q', '--', '.jonggrang', 'node_modules']); } catch {}
+        const staged = gitSync(ctx, wt, ['diff', '--cached', '--name-only']).trim();
+        if (!staged) return false;
         gitSync(ctx, wt, ['commit', '-m', message, '-m', lib.COAUTHOR_TRAILER]);
         return true;
     }
@@ -126,7 +135,7 @@ module.exports = function(deps) {
 
     function changedFilesCtx(ctx, wt, baseSha) {
         registerUntracked(ctx, wt);
-        const out = gitSync(ctx, wt, ['diff', '--name-status', baseSha]);
+        const out = gitSync(ctx, wt, ['diff', '--name-status', baseSha, '--', '.', ...DIFF_EXCLUDES]);
         return out.split('\n').filter(Boolean).map(line => {
             const tabIdx = line.indexOf('\t');
             if (tabIdx < 0) return { status: line.trim(), file: '' };
@@ -136,7 +145,9 @@ module.exports = function(deps) {
 
     function fileDiffCtx(ctx, wt, baseSha, file) {
         registerUntracked(ctx, wt);
-        return gitSync(ctx, wt, file ? ['diff', baseSha, '--', file] : ['diff', baseSha]);
+        return gitSync(ctx, wt, file
+            ? ['diff', baseSha, '--', file]
+            : ['diff', baseSha, '--', '.', ...DIFF_EXCLUDES]);
     }
 
     // ── per-plan worktree registry ─────────────────────────────────
