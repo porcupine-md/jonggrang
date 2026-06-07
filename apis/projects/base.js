@@ -64,6 +64,56 @@ module.exports = function (deps) {
         }
     });
 
+    // Pull the remote base branch into local — fetch + rebase only. Does NOT
+    // commit local state (the user commits themselves). Uncommitted local
+    // changes are preserved via --autostash.
+    router.post('/:id/base/pull', async (req, res) => {
+        const project = projectOr404(req, res);
+        if (!project) return;
+        if (!lib.hasRemote(project.path)) {
+            return res.status(422).json({ error: { code: 'NO_REMOTE', message: 'No "origin" remote configured' } });
+        }
+        try {
+            const branch = lib.resolveBaseBranch(project.path);
+            try { git(project.path, `checkout "${branch}"`); } catch {}
+
+            try {
+                git(project.path, `fetch origin "${branch}"`);
+            } catch (err) {
+                const detail = (err.stderr || err.stdout || err.message || '').toString().trim().split('\n').slice(-2).join(' ');
+                return res.status(409).json({ error: { code: 'FETCH_FAILED', message: `Fetch origin/${branch} failed. ${detail}` } });
+            }
+
+            const before = git(project.path, 'rev-parse HEAD').trim();
+
+            // Identical untracked init-scaffolding files block the rebase checkout.
+            const blockers = clearRedundantUntracked(project.path, `origin/${branch}`);
+            if (blockers.length) {
+                return res.status(409).json({ error: {
+                    code: 'UNTRACKED_CONFLICT',
+                    message: `Local untracked files differ from origin/${branch}: ` +
+                             `${blockers.slice(0, 5).join(', ')}${blockers.length > 5 ? '…' : ''} — resolve manually.`,
+                } });
+            }
+
+            try {
+                git(project.path, `rebase --autostash "origin/${branch}"`);
+            } catch (err) {
+                try { git(project.path, 'rebase --abort'); } catch {}
+                const detail = (err.stderr || err.stdout || err.message || '').toString().trim().split('\n').slice(-3).join(' ');
+                return res.status(409).json({ error: {
+                    code: 'REBASE_CONFLICT',
+                    message: `Rebase onto origin/${branch} failed — resolve manually in a terminal. ${detail}`,
+                } });
+            }
+
+            const after = git(project.path, 'rev-parse HEAD').trim();
+            res.json({ branch, updated: before !== after });
+        } catch (err) {
+            res.status(500).json({ error: { code: 'BASE_PULL_ERROR', message: err.message } });
+        }
+    });
+
     const GIT_IDENTITY = {
         GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || 'jonggrang-dev',
         GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || 'koko@jonggrang.dev',
