@@ -3,9 +3,12 @@
 // Parallel orchestration manager.
 //
 // Runs every plan (group of tasks sharing one feature_id) in its own git
-// worktree + branch, in parallel. The parent process is the SINGLE writer of
-// tasks.json: workers emit task_status JSON signals via stdout, which we
-// translate into the main board so the kanban updates live.
+// worktree + branch. Plans are started individually from each plan's Work
+// Mode in the web UI (per-group start), and still run in parallel: the run
+// is an incremental registry that groups join as they start. The parent
+// process is the SINGLE writer of tasks.json: workers emit task_status JSON
+// signals via stdout, which we translate into the main board so the kanban
+// updates live.
 //
 // Two execution contexts (host vs Docker container). For sandbox projects
 // everything runs INSIDE the container via `docker exec`.
@@ -114,7 +117,15 @@ module.exports = function(deps) {
         return true;
     }
 
+    // Untracked files (from Agent/Terminal sessions) don't show in `git diff`
+    // until registered — mark intent-to-add first so new files appear with
+    // their content. Harmless: push/worker-exit commits run `git add -A` anyway.
+    function registerUntracked(ctx, wt) {
+        try { gitSync(ctx, wt, ['add', '-A', '-N']); } catch {}
+    }
+
     function changedFilesCtx(ctx, wt, baseSha) {
+        registerUntracked(ctx, wt);
         const out = gitSync(ctx, wt, ['diff', '--name-status', baseSha]);
         return out.split('\n').filter(Boolean).map(line => {
             const tabIdx = line.indexOf('\t');
@@ -124,7 +135,77 @@ module.exports = function(deps) {
     }
 
     function fileDiffCtx(ctx, wt, baseSha, file) {
+        registerUntracked(ctx, wt);
         return gitSync(ctx, wt, file ? ['diff', baseSha, '--', file] : ['diff', baseSha]);
+    }
+
+    // ── per-plan worktree registry ─────────────────────────────────
+    // Worktrees outlive runs: entering Work Mode creates the plan's worktree
+    // so Agent/Terminal can use it before (or without) a run. Meta is kept in
+    // .jonggrang/.ephemeral/worktrees.json so diff/push work across restarts.
+
+    const worktreeMetaPath = (project) => path.join(project.path, '.jonggrang', '.ephemeral', 'worktrees.json');
+
+    function readWorktreeMeta(project) {
+        try {
+            const p = worktreeMetaPath(project);
+            if (!fs.existsSync(p)) return {};
+            return JSON.parse(fs.readFileSync(p, 'utf8')) || {};
+        } catch {
+            return {};
+        }
+    }
+
+    function writeWorktreeMeta(project, meta) {
+        try {
+            fs.mkdirSync(path.dirname(worktreeMetaPath(project)), { recursive: true });
+            fs.writeFileSync(worktreeMetaPath(project), JSON.stringify(meta, null, 2), 'utf8');
+        } catch (err) {
+            console.error('worktree meta write error:', err.message);
+        }
+    }
+
+    // Branch/title for a plan, independent of runnable tasks (works for plans
+    // whose tasks are all done — Work Mode is still enterable).
+    function planGroupInfo(project, featureId) {
+        const planPath = path.join(project.path, '.jonggrang', '.output', 'features', featureId, 'plan.md');
+        if (!fs.existsSync(planPath)) return null;
+        const fm = lib.parsePlanFrontmatter(planPath);
+        return {
+            featureId,
+            branch: fm.branch || `jonggrang/${featureId}`,
+            title: fm.feature || fm.description || featureId,
+        };
+    }
+
+    // Idempotent: reuse the plan's existing worktree, otherwise create it,
+    // seed working state, make the base "workspace" commit, and record meta.
+    function ensureWorktree(project, ctx, info) {
+        const all = readWorktreeMeta(project);
+        const meta = all[info.featureId];
+        const hostWt = ctx.hostWt(info.featureId);
+        if (meta && fs.existsSync(path.join(hostWt, '.git'))) {
+            return {
+                worktreePath: ctx.wt(info.featureId), hostWorktreePath: hostWt,
+                branch: meta.branch, baseSha: meta.base_sha, created: false,
+            };
+        }
+        const made = createWorktreeCtx(ctx, info);
+        // Seed working state via host fs (bind-mounted → visible in container).
+        lib.copyToWorktree(project.path, made.hostWorktreePath, COPY_INTO_WORKTREE);
+        // Base commit so the diff (vs baseSha) shows ONLY work done in the worktree.
+        let effectiveBase = made.baseSha;
+        try {
+            if (commitWorktreeCtx(ctx, made.worktreePath, `chore: jonggrang workspace for ${info.featureId}`)) {
+                effectiveBase = gitSync(ctx, made.worktreePath, ['rev-parse', 'HEAD']).trim();
+            }
+        } catch { /* keep original baseSha */ }
+        all[info.featureId] = {
+            branch: made.branch, base_sha: effectiveBase,
+            worktree_path: made.worktreePath, created_at: new Date().toISOString(),
+        };
+        writeWorktreeMeta(project, all);
+        return { ...made, baseSha: effectiveBase, created: true };
     }
 
     // Does the container have an ssh client?
@@ -255,6 +336,37 @@ module.exports = function(deps) {
         return run && Object.values(run.groups).some(g => g.status === 'running' || g.status === 'queued');
     }
 
+    // Resolve a group for diff/push: prefer the current run view, fall back to
+    // the worktree registry (Work Mode without a run, or after a restart).
+    function groupView(project, featureId) {
+        const view = currentRunView(project);
+        const g = view?.groups?.find(x => x.feature_id === featureId);
+        if (g && g.worktree_path) return g;
+        const meta = readWorktreeMeta(project)[featureId];
+        if (!meta) return null;
+        const info = planGroupInfo(project, featureId);
+        return {
+            feature_id: featureId,
+            branch: meta.branch,
+            title: info?.title || featureId,
+            worktree_path: meta.worktree_path,
+            base_sha: meta.base_sha,
+        };
+    }
+
+    // Get-or-create the project's run registry. Groups join incrementally.
+    function ensureRun(project, mode) {
+        let run = activeRuns.get(project.id);
+        if (!run) {
+            run = { projectId: project.id, startedAt: new Date().toISOString(), status: 'running', mode, groups: {} };
+            activeRuns.set(project.id, run);
+        } else {
+            run.status = 'running';
+            run.mode = mode;
+        }
+        return run;
+    }
+
     // Spawn one worktree worker for a plan, in the right context.
     function spawnGroupWorker(project, ctx, group) {
         const secretVars = webState.getProjectSecretVars(project.id);
@@ -364,8 +476,130 @@ module.exports = function(deps) {
         });
     }
 
+    // Ensure worktree + register group in the run + spawn its worker.
+    // `g` comes from lib.groupPlans (has featureId/branch/title/taskIds).
+    function startGroup(project, ctx, run, g) {
+        const wt = ensureWorktree(project, ctx, g);
+        const group = {
+            featureId: g.featureId, branch: wt.branch, title: g.title, taskIds: g.taskIds,
+            status: 'running', worktreePath: wt.worktreePath, baseSha: wt.baseSha,
+            startedAt: new Date().toISOString(), finishedAt: null, exitCode: null,
+            committed: false, pushed: false, error: null, logTail: [],
+            child: null,
+        };
+        run.groups[g.featureId] = group;
+        group.child = spawnGroupWorker(project, ctx, group);
+        wireWorker(project, ctx, run, group);
+        emit(project.id, 'orchestration.group.started', {
+            feature_id: group.featureId, branch: group.branch, title: group.title, pid: group.child.pid,
+        });
+        return group;
+    }
+
+    function cancelGroup(group) {
+        if (group.child && !group.child.killed && (group.status === 'running' || group.status === 'queued')) {
+            group.status = 'cancelled';
+            try {
+                group.child.kill('SIGTERM');
+                const c = group.child;
+                setTimeout(() => { try { c.kill('SIGKILL'); } catch {} }, 5000);
+            } catch {}
+            return true;
+        }
+        return false;
+    }
+
+    // Container projects: make sure the sandbox is up before touching git.
+    // Returns true when ready, otherwise responds 409 and returns false.
+    async function readyCtx(project, ctx, res) {
+        if (ctx.mode !== 'container') return true;
+        try {
+            await ensureContainerRunning(project);
+        } catch (err) {
+            res.status(409).json({ error: { code: 'SANDBOX_NOT_RUNNING', message: `Docker sandbox is not running: ${err.message}` } });
+            return false;
+        }
+        prepareContainerGit(ctx);
+        return true;
+    }
+
     // ── routes ────────────────────────────────────────────────────
 
+    // Ensure a plan's worktree exists (idempotent) — called on entering Work
+    // Mode so Agent/Terminal can target the worktree before any run starts.
+    router.post('/:id/plans/:featureId/worktree', async (req, res) => {
+        const project = projectOr404(req, res);
+        if (!project) return;
+        const info = planGroupInfo(project, req.params.featureId);
+        if (!info) return res.status(404).json({ error: { code: 'PLAN_NOT_FOUND', message: 'Plan not found' } });
+
+        const ctx = buildCtx(project);
+        if (!await readyCtx(project, ctx, res)) return;
+        try {
+            const wt = ensureWorktree(project, ctx, info);
+            res.json({
+                feature_id: info.featureId, title: info.title, branch: wt.branch,
+                worktree_path: wt.worktreePath, base_sha: wt.baseSha, created: wt.created,
+            });
+        } catch (err) {
+            res.status(500).json({ error: { code: 'WORKTREE_ERROR', message: err.message } });
+        }
+    });
+
+    // Start ONE plan's group (Work Mode "Run" button). Other plans keep
+    // running untouched — the run registry is shared and parallel.
+    router.post('/:id/orchestration/groups/:featureId/start', async (req, res) => {
+        const project = projectOr404(req, res);
+        if (!project) return;
+        const fid = req.params.featureId;
+
+        if (deps.activeWork?.has(project.id)) {
+            return res.status(409).json({ error: { code: 'PROCESS_ALREADY_RUNNING', message: 'A work process is already running' } });
+        }
+        const existing = activeRuns.get(project.id)?.groups?.[fid];
+        if (existing && (existing.status === 'running' || existing.status === 'queued')) {
+            return res.status(409).json({ error: { code: 'GROUP_ALREADY_RUNNING', message: 'This plan is already running' } });
+        }
+
+        let groups;
+        try {
+            groups = lib.groupPlans(tasksFileOf(project), project.path);
+        } catch (err) {
+            return res.status(500).json({ error: { code: 'GROUP_ERROR', message: err.message } });
+        }
+        const g = groups.find(x => x.featureId === fid);
+        if (!g) {
+            return res.status(422).json({ error: { code: 'NO_RUNNABLE_TASKS', message: 'No pending tasks for this plan' } });
+        }
+
+        const ctx = buildCtx(project);
+        if (!await readyCtx(project, ctx, res)) return;
+
+        const run = ensureRun(project, ctx.mode);
+        try {
+            startGroup(project, ctx, run, g);
+        } catch (err) {
+            return res.status(500).json({ error: { code: 'WORKTREE_ERROR', message: err.message } });
+        }
+        persist(project, run);
+        emit(project.id, 'orchestration.started', { run: serializeRun(run) });
+        res.status(202).json({ run: serializeRun(run) });
+    });
+
+    // Cancel ONE plan's group.
+    router.post('/:id/orchestration/groups/:featureId/cancel', (req, res) => {
+        const project = projectOr404(req, res);
+        if (!project) return;
+        const run = activeRuns.get(project.id);
+        const group = run?.groups?.[req.params.featureId];
+        if (!group) return res.json({ cancelled: false, message: 'No active run for this plan' });
+        const cancelled = cancelGroup(group);
+        if (!runActive(run)) run.status = 'cancelled';
+        persist(project, run);
+        res.json({ cancelled });
+    });
+
+    // Start ALL runnable plans at once (kept for compat / CLI parity).
     router.post('/:id/orchestration/start', async (req, res) => {
         const project = projectOr404(req, res);
         if (!project) return;
@@ -388,57 +622,16 @@ module.exports = function(deps) {
         }
 
         const ctx = buildCtx(project);
+        if (!await readyCtx(project, ctx, res)) return;
 
-        // For sandbox projects, make sure the container is up before we touch git.
-        if (ctx.mode === 'container') {
-            try {
-                await ensureContainerRunning(project);
-            } catch (err) {
-                return res.status(409).json({ error: { code: 'SANDBOX_NOT_RUNNING', message: `Docker sandbox is not running: ${err.message}` } });
-            }
-            prepareContainerGit(ctx);
-        }
-
-        const run = { projectId: project.id, startedAt: new Date().toISOString(), status: 'running', mode: ctx.mode, groups: {} };
-
+        const run = ensureRun(project, ctx.mode);
         try {
-            for (const g of groups) {
-                const { worktreePath, hostWorktreePath, branch, baseSha } = createWorktreeCtx(ctx, g);
-                // Seed working state via host fs (bind-mounted → visible in container).
-                lib.copyToWorktree(project.path, hostWorktreePath, COPY_INTO_WORKTREE);
-                // Base commit so the run diff (vs baseSha) shows ONLY the agent's work.
-                let effectiveBase = baseSha;
-                try {
-                    if (commitWorktreeCtx(ctx, worktreePath, `chore: jonggrang workspace for ${g.featureId}`)) {
-                        effectiveBase = gitSync(ctx, worktreePath, ['rev-parse', 'HEAD']).trim();
-                    }
-                } catch { /* keep original baseSha */ }
-                run.groups[g.featureId] = {
-                    featureId: g.featureId, branch, title: g.title, taskIds: g.taskIds,
-                    status: 'queued', worktreePath, baseSha: effectiveBase,
-                    startedAt: null, finishedAt: null, exitCode: null,
-                    committed: false, pushed: false, error: null, logTail: [],
-                    child: null,
-                };
-            }
+            for (const g of groups) startGroup(project, ctx, run, g);
         } catch (err) {
             return res.status(500).json({ error: { code: 'WORKTREE_ERROR', message: err.message } });
         }
-
-        activeRuns.set(project.id, run);
-        emit(project.id, 'orchestration.started', { run: serializeRun(run) });
-
-        for (const group of Object.values(run.groups)) {
-            group.child = spawnGroupWorker(project, ctx, group);
-            group.status = 'running';
-            group.startedAt = new Date().toISOString();
-            wireWorker(project, ctx, run, group);
-            emit(project.id, 'orchestration.group.started', {
-                feature_id: group.featureId, branch: group.branch, title: group.title, pid: group.child.pid,
-            });
-        }
         persist(project, run);
-
+        emit(project.id, 'orchestration.started', { run: serializeRun(run) });
         res.status(202).json({ run: serializeRun(run) });
     });
 
@@ -447,16 +640,7 @@ module.exports = function(deps) {
         if (!project) return;
         const run = activeRuns.get(project.id);
         if (!run) return res.json({ cancelled: false, message: 'No active run' });
-        for (const group of Object.values(run.groups)) {
-            if (group.child && !group.child.killed && (group.status === 'running' || group.status === 'queued')) {
-                group.status = 'cancelled';
-                try {
-                    group.child.kill('SIGTERM');
-                    const c = group.child;
-                    setTimeout(() => { try { c.kill('SIGKILL'); } catch {} }, 5000);
-                } catch {}
-            }
-        }
+        for (const group of Object.values(run.groups)) cancelGroup(group);
         run.status = 'cancelled';
         persist(project, run);
         res.json({ cancelled: true });
@@ -471,9 +655,8 @@ module.exports = function(deps) {
     router.get('/:id/orchestration/groups/:featureId/diff', (req, res) => {
         const project = projectOr404(req, res);
         if (!project) return;
-        const view = currentRunView(project);
-        const g = view?.groups?.find(x => x.feature_id === req.params.featureId);
-        if (!g) return res.status(404).json({ error: { code: 'GROUP_NOT_FOUND', message: 'Group not found in current run' } });
+        const g = groupView(project, req.params.featureId);
+        if (!g) return res.status(404).json({ error: { code: 'GROUP_NOT_FOUND', message: 'No worktree for this plan yet' } });
         const ctx = buildCtx(project);
         try {
             const files = changedFilesCtx(ctx, g.worktree_path, g.base_sha);
@@ -495,10 +678,18 @@ module.exports = function(deps) {
         }
 
         const run = activeRuns.get(project.id);
-        const view = currentRunView(project);
-        const g = view?.groups?.find(x => x.feature_id === req.params.featureId);
-        if (!g) return res.status(404).json({ error: { code: 'GROUP_NOT_FOUND', message: 'Group not found' } });
+        const g = groupView(project, req.params.featureId);
+        if (!g) return res.status(404).json({ error: { code: 'GROUP_NOT_FOUND', message: 'No worktree for this plan yet' } });
         try {
+            // Include manual (Agent/Terminal) work: commit pending worktree
+            // changes before pushing. No-op when the tree is clean.
+            try {
+                if (fs.existsSync(ctx.hostWt(g.feature_id))) {
+                    commitWorktreeCtx(ctx, g.worktree_path, `feat(${g.feature_id}): ${g.title || 'worktree changes'}`);
+                }
+            } catch (err) {
+                return res.status(500).json({ error: { code: 'COMMIT_ERROR', message: err.message } });
+            }
             await pushBranchCtx(ctx, project)(g.branch);
             if (run?.groups?.[req.params.featureId]) {
                 run.groups[req.params.featureId].pushed = true;

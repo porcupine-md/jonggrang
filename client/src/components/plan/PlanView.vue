@@ -67,8 +67,27 @@
             @click="selectPlan(plan)"
           >
             <div class="plan-item-title">{{ plan.title }}</div>
-            <span class="plan-badge" :class="`plan-badge--${plan.status}`">{{ plan.status }}</span>
+            <div class="plan-item-badges">
+              <span class="plan-badge" :class="`plan-badge--${plan.status}`">{{ plan.status }}</span>
+              <span
+                v-if="runBadgeOf(plan)"
+                class="plan-badge"
+                :class="runBadgeOf(plan) === 'live' ? 'plan-badge--run-live' : 'plan-badge--run-failed'"
+              >{{ runBadgeOf(plan) }}</span>
+            </div>
           </div>
+        </div>
+        <div class="plan-list-footer">
+          <button
+            class="btn-push-plans"
+            :disabled="pushingBase || !base.has_remote"
+            :title="base.has_remote ? 'Commit plans/tasks to the base branch and push' : 'No remote configured'"
+            @click="pushBase"
+          >
+            <i class="pi pi-cloud-upload" /> {{ pushingBase ? 'Pushing…' : `Push plans → ${base.branch || 'main'}` }}
+          </button>
+          <div v-if="baseNotice" class="base-notice">{{ baseNotice }}</div>
+          <div v-if="baseError" class="base-notice base-notice--err">{{ baseError }}</div>
         </div>
       </div>
 
@@ -221,9 +240,13 @@
           <div class="plan-viewer-header">
             <span class="plan-viewer-title">{{ selectedPlan.title }}</span>
             <span class="plan-badge" :class="`plan-badge--${selectedPlan.status}`">{{ selectedPlan.status }}</span>
-            <RouterLink v-if="canGoToWork" :to="`/projects/${projectId}/tasks`" style="margin-left:auto">
+            <RouterLink
+              v-if="selectedPlan.id !== 'draft'"
+              :to="`/projects/${projectId}/plans/${selectedPlan.id}/pipeline`"
+              style="margin-left:auto"
+            >
               <Button>
-                Check Progress <i class="pi pi-arrow-right" />
+                Work Mode <i class="pi pi-arrow-right" />
               </Button>
             </RouterLink>
           </div>
@@ -279,7 +302,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import Button from 'primevue/button';
 import Textarea from 'primevue/textarea';
@@ -289,11 +312,13 @@ import { marked } from 'marked';
 import { useLogTerminal } from '../../composables/useLogTerminal.js';
 import { useProjectsStore } from '../../stores/projects.js';
 import { useWsStore } from '../../stores/ws.js';
+import { useOrchestrationStore } from '../../stores/orchestration.js';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
 const projects = useProjectsStore();
 const ws = useWsStore();
+const orch = useOrchestrationStore();
 
 const project = computed(() => projects.byId[projectId.value]);
 const state = computed(() => project.value?.derived_state?.state || 'idle');
@@ -370,9 +395,43 @@ const canAddNewPlan = computed(() => {
   return plans.value.length > 0 && plans.value.every(p => p.status === 'done');
 });
 
-const canGoToWork = computed(() =>
-  ['tasks_pending', 'working', 'done'].includes(state.value)
-);
+// Run badge per plan: live orchestration store first, API snapshot as fallback.
+// Only surface states the plan status badge doesn't already cover.
+function runBadgeOf(plan) {
+  if (plan.id === 'draft') return null;
+  const s = orch.groups[plan.id]?.status || plan.run_status;
+  if (s === 'running' || s === 'queued') return 'live';
+  if (s === 'failed' && plan.status !== 'failed') return 'failed';
+  return null;
+}
+
+// Base branch push (plans/tasks state → main)
+const base = reactive({ branch: 'main', has_remote: false, dirty: false });
+const pushingBase = ref(false);
+const baseNotice = ref('');
+const baseError = ref('');
+
+async function loadBase() {
+  try {
+    const res = await fetch(`/api/projects/${projectId.value}/base`);
+    if (res.ok) Object.assign(base, await res.json());
+  } catch {}
+}
+
+async function pushBase() {
+  pushingBase.value = true; baseNotice.value = ''; baseError.value = '';
+  try {
+    const res = await fetch(`/api/projects/${projectId.value}/base/push`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Failed to push plans');
+    baseNotice.value = `Plans pushed to ${data.branch}${data.committed ? ' (new commit)' : ' (up to date)'}`;
+    base.dirty = false;
+  } catch (e) {
+    baseError.value = e.message;
+  } finally {
+    pushingBase.value = false;
+  }
+}
 
 // Load plan list
 async function loadPlans() {
@@ -582,6 +641,18 @@ watch(projectId, loadProjectTool);
 onMounted(async () => {
   await loadPlans();
   await loadProjectTool();
+  loadBase();
+
+  // Live run badges: hydrate orchestration state if the store is empty.
+  if (!orch.hasRun) {
+    try {
+      const res = await fetch(`/api/projects/${projectId.value}/orchestration`);
+      if (res.ok) {
+        const view = await res.json();
+        if (view && Array.isArray(view.groups) && view.groups.length) orch.hydrate(view);
+      }
+    } catch {}
+  }
 
   const socket = ws.socket;
   if (!socket) return;
@@ -676,7 +747,24 @@ watch(projectId, loadPlans);
 .plan-item-title { font-size: 12px; color: var(--jg-text); line-height: 1.4; display: block; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Status badges */
+.plan-item-badges { display: flex; align-items: center; gap: 4px; }
 .plan-badge { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; padding: 1px 5px; }
+.plan-badge--run-live { background: color-mix(in oklch, var(--jg-green) 20%, transparent); color: var(--jg-green); animation: livePulse 1.2s infinite; }
+.plan-badge--run-failed { background: color-mix(in oklch, var(--jg-red) 15%, transparent); color: var(--jg-red); }
+@keyframes livePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+/* Push plans → base branch */
+.plan-list-footer { padding: 8px; border-top: 1px solid var(--jg-border); flex-shrink: 0; }
+.btn-push-plans {
+  display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
+  font-family: var(--font-mono); font-size: 10px; padding: 5px 8px; cursor: pointer;
+  background: var(--jg-hover); color: var(--jg-text-muted); border: 1px solid var(--jg-border);
+  transition: all 0.15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.btn-push-plans:hover:not(:disabled) { color: var(--jg-green); border-color: var(--jg-green); }
+.btn-push-plans:disabled { opacity: 0.4; cursor: not-allowed; }
+.base-notice { font-size: 9px; color: var(--jg-green); margin-top: 5px; line-height: 1.4; }
+.base-notice--err { color: var(--jg-red); }
 .plan-badge--draft { background: color-mix(in oklch, var(--jg-cyan) 15%, transparent); color: var(--jg-cyan); }
 .plan-badge--generating { background: color-mix(in oklch, var(--jg-orange) 15%, transparent); color: var(--jg-orange); display: flex; align-items: center; gap: 4px; }
 .plan-badge--approved { background: color-mix(in oklch, var(--jg-green) 15%, transparent); color: var(--jg-green); }

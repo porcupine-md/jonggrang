@@ -18,13 +18,14 @@ import PhaseTimeline from '../components/pipeline/PhaseTimeline.vue';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
+const featureId = computed(() => route.params.featureId || null);
 const manifest = useManifestStore();
 
 const doneCount = computed(() => manifest.phases.filter(p => p.status === 'completed').length);
 const activeCount = computed(() => manifest.phases.filter(p => p.status !== 'skipped').length);
 
-onMounted(() => manifest.fetch(projectId.value));
-watch(projectId, id => { if (id) manifest.fetch(id); });
+onMounted(() => manifest.fetch(projectId.value, featureId.value));
+watch([projectId, featureId], ([id, fid]) => { if (id) manifest.fetch(id, fid); });
 </script>
 
 <style scoped>

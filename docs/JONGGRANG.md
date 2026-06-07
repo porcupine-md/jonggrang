@@ -455,14 +455,15 @@ Task D (independent)         → Group 3 → worktree-3
 
 ### Parallel Orchestration (web dashboard)
 
-The web dashboard runs **one plan at a time as one group** — every task sharing a `feature_id` is one plan, and each plan becomes **one git worktree + one branch**, all running in parallel. Within a plan, tasks run **serially in dependency order** (`blocked_by` first); plans without cross-dependencies run **directly, side by side**.
+The web dashboard runs **each plan as one group** — every task sharing a `feature_id` is one plan, and each plan becomes **one git worktree + one branch**. Within a plan, tasks run **serially in dependency order** (`blocked_by` first); separate plans run **in parallel**, each started from its own **Work Mode**.
 
-- **Branch per plan** is read from that plan's `plan.md` frontmatter (`branch:`), e.g. `feat/version-endpoint`. It is shown on each plan card.
-- **Worktrees** live under `.jonggrang/.worktree/{feature_id}/` (gitignored), forked from current `HEAD`.
+- **Per-plan Work Mode**: an approved plan's "Work Mode" button (plan list) opens `/projects/:id/plans/:featureId/…` with Pipeline / Tasks / Logs / Changes / Agent / Terminal all scoped to that plan. The **Run** button in the Work Mode sidebar starts only that plan's group; other plans keep running untouched (the run registry is shared and incremental).
+- **Branch per plan** is read from that plan's `plan.md` frontmatter (`branch:`), e.g. `feat/version-endpoint`.
+- **Worktrees** live under `.jonggrang/.worktree/{feature_id}/` (gitignored), forked from current `HEAD`. The worktree is **created on entering Work Mode** (idempotent, registry in `.jonggrang/.ephemeral/worktrees.json`) so Agent/Terminal can work inside it before any run; a later run reuses it.
+- **Agent & Terminal follow scope**: project scope → container / project root; Work Mode → that plan's worktree (PTY session keys `agent:<featureId>` / `terminal:<featureId>` coexist with project-scope sessions).
 - The orchestration **manager (server-side)** is the single writer of the main `jonggrang-tasks.json`: each worktree worker runs `jonggrang work --worktree --group-tasks <ids> --branch <name>` and emits `task_status` JSON signals instead of writing the board, so parallel workers never race. The kanban updates live from the manager's writes.
-- On completion, the manager **commits** the worktree to its branch. The user then **reviews changed files per plan** and **pushes each branch independently** to `origin` (same branch name, never `main`/`master`, no auto-merge).
-- A run **survives page navigation** (in-memory run + socket replay + a `.ephemeral/orchestration-run.json` snapshot), matching the single-work-process guarantee.
-- UI: **Parallel Run** in the project sidebar → start/cancel, per-plan live log, "View changes" diff drawer, and "Push".
+- On completion, the manager **commits** the worktree to its branch. The user reviews the plan's **Changes** tab (file list + diff) and **pushes the branch** to `origin` (pending manual worktree changes are committed first; same branch name, never `main`/`master`, no auto-merge).
+- A run **survives page navigation** (in-memory run + socket replay + a `.ephemeral/orchestration-run.json` snapshot), matching the single-work-process guarantee. The plan list shows a **live badge** per running plan.
 
 ```
 Plan: simple-api      (task-001..005, blocked_by chain) → worktree feat/simple-api      (serial within)

@@ -94,7 +94,10 @@ export const useWsStore = defineStore('ws', () => {
 
     s.on('manifest.updated', ({ project_id, manifest }) => {
       const mStore = useManifestStore();
-      if (mStore.projectId === project_id) mStore.update(manifest);
+      if (mStore.projectId !== project_id) return;
+      // When scoped to one plan (Work Mode), ignore other plans' manifests.
+      if (mStore.featureId && manifest?.feature_id && manifest.feature_id !== mStore.featureId) return;
+      mStore.update(manifest);
     });
 
     // Parallel orchestration (per-plan worktree runs)

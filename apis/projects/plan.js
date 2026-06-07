@@ -2,6 +2,8 @@
 
 const { Router } = require('express');
 
+const lib = require('../../lib/jonggrang');
+
 const VALID_PLAN_TOOL   = ['claude', 'opencode', 'codex', 'jonggrang'];
 const VALID_PLAN_EFFORT = ['minimal', 'moderate', 'deep'];
 const MAX_STRING_LEN    = 100;
@@ -43,6 +45,13 @@ module.exports = function(deps) {
         // 2. Archived plans from .output/features/*/plan.md
         const featuresDir = path.join(jonggrangDir, '.output', 'features');
         if (fs.existsSync(featuresDir)) {
+            // Per-plan run state from the orchestration registry (live or snapshot).
+            let runGroups = {};
+            try {
+                const view = deps.orchestrationRunView ? deps.orchestrationRunView(project) : null;
+                for (const g of (view?.groups || [])) runGroups[g.feature_id] = g;
+            } catch {}
+
             try {
                 const entries = fs.readdirSync(featuresDir)
                     .map(name => ({ name, mtime: fs.statSync(path.join(featuresDir, name)).mtimeMs }))
@@ -68,7 +77,16 @@ module.exports = function(deps) {
                         }
                     } catch {}
 
-                    plans.push({ id: name, title: extractPlanTitle(content), status, mtime, work_type, content });
+                    let branch = null;
+                    try { branch = lib.parsePlanFrontmatter(planPath).branch || null; } catch {}
+
+                    const rg = runGroups[name];
+                    plans.push({
+                        id: name, feature_id: name, title: extractPlanTitle(content),
+                        status, mtime, work_type, content, branch,
+                        run_status: rg?.status || null,
+                        pushed: !!rg?.pushed,
+                    });
                 }
             } catch {}
         }

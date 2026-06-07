@@ -1,8 +1,8 @@
 <template>
   <div class="kanban-root">
-    <KanbanHeader :projectId="projectId" />
+    <KanbanHeader :projectId="projectId" :featureId="featureId" />
     <div class="kanban-body">
-      <div v-if="!tasks.tasks.length && state === 'idle'" class="kanban-empty">
+      <div v-if="!tasks.visible.length && state === 'idle'" class="kanban-empty">
         <div>No tasks yet. Generate a plan first.</div>
         <RouterLink :to="`/projects/${projectId}/plan`" style="margin-top:12px">
           <Button label="Go to Plan" severity="secondary" />
@@ -26,7 +26,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import Button from 'primevue/button';
 import { useTasksStore } from '../../stores/tasks.js';
@@ -37,6 +37,7 @@ import TaskDetailDrawer from './TaskDetailDrawer.vue';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
+const featureId = computed(() => route.params.featureId || null);
 const tasks = useTasksStore();
 const projects = useProjectsStore();
 const project = computed(() => projects.byId[projectId.value]);
@@ -46,8 +47,12 @@ const selectedTask = ref(null);
 function openTask(task) { selectedTask.value = task; }
 
 onMounted(() => {
+  tasks.setFeatureFilter(featureId.value);
   tasks.fetchTasks(projectId.value);
 });
+
+watch(featureId, fid => tasks.setFeatureFilter(fid));
+onUnmounted(() => tasks.setFeatureFilter(null));
 </script>
 
 <style scoped>

@@ -23,6 +23,7 @@ const PHASES = [
 export const useManifestStore = defineStore('manifest', () => {
   const data = ref(null);
   const projectId = ref(null);
+  const featureId = ref(null);
 
   const phases = computed(() => {
     if (!data.value) return [];
@@ -39,10 +40,14 @@ export const useManifestStore = defineStore('manifest', () => {
     });
   });
 
-  async function fetch(pid) {
+  async function fetch(pid, fid = null) {
     projectId.value = pid;
+    featureId.value = fid;
     try {
-      const res = await window.fetch(`/api/projects/${pid}/manifest`);
+      const url = fid
+        ? `/api/projects/${pid}/manifest?feature_id=${encodeURIComponent(fid)}`
+        : `/api/projects/${pid}/manifest`;
+      const res = await window.fetch(url);
       if (res.ok) data.value = await res.json();
       else data.value = null;
     } catch {
@@ -57,7 +62,8 @@ export const useManifestStore = defineStore('manifest', () => {
   function clear() {
     data.value = null;
     projectId.value = null;
+    featureId.value = null;
   }
 
-  return { data, projectId, phases, fetch, update, clear };
+  return { data, projectId, featureId, phases, fetch, update, clear };
 });
