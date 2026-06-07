@@ -644,16 +644,15 @@ onMounted(async () => {
   await loadProjectTool();
   loadBase();
 
-  // Live run badges: hydrate orchestration state if the store is empty.
-  if (!orch.hasRun) {
-    try {
-      const res = await fetch(`/api/projects/${projectId.value}/orchestration`);
-      if (res.ok) {
-        const view = await res.json();
-        if (view && Array.isArray(view.groups) && view.groups.length) orch.hydrate(view);
-      }
-    } catch {}
-  }
+  // Live run badges: always re-hydrate from the server so a group that
+  // finished while on another view doesn't keep a stale "live" badge.
+  try {
+    const res = await fetch(`/api/projects/${projectId.value}/orchestration`);
+    if (res.ok) {
+      const view = await res.json();
+      if (view && Array.isArray(view.groups) && view.groups.length) orch.hydrate(view);
+    }
+  } catch {}
 
   const socket = ws.socket;
   if (!socket) return;

@@ -52,6 +52,19 @@ module.exports = function(deps) {
                 for (const g of (view?.groups || [])) runGroups[g.feature_id] = g;
             } catch {}
 
+            // Tasks grouped by feature_id — authoritative for the web work-loop,
+            // which advances task status but NOT the MANIFEST phase machine.
+            let tasksByFeature = {};
+            try {
+                const tasksPath = path.join(jonggrangDir, 'jonggrang-tasks.json');
+                if (fs.existsSync(tasksPath)) {
+                    const all = JSON.parse(fs.readFileSync(tasksPath, 'utf-8')).tasks || [];
+                    for (const t of all) {
+                        (tasksByFeature[t.feature_id] = tasksByFeature[t.feature_id] || []).push(t.status);
+                    }
+                }
+            } catch {}
+
             try {
                 const entries = fs.readdirSync(featuresDir)
                     .map(name => ({ name, mtime: fs.statSync(path.join(featuresDir, name)).mtimeMs }))
@@ -76,6 +89,20 @@ module.exports = function(deps) {
                             else if (ms === 'failed') status = 'failed';
                         }
                     } catch {}
+
+                    // The web work-loop drives TASK status, not the manifest phase
+                    // machine, so the manifest can read "running" long after the
+                    // work finished. When this plan has tasks, derive status from
+                    // them — keeping Plan Mode consistent with Work Mode.
+                    const taskStatuses = tasksByFeature[name];
+                    if (taskStatuses && taskStatuses.length) {
+                        const done = (s) => s === 'completed' || s === 'skipped';
+                        const rs = runGroups[name]?.status;
+                        if (taskStatuses.every(done)) status = 'done';
+                        else if (taskStatuses.some(s => s === 'failed') || rs === 'failed') status = 'failed';
+                        else if (taskStatuses.some(s => s === 'in_progress') || rs === 'running' || rs === 'queued') status = 'in_progress';
+                        else status = 'approved';
+                    }
 
                     let branch = null;
                     try { branch = lib.parsePlanFrontmatter(planPath).branch || null; } catch {}
