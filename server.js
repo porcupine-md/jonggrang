@@ -95,20 +95,26 @@ webState.initVolumes();
 const projectsCtx = { JONGGRANG_HOME, webState, orchestration, server };
 const cleanupProjects = require('./apis/projects')(app, io, projectsCtx);
 
-// ── STATIC FRONTEND ───────────────────────────────────────────
+// ── FRONTEND ──────────────────────────────────────────────────
+// Production (default): serve the built client from client/dist.
+// Development (NODE_ENV=development): run Vite in middleware mode so the
+// client hot-reloads — a single `node server.js` serves both API and client.
 const distPath = path.join(__dirname, 'client', 'dist');
-app.use(express.static(distPath));
 
-// ── SPA FALLBACK ──────────────────────────────────────────────
-app.get('*', (req, res) => {
-    if (req.path.startsWith('/api/')) {
-        return res.status(404).json({ error: 'API endpoint not found' });
-    }
-    if (fs.existsSync(path.join(distPath, 'index.html'))) {
-        res.sendFile(path.join(distPath, 'index.html'));
-    } else {
-        console.error('[jonggrang] Frontend build missing. Run: npm run build');
-        res.status(503).type('text/html').send(`<!DOCTYPE html>
+async function setupFrontend() {
+    const isProduction = process.env.NODE_ENV !== 'development';
+
+    if (isProduction) {
+        app.use(express.static(distPath));
+        app.get('*', (req, res) => {
+            if (req.path.startsWith('/api/')) {
+                return res.status(404).json({ error: 'API endpoint not found' });
+            }
+            if (fs.existsSync(path.join(distPath, 'index.html'))) {
+                res.sendFile(path.join(distPath, 'index.html'));
+            } else {
+                console.error('[jonggrang] Frontend build missing. Run: npm run build');
+                res.status(503).type('text/html').send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Jonggrang — Build Required</title>
 <style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#05060a;color:#f4f4f5;}</style></head>
 <body><div style="text-align:center;max-width:480px">
@@ -117,33 +123,34 @@ app.get('*', (req, res) => {
 <pre style="background:#16171f;padding:12px;border-radius:8px;color:#38bdf8;font-size:13px">npm run build</pre>
 <p style="color:#4b5563;font-size:13px">Then restart with <code style="color:#10b981">npm start</code></p>
 </div></body></html>`);
+            }
+        });
+        console.log(`Serving static files from: ${distPath}`);
+        return;
     }
-});
+
+    // Development: Vite dev server as Express middleware (client HMR).
+    // Vite is a devDependency of client/, so resolve it from there.
+    const clientDir = path.join(__dirname, 'client');
+    const { pathToFileURL } = require('url');
+    const viteEntry = require.resolve('vite', { paths: [clientDir] });
+    const { createServer: createViteServer } = await import(pathToFileURL(viteEntry).href);
+    const vite = await createViteServer({
+        root: clientDir,
+        configFile: path.join(clientDir, 'vite.config.js'),
+        server: { middlewareMode: true },
+        appType: 'spa',
+    });
+    app.use('/api', (req, res) => res.status(404).json({ error: 'API endpoint not found' }));
+    app.use(vite.middlewares);
+    console.log('Vite dev middleware active — client HMR enabled');
+}
 
 // ── GLOBAL API ERROR HANDLER ──────────────────────────────────
 app.use('/api', (err, req, res, _next) => {
     console.error(`[jonggrang:api:error] ${req.method} ${req.path}:`, err.message);
     res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
 });
-
-// ── PORT FINDER ───────────────────────────────────────────────
-function findAvailablePort(start, end) {
-    const net = require('net');
-    return new Promise((resolve, reject) => {
-        let port = start;
-        function tryPort() {
-            if (port > end) return reject(new Error(`No available port in ${start}-${end}`));
-            const srv = net.createServer();
-            srv.once('error', (err) => {
-                if (err && err.code === 'EADDRINUSE') { port++; tryPort(); return; }
-                reject(err);
-            });
-            srv.once('listening', () => { srv.close(() => resolve(port)); });
-            srv.listen(port);
-        }
-        tryPort();
-    });
-}
 
 // ── GLOBAL ERROR HANDLERS ─────────────────────────────────────
 process.on('uncaughtException', (err) => {
@@ -174,7 +181,8 @@ if (portEnv !== undefined) {
 
 (async () => {
     try {
-        const PORT = envPort !== null ? envPort : await findAvailablePort(7777, 7999);
+        await setupFrontend();
+        const PORT = envPort !== null ? envPort : 7777;
         server.listen(PORT, HOST, () => {
             console.log(`Jonggrang dashboard on http://${HOST}:${PORT}`);
             console.log(`Project root: ${PROJECT_ROOT}`);

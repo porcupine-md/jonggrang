@@ -161,7 +161,10 @@ Opens a full interactive chat session. Use `/plan`, `/work`, `/review`, `/status
 jonggrang web
 ```
 
-Opens a browser with a Kanban board, real-time agent logs, and diff viewer.
+Runs the dashboard in the foreground on **http://127.0.0.1:7777**, exactly like
+`node server.js` — logs stream to your terminal and **Ctrl+C** stops it. Open
+that URL for a Kanban board, real-time agent logs, and diff viewer. Override the
+bind with `--port <n>` / `--host <addr>` if needed.
 
 ---
 

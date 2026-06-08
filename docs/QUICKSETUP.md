@@ -54,7 +54,7 @@ jonggrang/
 │   ├── core/                 # Tier 1 — always loaded (28 skills)
 │   └── library/              # Tier 2 — JIT via gateway
 ├── client/
-│   ├── src/                  # Web dashboard (React + Vite)
+│   ├── src/                  # Web dashboard (Vue + Vite)
 │   ├── dist/                 # Built client assets
 │   └── package.json
 ├── scripts/
@@ -73,7 +73,7 @@ jonggrang/
 |-------|-------------|
 | `bin/jonggrang.js` | CLI command router — parses args, delegates to lib/ |
 | `server.js` | Web dashboard — Express + Socket.IO, serves client/dist |
-| `client/` | Dashboard frontend — React app built with Vite |
+| `client/` | Dashboard frontend — Vue app built with Vite |
 | `hooks/pi/jonggrang-extension.ts` | Pi SDK extension — loaded via `--extension` on `jonggrang agent` |
 
 ---
@@ -88,13 +88,19 @@ make build          # cd client && npm install && npm run build
 node bin/jonggrang.js init
 node bin/jonggrang.js plan "test feature"
 
-# Run dashboard
-node server.js      # serves at http://localhost:8080
+# Run dashboard (production: serves built client/dist on port 7777)
+node server.js      # serves at http://127.0.0.1:7777
 
-# Dev mode (hot-reload dashboard)
-npm run dev:client  # Vite dev server
-npm run dev:server  # Express with auto-restart (you'll need nodemon/etc.)
+# Dev mode (single process: Express + Vite middleware + auto-restart)
+npm run dev         # = nodemon server.js  (nodemon.json sets NODE_ENV=development)
 ```
+
+> `npm run dev` runs Vite in middleware mode in-process, so the client hot-reloads
+> and the API is served from the same port (7777) — no separate `dev:client` needed.
+> `NODE_ENV=development` is set via `nodemon.json` (cross-platform, no inline shell
+> env in the npm script), which also restarts the server on changes to `server.js`,
+> `lib/`, and `apis/`. Mode is chosen by `NODE_ENV`: `development` → Vite middleware;
+> anything else (including `jonggrang web` / `npm start`) → static `client/dist`.
 
 ---
 

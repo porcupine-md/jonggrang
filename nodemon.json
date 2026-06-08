@@ -1,0 +1,9 @@
+{
+  "watch": ["server.js", "lib", "apis"],
+  "ext": "js,json,yaml",
+  "ignore": ["client/**", "node_modules/**", ".jonggrang/**", "test/**"],
+  "env": {
+    "NODE_ENV": "development"
+  },
+  "delay": 300
+}
