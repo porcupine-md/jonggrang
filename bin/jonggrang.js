@@ -500,7 +500,33 @@ async function cmdWork(descriptionParts = []) {
 
   // Create / resume manifest at start of work so phase grid updates in real-time
   let workFeatureId = null, workManifest = null, workManifestPath = null;
-  if (!WORKTREE_MODE) {
+  if (WORKTREE_MODE && GROUP_TASK_IDS.length > 0) {
+    // A worktree run executes exactly one plan (group). Resolve THAT plan's
+    // manifest by its tasks' feature_id — never findIncompleteManifest, which
+    // would pick an arbitrary seeded manifest and run another plan's phases in
+    // this worktree. Tracking the manifest here is what lets the post-work
+    // phases (Simplify → … → Complete) run in worktree mode instead of the
+    // pipeline stalling at Implement.
+    const firstTask = GROUP_TASK_IDS.map(id => lib.getTask(TASKS_FILE, id)).find(Boolean);
+    const fid = firstTask && firstTask.feature_id;
+    if (fid) {
+      const mPath = orchestration.getManifestPath(PROJECT_ROOT, fid);
+      const m = orchestration.readManifest(mPath);
+      if (m) {
+        workFeatureId = fid;
+        workManifestPath = mPath;
+        // Planning phases 1-7 are covered by plan + approve (run before work).
+        [1, 2, 3, 4, 5, 6, 7].forEach(n => {
+          const s = m.phases[n]?.status;
+          if (m.active_phases.includes(n) && s !== 'completed' && s !== 'skipped')
+            orchestration.completePhase(mPath, n, { source: 'plan' });
+        });
+        // Phase 8 = Implement — running for the duration of the work loop.
+        if (m.active_phases.includes(8)) orchestration.startPhase(mPath, 8);
+        workManifest = orchestration.readManifest(mPath);
+      }
+    }
+  } else if (!WORKTREE_MODE) {
     const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
     if (existing) {
       workFeatureId  = existing.featureId;
@@ -603,9 +629,13 @@ async function cmdWork(descriptionParts = []) {
         workManifest = orchestration.readManifest(workManifestPath);
       }
 
-      // Run post-work quality gates based on work type (MEDIUM/LARGE only)
-      if (!WORKTREE_MODE && !SKIP_GATES) {
-        await runPostWorkPhases(description, workType, workFeatureId, workManifest, workManifestPath);
+      // Run post-work quality gates (Simplify → … → Complete) based on work type.
+      // Runs in both normal and worktree mode. In worktree mode we require a
+      // manifest we resolved by feature_id above, so runPostWorkPhases never
+      // falls back to findIncompleteManifest (which would target another plan).
+      if (!SKIP_GATES && (!WORKTREE_MODE || workManifestPath)) {
+        const gateWorkType = workManifest?.work_type || workType;
+        await runPostWorkPhases(description, gateWorkType, workFeatureId, workManifest, workManifestPath);
       }
 
       console.log('COMPLETE');
