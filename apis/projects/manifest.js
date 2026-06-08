@@ -14,6 +14,14 @@ module.exports = function(deps) {
             const featuresDir = path.join(project.path, '.jonggrang', '.output', 'features');
             if (!fs.existsSync(featuresDir)) return res.status(404).json({ error: { code: 'NO_MANIFEST', message: 'No manifest found' } });
 
+            // Per-plan scope (Work Mode pipeline): read that feature's manifest directly.
+            const { feature_id } = req.query;
+            if (feature_id) {
+                const mPath = path.join(featuresDir, String(feature_id), 'MANIFEST.yaml');
+                if (!fs.existsSync(mPath)) return res.status(404).json({ error: { code: 'NO_MANIFEST', message: 'No manifest for this plan' } });
+                return res.json(orchestration.readManifest(mPath));
+            }
+
             const featureDirs = fs.readdirSync(featuresDir)
                 .map(name => ({ name, mtime: fs.statSync(path.join(featuresDir, name)).mtimeMs }))
                 .sort((a, b) => b.mtime - a.mtime);

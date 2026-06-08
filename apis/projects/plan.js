@@ -2,6 +2,8 @@
 
 const { Router } = require('express');
 
+const lib = require('../../lib/jonggrang');
+
 const VALID_PLAN_TOOL   = ['claude', 'opencode', 'codex', 'jonggrang'];
 const VALID_PLAN_EFFORT = ['minimal', 'moderate', 'deep'];
 const MAX_STRING_LEN    = 100;
@@ -43,6 +45,26 @@ module.exports = function(deps) {
         // 2. Archived plans from .output/features/*/plan.md
         const featuresDir = path.join(jonggrangDir, '.output', 'features');
         if (fs.existsSync(featuresDir)) {
+            // Per-plan run state from the orchestration registry (live or snapshot).
+            let runGroups = {};
+            try {
+                const view = deps.orchestrationRunView ? deps.orchestrationRunView(project) : null;
+                for (const g of (view?.groups || [])) runGroups[g.feature_id] = g;
+            } catch {}
+
+            // Tasks grouped by feature_id — authoritative for the web work-loop,
+            // which advances task status but NOT the MANIFEST phase machine.
+            let tasksByFeature = {};
+            try {
+                const tasksPath = path.join(jonggrangDir, 'jonggrang-tasks.json');
+                if (fs.existsSync(tasksPath)) {
+                    const all = JSON.parse(fs.readFileSync(tasksPath, 'utf-8')).tasks || [];
+                    for (const t of all) {
+                        (tasksByFeature[t.feature_id] = tasksByFeature[t.feature_id] || []).push(t.status);
+                    }
+                }
+            } catch {}
+
             try {
                 const entries = fs.readdirSync(featuresDir)
                     .map(name => ({ name, mtime: fs.statSync(path.join(featuresDir, name)).mtimeMs }))
@@ -68,7 +90,32 @@ module.exports = function(deps) {
                         }
                     } catch {}
 
-                    plans.push({ id: name, title: extractPlanTitle(content), status, mtime, work_type, content });
+                    // The web work-loop drives TASK status, not the manifest phase
+                    // machine, so the manifest can read "running" long after the
+                    // work finished. When this plan has tasks, derive status from
+                    // them — keeping Plan Mode consistent with Work Mode.
+                    const taskStatuses = tasksByFeature[name];
+                    if (taskStatuses && taskStatuses.length) {
+                        const done = (s) => s === 'completed' || s === 'skipped';
+                        const rs = runGroups[name]?.status;
+                        if (taskStatuses.every(done)) status = 'done';
+                        else if (taskStatuses.some(s => s === 'failed' || s === 'blocked') || rs === 'failed') status = 'failed';
+                        // in_progress if work is active OR has partially progressed
+                        // (some tasks already done, but not all) — not "approved".
+                        else if (taskStatuses.some(s => s === 'in_progress') || rs === 'running' || rs === 'queued' || taskStatuses.some(done)) status = 'in_progress';
+                        else status = 'approved';
+                    }
+
+                    let branch = null;
+                    try { branch = lib.parsePlanFrontmatter(planPath).branch || null; } catch {}
+
+                    const rg = runGroups[name];
+                    plans.push({
+                        id: name, feature_id: name, title: extractPlanTitle(content),
+                        status, mtime, work_type, content, branch,
+                        run_status: rg?.status || null,
+                        pushed: !!rg?.pushed,
+                    });
                 }
             } catch {}
         }

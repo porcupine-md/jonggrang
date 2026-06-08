@@ -583,6 +583,11 @@ async function cmdWork(descriptionParts = []) {
     let taskId;
     if (taskQueue.length > 0) {
       taskId = taskQueue.shift();
+    } else if (GROUP_TASK_IDS.length > 0) {
+      // Group/worktree mode: only ever run the assigned tasks. Do NOT fall back
+      // to getNextTask, which would pick up other plans' tasks from this
+      // worktree's tasks.json copy and break per-plan isolation.
+      taskId = null;
     } else {
       taskId = lib.getNextTask(TASKS_FILE);
     }
@@ -625,6 +630,14 @@ async function cmdWork(descriptionParts = []) {
         updateTaskMode(taskId, 'blocked');
         consecutiveFails = 0;
         lastFailedTask = '';
+      } else if (GROUP_TASK_IDS.length > 0) {
+        // Group/worktree mode never falls back to getNextTask, so a task that
+        // got reverted to pending would be dropped from the queue and the run
+        // would falsely report "All tasks completed". Re-queue it to retry
+        // within this run (bounded by kill_after_fails above) — keep going
+        // until every group task is genuinely completed or blocked.
+        logWarn(`Re-queuing ${taskId} for retry (attempt ${consecutiveFails}/${killAfter}).`);
+        taskQueue.push(taskId);
       }
     }
 
@@ -1727,15 +1740,48 @@ async function cmdInit() {
     // git was already initialized by runInit if needed
   }
 
-  // Update .gitignore to exclude ephemeral files
+  // Update .gitignore to exclude ephemeral state and parallel worktrees.
+  // NOTE: .jonggrang/.output/ stays TRACKED on purpose — plans + manifests are
+  // committed and travel with each plan's branch on push.
   const gitignorePath = path.join(PROJECT_ROOT, '.gitignore');
-  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n`;
+  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n.jonggrang/.worktree/\n`;
   try {
-    const existing = lib.fileExists(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
+    let existing = lib.fileExists(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
     if (!existing.includes('.jonggrang/.ephemeral')) {
       fs.appendFileSync(gitignorePath, jonggrangIgnoreBlock);
+    } else if (!existing.includes('.jonggrang/.worktree')) {
+      // Block already present from an older init — append just the worktree line.
+      fs.appendFileSync(gitignorePath, `.jonggrang/.worktree/\n`);
     }
   } catch {}
+
+  // Ensure the repo has at least one commit so parallel worktrees can branch
+  // from HEAD. A fresh clone of an empty remote (or `git init`) has no commit;
+  // repos that already have history are left untouched.
+  try {
+    execSync('git rev-parse HEAD', { cwd: PROJECT_ROOT, stdio: 'pipe' });
+  } catch {
+    try {
+      execSync('git add -A', { cwd: PROJECT_ROOT, stdio: 'pipe' });
+      execSync(`git commit -m "chore: initial jonggrang scaffolding" -m "${lib.COAUTHOR_TRAILER}"`, {
+        cwd: PROJECT_ROOT,
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME:     process.env.GIT_AUTHOR_NAME     || 'jonggrang',
+          GIT_AUTHOR_EMAIL:    process.env.GIT_AUTHOR_EMAIL    || 'jonggrang@local',
+          GIT_COMMITTER_NAME:  process.env.GIT_COMMITTER_NAME  || 'jonggrang',
+          GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || 'jonggrang@local',
+        },
+      });
+      // Normalize the base branch to `main` (git's default is often `master`).
+      // Safe here: we only reach this branch when the repo had no commit.
+      try { execSync('git branch -M main', { cwd: PROJECT_ROOT, stdio: 'pipe' }); } catch {}
+      logSuccess('Created initial commit on main (empty repository)');
+    } catch (err) {
+      logWarn(`Could not create initial commit: ${err.message}`);
+    }
+  }
 
   console.log('');
   logSuccess('Project ready!');
@@ -3388,7 +3434,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+main().then(() => {
+  // runAgent (Pi backend) disposes each session, but the SDK can leave residual
+  // async handles that keep the event loop alive. Exit once here, after the whole
+  // command finished — NOT inside runAgent (that killed the work loop after one
+  // task). setImmediate lets buffered stdout flush to a piped parent first.
+  setImmediate(() => process.exit(process.exitCode || 0));
+}).catch((err) => {
   logError(err.message);
   process.exit(1);
 });

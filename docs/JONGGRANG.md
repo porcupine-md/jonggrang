@@ -102,14 +102,17 @@ project-root/
 │   ├── jonggrang-tasks.json    # Task board state
 │   ├── plan.md                 # Draft plan (exists between plan → approve)
 │   ├── progress.txt            # Append-only agent learnings
-│   ├── .output/
+│   ├── .output/                # TRACKED in git — plans + manifests travel with each branch on push
 │   │   └── features/{id}/
-│   │       ├── plan.md         # Archived plan (after approve)
+│   │       ├── plan.md         # Archived plan (after approve); frontmatter holds the branch name
 │   │       ├── MANIFEST.yaml   # Phase state (persistent)
 │   │       └── [phase outputs]
-│   ├── .ephemeral/             # Cleared on restart
+│   ├── .ephemeral/             # Cleared on restart (gitignored)
 │   │   ├── feedback-loop-state.json
-│   │   └── compaction-state.json
+│   │   ├── compaction-state.json
+│   │   └── orchestration-run.json  # Parallel-run snapshot (per-plan groups)
+│   ├── .worktree/              # Parallel run worktrees, one per plan (gitignored)
+│   │   └── {feature_id}/       # Isolated checkout on that plan's branch
 │   └── locks/                  # File ownership
 ├── .claude/
 │   └── settings.json           # Claude Code enforcement hooks
@@ -448,6 +451,24 @@ Task A (independent)         → Group 1 → worktree-1
 Task B → blocked_by A  \
 Task C → blocked_by B   → Group 2 → worktree-2 (serial within group)
 Task D (independent)         → Group 3 → worktree-3
+```
+
+### Parallel Orchestration (web dashboard)
+
+The web dashboard runs **each plan as one group** — every task sharing a `feature_id` is one plan, and each plan becomes **one git worktree + one branch**. Within a plan, tasks run **serially in dependency order** (`blocked_by` first); separate plans run **in parallel**, each started from its own **Work Mode**.
+
+- **Per-plan Work Mode**: an approved plan's "Work Mode" button (plan list) opens `/projects/:id/plans/:featureId/…` with Pipeline / Tasks / Logs / Changes / Agent / Terminal all scoped to that plan. The **Run** button in the Work Mode sidebar starts only that plan's group; other plans keep running untouched (the run registry is shared and incremental).
+- **Branch per plan** is read from that plan's `plan.md` frontmatter (`branch:`), e.g. `feat/version-endpoint`.
+- **Worktrees** live under `.jonggrang/.worktree/{feature_id}/` (gitignored), forked from current `HEAD`. The worktree is **created on entering Work Mode** (idempotent, registry in `.jonggrang/.ephemeral/worktrees.json`) so Agent/Terminal can work inside it before any run; a later run reuses it.
+- **Agent & Terminal follow scope**: project scope → container / project root; Work Mode → that plan's worktree (PTY session keys `agent:<featureId>` / `terminal:<featureId>` coexist with project-scope sessions).
+- The orchestration **manager (server-side)** is the single writer of the main `jonggrang-tasks.json`: each worktree worker runs `jonggrang work --worktree --group-tasks <ids> --branch <name>` and emits `task_status` JSON signals instead of writing the board, so parallel workers never race. The kanban updates live from the manager's writes.
+- On completion, the manager **commits** the worktree to its branch. The user reviews the plan's **Changes** tab (file list + diff) and **pushes the branch** to `origin` (pending manual worktree changes are committed first; same branch name, never `main`/`master`, no auto-merge).
+- A run **survives page navigation** (in-memory run + socket replay + a `.ephemeral/orchestration-run.json` snapshot), matching the single-work-process guarantee. The plan list shows a **live badge** per running plan.
+- **Push plans → base branch** (plan list footer) commits the plan/task/manifest state, **rebases onto `origin/<base>` first** (identical untracked init-scaffolding files are cleared, state-file conflicts resolve in favor of local state — the manager is the single writer), then pushes. A moved `main` (e.g. merged PRs) never causes a rejected push; real conflicts return a clear error instead of guessing.
+
+```
+Plan: simple-api      (task-001..005, blocked_by chain) → worktree feat/simple-api      (serial within)
+Plan: version-endpoint(task-006..009, blocked_by chain) → worktree feat/version-endpoint (parallel with the above)
 ```
 
 ### File Ownership

@@ -13,6 +13,7 @@ module.exports = function register(app, io, ctx) {
     // ── Local state ──────────────────────────────────────────────
     const projectWatchers = new Map();
     const activeWork = new Map();
+    const activeRuns = new Map();
     const lastActivity = new Map();
 
     // ── Helpers ──────────────────────────────────────────────────
@@ -170,6 +171,7 @@ module.exports = function register(app, io, ctx) {
                     planMtime = fs.statSync(planPath).mtimeMs;
                 }
                 const running = activeWork.has(project_id);
+                const orchView = deps.orchestrationRunView ? deps.orchestrationRunView(project) : null;
                 socket.emit('subscribed', {
                     project_id,
                     snapshot: {
@@ -179,6 +181,7 @@ module.exports = function register(app, io, ctx) {
                         plan_content: planContent,
                         plan_mtime: planMtime,
                         process: running ? { command: 'work' } : null,
+                        orchestration: orchView,
                     },
                 });
                 if (!projectWatchers.has(project_id)) startProjectWatcher(project);
@@ -208,6 +211,7 @@ module.exports = function register(app, io, ctx) {
         fs,
         path,
         activeWork,
+        activeRuns,
         lastActivity,
         projectWatchers,
         spawnForProject,
@@ -228,6 +232,8 @@ module.exports = function register(app, io, ctx) {
     app.use('/api/projects', require('./approve')(deps));
     app.use('/api/projects', require('./tasks')(deps));
     app.use('/api/projects', require('./work')(deps));
+    app.use('/api/projects', require('./orchestration-run')(deps));
+    app.use('/api/projects', require('./base')(deps));
     app.use('/api/projects', require('./pty')(deps));
     app.use('/api/projects', require('./sandbox-routes')(deps));
     app.use('/api', require('../secrets')(deps));
@@ -240,6 +246,11 @@ module.exports = function register(app, io, ctx) {
     return function cleanup() {
         for (const [, child] of activeWork) {
             if (!child.killed) try { child.kill('SIGKILL'); } catch {}
+        }
+        for (const [, run] of activeRuns) {
+            for (const group of Object.values(run.groups || {})) {
+                if (group.child && !group.child.killed) try { group.child.kill('SIGKILL'); } catch {}
+            }
         }
         for (const [, w] of projectWatchers) {
             try { w.close(); } catch {}

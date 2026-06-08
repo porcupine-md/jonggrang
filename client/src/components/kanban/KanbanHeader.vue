@@ -12,7 +12,8 @@
         <span class="elapsed">{{ formatElapsed(proc.elapsed) }}</span>
       </div>
     </div>
-    <div class="header-right">
+    <!-- Work Mode: the per-plan Run button lives in the sidebar -->
+    <div v-if="!featureId" class="header-right">
       <Button
         v-if="!proc.isRunning && canWork"
         size="small"
@@ -43,7 +44,8 @@ import { useProcessStore } from '../../stores/process.js';
 import { useProjectsStore } from '../../stores/projects.js';
 import { useManifestStore } from '../../stores/manifest.js';
 
-const props = defineProps({ projectId: String });
+const props = defineProps({ projectId: String, featureId: { type: String, default: null } });
+const featureId = computed(() => props.featureId);
 const tasks = useTasksStore();
 const proc = useProcessStore();
 const projects = useProjectsStore();

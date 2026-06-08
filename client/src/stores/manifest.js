@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 
+// Must match lib/orchestration.js PHASES (17 phases). Phase 9 = Simplify.
 const PHASES = [
   { num: 1,  name: 'Setup',        role: 'Lead' },
   { num: 2,  name: 'Triage',       role: 'Lead' },
@@ -10,19 +11,21 @@ const PHASES = [
   { num: 6,  name: 'Brainstorm',   role: 'Lead' },
   { num: 7,  name: 'Architect',    role: 'Lead' },
   { num: 8,  name: 'Implement',    role: 'Developer' },
-  { num: 9,  name: 'DesignVerify', role: 'Reviewer' },
-  { num: 10, name: 'Compliance',   role: 'Reviewer' },
-  { num: 11, name: 'Quality',      role: 'Reviewer' },
-  { num: 12, name: 'TestPlan',     role: 'TestLead' },
-  { num: 13, name: 'Test',         role: 'Tester' },
-  { num: 14, name: 'Coverage',     role: 'Tester' },
-  { num: 15, name: 'TestQuality',  role: 'Reviewer' },
-  { num: 16, name: 'Complete',     role: 'Lead' },
+  { num: 9,  name: 'Simplify',     role: 'Developer' },
+  { num: 10, name: 'DesignVerify', role: 'Reviewer' },
+  { num: 11, name: 'Compliance',   role: 'Reviewer' },
+  { num: 12, name: 'Quality',      role: 'Reviewer' },
+  { num: 13, name: 'TestPlan',     role: 'TestLead' },
+  { num: 14, name: 'Test',         role: 'Tester' },
+  { num: 15, name: 'Coverage',     role: 'Tester' },
+  { num: 16, name: 'TestQuality',  role: 'Reviewer' },
+  { num: 17, name: 'Complete',     role: 'Lead' },
 ];
 
 export const useManifestStore = defineStore('manifest', () => {
   const data = ref(null);
   const projectId = ref(null);
+  const featureId = ref(null);
 
   const phases = computed(() => {
     if (!data.value) return [];
@@ -39,10 +42,14 @@ export const useManifestStore = defineStore('manifest', () => {
     });
   });
 
-  async function fetch(pid) {
+  async function fetch(pid, fid = null) {
     projectId.value = pid;
+    featureId.value = fid;
     try {
-      const res = await window.fetch(`/api/projects/${pid}/manifest`);
+      const url = fid
+        ? `/api/projects/${pid}/manifest?feature_id=${encodeURIComponent(fid)}`
+        : `/api/projects/${pid}/manifest`;
+      const res = await window.fetch(url);
       if (res.ok) data.value = await res.json();
       else data.value = null;
     } catch {
@@ -57,7 +64,8 @@ export const useManifestStore = defineStore('manifest', () => {
   function clear() {
     data.value = null;
     projectId.value = null;
+    featureId.value = null;
   }
 
-  return { data, projectId, phases, fetch, update, clear };
+  return { data, projectId, featureId, phases, fetch, update, clear };
 });

@@ -3,6 +3,9 @@
     <div class="agent-toolbar">
       <div class="toolbar-left">
         <i class="pi pi-microchip-ai toolbar-icon" />
+        <span v-if="featureId" class="scope-chip" :title="`Worktree: ${featureId}`">
+          <i class="pi pi-code-branch" /> {{ featureId }}
+        </span>
         <Select
           v-model="selectedTool"
           :options="toolOptions"
@@ -49,6 +52,9 @@ import { useInteractiveTerminal } from '../composables/useInteractiveTerminal.js
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
+// Work Mode: agent runs inside this plan's worktree.
+const featureId = computed(() => route.params.featureId || null);
+const session = computed(() => featureId.value ? `agent:${featureId.value}` : 'agent');
 const ws = useWsStore();
 
 const selectedTool = ref('jonggrang');
@@ -63,13 +69,14 @@ const toolOptions = [
 const { terminalRef, isRunning, markRunning, markStopped, fit } =
   useInteractiveTerminal({
     projectId: computed(() => projectId.value),
-    session: 'agent',
+    session: session.value,
     getSocket: () => ws.socket,
   });
 
 onMounted(async () => {
   try {
-    const res = await fetch(`/api/projects/${projectId.value}/agent/config`);
+    const qs = featureId.value ? `?feature_id=${encodeURIComponent(featureId.value)}` : '';
+    const res = await fetch(`/api/projects/${projectId.value}/agent/config${qs}`);
     const data = await res.json();
     if (data.tool) selectedTool.value = data.tool;
     if (data.running) markRunning();
@@ -82,10 +89,12 @@ async function startAgent() {
     const el = terminalRef.value;
     const cols = el ? Math.floor(el.clientWidth / 7.5) : 80;
     const rows = el ? Math.floor(el.clientHeight / 17) : 24;
+    const body = { tool: selectedTool.value, cols, rows };
+    if (featureId.value) body.feature_id = featureId.value;
     await fetch(`/api/projects/${projectId.value}/agent/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool: selectedTool.value, cols, rows }),
+      body: JSON.stringify(body),
     });
     markRunning();
   } catch {}
@@ -93,7 +102,11 @@ async function startAgent() {
 }
 
 async function stopAgent() {
-  await fetch(`/api/projects/${projectId.value}/agent/stop`, { method: 'POST' });
+  await fetch(`/api/projects/${projectId.value}/agent/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(featureId.value ? { feature_id: featureId.value } : {}),
+  });
   markStopped();
 }
 
@@ -120,6 +133,12 @@ onBeforeRouteLeave((to, from, next) => {
 .toolbar-left { display: flex; align-items: center; gap: 10px; }
 .toolbar-right { display: flex; align-items: center; gap: 8px; }
 .toolbar-icon { font-size: 14px; color: var(--jg-green); }
+.scope-chip {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 10px; font-family: monospace; color: var(--jg-text-muted);
+  border: 1px solid var(--jg-border); padding: 2px 7px;
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .tool-select { width: 160px; }
 .tool-select :deep(.p-select) { height: 30px; font-size: 12px; }

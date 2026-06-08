@@ -2,6 +2,7 @@
 
 const { Router } = require('express');
 const fs = require('fs');
+const sandbox = require('../../lib/sandbox');
 
 module.exports = function(deps) {
     const { webState } = deps;
@@ -45,6 +46,30 @@ module.exports = function(deps) {
         } catch (err) {
             res.status(500).json({ error: err.message });
         }
+    });
+
+    // ── Global SSH key for in-container git push ─────────────────
+    // Used when a project has no per-project key. GET never returns the key.
+    router.get('/settings/ssh-key', (req, res) => {
+        res.json(sandbox.globalSshKeyStatus());
+    });
+
+    router.put('/settings/ssh-key', (req, res) => {
+        const { key } = req.body || {};
+        if (!key || typeof key !== 'string') {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'key (PEM/OpenSSH private key) required' } });
+        }
+        try {
+            sandbox.writeGlobalSshKey(key);
+            res.json({ ok: true, ...sandbox.globalSshKeyStatus() });
+        } catch (err) {
+            res.status(400).json({ error: { code: 'INVALID_KEY', message: err.message } });
+        }
+    });
+
+    router.delete('/settings/ssh-key', (req, res) => {
+        sandbox.removeGlobalSshKey();
+        res.json({ ok: true, ...sandbox.globalSshKeyStatus() });
     });
 
     // Check whether a host path exists before enabling a volume mount

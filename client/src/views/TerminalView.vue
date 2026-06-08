@@ -4,6 +4,9 @@
       <div class="toolbar-left">
         <i class="pi pi-dollar toolbar-icon" />
         <span class="toolbar-label">Shell</span>
+        <span v-if="featureId" class="scope-chip" :title="`Worktree: ${featureId}`">
+          <i class="pi pi-code-branch" /> {{ featureId }}
+        </span>
         <span v-if="isRunning" class="status-chip status-chip--running">
           <span class="running-dot" /> Running
         </span>
@@ -31,13 +34,16 @@ import { useInteractiveTerminal } from '../composables/useInteractiveTerminal.js
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
+// Work Mode: shell opens inside this plan's worktree.
+const featureId = computed(() => route.params.featureId || null);
+const session = computed(() => featureId.value ? `terminal:${featureId.value}` : 'terminal');
 const ws = useWsStore();
 const starting = ref(false);
 
 const { terminalRef, isRunning, markRunning, markStopped, fit } =
   useInteractiveTerminal({
     projectId: computed(() => projectId.value),
-    session: 'terminal',
+    session: session.value,
     getSocket: () => ws.socket,
   });
 
@@ -49,10 +55,12 @@ async function startTerminal() {
     const el = terminalRef.value;
     const cols = el ? Math.floor(el.clientWidth / 7.5) : 80;
     const rows = el ? Math.floor(el.clientHeight / 17) : 24;
+    const body = { cols, rows };
+    if (featureId.value) body.feature_id = featureId.value;
     await fetch(`/api/projects/${projectId.value}/terminal/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cols, rows }),
+      body: JSON.stringify(body),
     });
     markRunning();
   } catch {}
@@ -60,7 +68,11 @@ async function startTerminal() {
 }
 
 async function stopTerminal() {
-  await fetch(`/api/projects/${projectId.value}/terminal/stop`, { method: 'POST' });
+  await fetch(`/api/projects/${projectId.value}/terminal/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(featureId.value ? { feature_id: featureId.value } : {}),
+  });
   markStopped();
 }
 
@@ -88,6 +100,12 @@ onBeforeRouteLeave((to, from, next) => {
 .toolbar-right { display: flex; gap: 8px; }
 .toolbar-icon { font-size: 14px; color: var(--jg-text-faint); }
 .toolbar-label { font-size: 12px; font-weight: 600; color: var(--jg-text-muted); }
+.scope-chip {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 10px; font-family: monospace; color: var(--jg-text-muted);
+  border: 1px solid var(--jg-border); padding: 2px 7px;
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .status-chip {
   display: flex; align-items: center; gap: 5px;
