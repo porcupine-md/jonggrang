@@ -154,7 +154,13 @@ module.exports = function(deps) {
     router.get('/:id/code-status', (req, res) => {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: 'not found' });
-        const folder = project.sandbox?.enabled ? sandbox.getContainerPath(project) : project.path;
+        const fid = req.query.feature_id;
+        let folder;
+        if (project.sandbox?.enabled) {
+            folder = fid ? `${sandbox.WORKTREE_MOUNT}/${fid}` : sandbox.getContainerPath(project);
+        } else {
+            folder = fid ? `${sandbox.projectWorktreeDir(project.id)}/${fid}` : project.path;
+        }
         res.json({ mode: project.code_editor || 'off', running: !!editors.get(project.id)?.target, folder });
     });
 

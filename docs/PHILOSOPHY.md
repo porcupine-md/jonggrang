@@ -253,13 +253,13 @@ Jonggrang: checks via `before_provider_request` event in Pi extension.
 │   ├── feedback-loop-state.json    ← Dirty bits (cleared on restart)
 │   ├── compaction-state.json       ← Token usage cache
 │   └── orchestration-run.json      ← Parallel-run snapshot (per-plan groups)
-├── .worktree/                      ← Parallel run worktrees, one per plan (gitignored)
-│   └── {feature-id}/               ← Isolated checkout on that plan's branch
 └── locks/
     └── {agent}.lock                ← File ownership during parallel runs
 ```
 
-> **`.output/` is tracked, `.worktree/`/`.ephemeral/`/`locks/` are gitignored.** Plans and manifests under `.output/` are committed so they travel with each plan's branch when the user pushes it from the web **Parallel Run** view. See [JONGGRANG.md → Parallel Orchestration](JONGGRANG.md).
+> **`.output/` is tracked, `.ephemeral/`/`locks/` are gitignored.** Plans and manifests under `.output/` are committed so they travel with each plan's branch when the user pushes it from the web **Work Mode → Changes** view. See [JONGGRANG.md → Parallel Orchestration](JONGGRANG.md).
+>
+> **Worktrees live outside the repo** at `~/.jonggrang/worktree/{project_id}/{feature_id}/` (kept off the project so it stays clean; persistent across container rebuilds). Sandbox projects bind-mount the per-project dir into the container at `/root/.worktrees`.
 
 ---
 

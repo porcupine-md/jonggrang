@@ -62,10 +62,10 @@ const codeUrl = ref('');
 
 async function initFullEditor() {
   try {
-    const res = await fetch(`/api/projects/${projectId.value}/code-status`);
+    const q = featureId.value ? `?feature_id=${encodeURIComponent(featureId.value)}` : '';
+    const res = await fetch(`/api/projects/${projectId.value}/code-status${q}`);
     const data = await res.json();
-    let folder = data.folder || '';
-    if (featureId.value && folder) folder = `${folder}/.jonggrang/.worktree/${featureId.value}`;
+    const folder = data.folder || '';
     codeUrl.value = `/api/projects/${projectId.value}/code/` + (folder ? `?folder=${encodeURIComponent(folder)}` : '');
   } catch {
     codeUrl.value = `/api/projects/${projectId.value}/code/`;

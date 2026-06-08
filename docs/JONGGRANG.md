@@ -111,8 +111,6 @@ project-root/
 │   │   ├── feedback-loop-state.json
 │   │   ├── compaction-state.json
 │   │   └── orchestration-run.json  # Parallel-run snapshot (per-plan groups)
-│   ├── .worktree/              # Parallel run worktrees, one per plan (gitignored)
-│   │   └── {feature_id}/       # Isolated checkout on that plan's branch
 │   └── locks/                  # File ownership
 ├── .claude/
 │   └── settings.json           # Claude Code enforcement hooks
@@ -459,7 +457,7 @@ The web dashboard runs **each plan as one group** — every task sharing a `feat
 
 - **Per-plan Work Mode**: an approved plan's "Work Mode" button (plan list) opens `/projects/:id/plans/:featureId/…` with Pipeline / Tasks / Logs / Changes / Agent / Terminal all scoped to that plan. The **Run** button in the Work Mode sidebar starts only that plan's group; other plans keep running untouched (the run registry is shared and incremental).
 - **Branch per plan** is read from that plan's `plan.md` frontmatter (`branch:`), e.g. `feat/version-endpoint`.
-- **Worktrees** live under `.jonggrang/.worktree/{feature_id}/` (gitignored), forked from current `HEAD`. The worktree is **created on entering Work Mode** (idempotent, registry in `.jonggrang/.ephemeral/worktrees.json`) so Agent/Terminal can work inside it before any run; a later run reuses it.
+- **Worktrees** live centrally, outside the repo, under `~/.jonggrang/worktree/{project_id}/{feature_id}/` (so the project stays clean and worktrees persist across container rebuilds). For sandbox projects that per-project dir is bind-mounted into the container at `/root/.worktrees`. The worktree is **created on entering Work Mode** (idempotent, registry in `.jonggrang/.ephemeral/worktrees.json`) so Agent/Terminal can work inside it before any run; a later run reuses it.
 - **Agent & Terminal follow scope**: project scope → container / project root; Work Mode → that plan's worktree (PTY session keys `agent:<featureId>` / `terminal:<featureId>` coexist with project-scope sessions).
 - The orchestration **manager (server-side)** is the single writer of the main `jonggrang-tasks.json`: each worktree worker runs `jonggrang work --worktree --group-tasks <ids> --branch <name>` and emits `task_status` JSON signals instead of writing the board, so parallel workers never race. The kanban updates live from the manager's writes.
 - On completion, the manager **commits** the worktree to its branch. The user reviews the plan's **Changes** tab (file list + diff) and **pushes the branch** to `origin` (pending manual worktree changes are committed first; same branch name, never `main`/`master`, no auto-merge).

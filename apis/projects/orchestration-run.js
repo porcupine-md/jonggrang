@@ -55,6 +55,10 @@ module.exports = function(deps) {
     // ── execution context (host vs sandbox container) ─────────────
 
     function buildCtx(project) {
+        // Worktrees live centrally under ~/.jonggrang/worktree/<id>/<fid>; for
+        // sandbox projects that dir is bind-mounted into the container at
+        // sandbox.WORKTREE_MOUNT, so git ops run on container-absolute paths.
+        const hostDir = sandbox.projectWorktreeDir(project.id);
         if (project.sandbox?.enabled) {
             const container = sandbox.getContainerName(project.id);
             const root = sandbox.getContainerPath(project); // e.g. /root/<name>
@@ -62,17 +66,15 @@ module.exports = function(deps) {
                 mode: 'container',
                 container,
                 root,
-                // worktree path INSIDE the container
-                wt: (fid) => `${root}/.jonggrang/.worktree/${fid}`,
-                // same worktree on the HOST (bind mount) — for fs seeding / mkdir
-                hostWt: (fid) => path.join(project.path, '.jonggrang', '.worktree', fid),
+                wt: (fid) => `${sandbox.WORKTREE_MOUNT}/${fid}`,
+                hostWt: (fid) => path.join(hostDir, fid),
             };
         }
         return {
             mode: 'host',
             root: project.path,
-            wt: (fid) => path.join(project.path, '.jonggrang', '.worktree', fid),
-            hostWt: (fid) => path.join(project.path, '.jonggrang', '.worktree', fid),
+            wt: (fid) => path.join(hostDir, fid),
+            hostWt: (fid) => path.join(hostDir, fid),
         };
     }
 
@@ -102,6 +104,8 @@ module.exports = function(deps) {
         const branch = g.branch;
         try { gitSync(ctx, ctx.root, ['worktree', 'prune']); } catch {}
         try { gitSync(ctx, ctx.root, ['worktree', 'remove', wt, '--force']); } catch {}
+        // Best-effort: drop a worktree left at the OLD in-repo location (migration).
+        try { gitSync(ctx, ctx.root, ['worktree', 'remove', `${ctx.root}/.jonggrang/.worktree/${g.featureId}`, '--force']); } catch {}
         try { gitSync(ctx, ctx.root, ['branch', '-D', branch]); } catch {}
         try { fs.mkdirSync(path.dirname(ctx.hostWt(g.featureId)), { recursive: true }); } catch {}
         const baseSha = gitSync(ctx, ctx.root, ['rev-parse', 'HEAD']).trim();

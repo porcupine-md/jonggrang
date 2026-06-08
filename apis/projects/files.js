@@ -24,14 +24,13 @@ module.exports = function(deps) {
     }
 
     function ctxOf(project, featureId) {
-        const sub = featureId ? `.jonggrang/.worktree/${featureId}` : '';
         if (project.sandbox?.enabled) {
             const container = sandbox.getContainerName(project.id);
-            const base = sandbox.getContainerPath(project);
-            return { mode: 'container', container, root: sub ? `${base}/${sub}` : base };
+            const base = featureId ? `${sandbox.WORKTREE_MOUNT}/${featureId}` : sandbox.getContainerPath(project);
+            return { mode: 'container', container, root: base };
         }
-        const base = project.path;
-        return { mode: 'host', root: sub ? path.join(base, sub) : base };
+        const base = featureId ? path.join(sandbox.projectWorktreeDir(project.id), featureId) : project.path;
+        return { mode: 'host', root: base };
     }
 
     // Resolve a client-supplied relative path against root and refuse escapes.
