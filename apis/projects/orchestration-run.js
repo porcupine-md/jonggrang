@@ -409,6 +409,10 @@ module.exports = function(deps) {
             cwd: group.worktreePath,
             env: {
                 ...process.env,
+                // Override inherited PWD so the agent CLI (opencode resolves its
+                // project root from $PWD, not process.cwd()) runs inside the
+                // worktree instead of the server's launch dir.
+                PWD: group.worktreePath,
                 JONGGRANG_HOME,
                 JONGGRANG_PROJECT_ROOT: group.worktreePath,
                 JONGGRANG_MODE: 'autonomous',

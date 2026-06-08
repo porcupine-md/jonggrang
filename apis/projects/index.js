@@ -55,6 +55,11 @@ module.exports = function register(app, io, ctx) {
             cwd: project.path,
             env: {
                 ...process.env,
+                // Override inherited PWD: Node's `cwd` option sets the child's real
+                // working directory but leaves PWD pointing at the server's launch
+                // dir. Agent CLIs (opencode) resolve their project root from $PWD,
+                // so without this they run in the wrong repo.
+                PWD: project.path,
                 JONGGRANG_HOME,
                 JONGGRANG_PROJECT_ROOT: project.path,
                 JONGGRANG_MODE: 'autonomous',
