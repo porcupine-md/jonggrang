@@ -43,13 +43,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # PRs build amd64 only for speed; manual runs build multi-arch.
       - name: Build & push jonggrang-agent:dev
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./docker/Dockerfile.dev
-          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/jonggrang-agent:dev
           cache-from: type=gha,scope=agent-dev
