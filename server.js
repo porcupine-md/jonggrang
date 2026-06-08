@@ -36,25 +36,35 @@ app.use(cors({ origin: (origin, cb) => cb(null, isOriginTrusted(origin)) }));
 app.use(express.json({ limit: '1mb' }));
 
 // ── RATE LIMITER ──────────────────────────────────────────────
-const rateLimitMap = new Map();
+// The dashboard is local-first and polls frequently (multiple projects +
+// live updates), so the limiter only guards EXPOSED (non-loopback) binds.
+// Config: JONGGRANG_RATE_LIMIT_MAX requests/min per IP — `0` disables it.
+// Default: disabled on loopback, 200/min otherwise.
 const RATE_LIMIT_WINDOW = 60_000;
-const RATE_LIMIT_MAX = 200;
-app.use((req, res, next) => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-    const entry = rateLimitMap.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
-    if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + RATE_LIMIT_WINDOW; }
-    entry.count++;
-    rateLimitMap.set(ip, entry);
-    if (entry.count > RATE_LIMIT_MAX) return res.status(429).json({ error: 'Too many requests. Slow down.' });
-    next();
-});
-setInterval(() => {
-    const now = Date.now();
-    for (const [ip, entry] of rateLimitMap) {
-        if (now > entry.resetAt) rateLimitMap.delete(ip);
-    }
-}, 300_000).unref();
+const rlHost = process.env.HOST || '127.0.0.1';
+const rlLoopback = ['127.0.0.1', 'localhost', '::1', '0.0.0.0'].includes(rlHost);
+const RATE_LIMIT_MAX = process.env.JONGGRANG_RATE_LIMIT_MAX !== undefined
+    ? parseInt(process.env.JONGGRANG_RATE_LIMIT_MAX, 10)
+    : (rlLoopback ? 0 : 200);
+if (RATE_LIMIT_MAX > 0) {
+    const rateLimitMap = new Map();
+    app.use((req, res, next) => {
+        const ip = req.ip || req.socket.remoteAddress || 'unknown';
+        const now = Date.now();
+        const entry = rateLimitMap.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+        if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + RATE_LIMIT_WINDOW; }
+        entry.count++;
+        rateLimitMap.set(ip, entry);
+        if (entry.count > RATE_LIMIT_MAX) return res.status(429).json({ error: 'Too many requests. Slow down.' });
+        next();
+    });
+    setInterval(() => {
+        const now = Date.now();
+        for (const [ip, entry] of rateLimitMap) {
+            if (now > entry.resetAt) rateLimitMap.delete(ip);
+        }
+    }, 300_000).unref();
+}
 
 // ── PROJECT / HOME PATHS ──────────────────────────────────────
 const PROJECT_ROOT = process.env.JONGGRANG_PROJECT_ROOT || path.resolve(__dirname, '..');
