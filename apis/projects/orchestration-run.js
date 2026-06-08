@@ -441,9 +441,36 @@ module.exports = function(deps) {
         }
     }
 
+    // The worktree worker updates the manifest in its OWN seeded copy
+    // (<worktree>/.jonggrang/.output/...), but the web pipeline view reads the
+    // MAIN project's manifest. Mirror the worktree manifest back to the main
+    // project so the project's file watcher emits `manifest.updated` and the
+    // pipeline view advances live (Implement → … → Complete) instead of
+    // stalling at the phase it was seeded with.
+    function syncManifest(project, group) {
+        try {
+            const base = group.hostWorktreePath || group.worktreePath;
+            if (!base) return;
+            const rel = path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml');
+            const src = path.join(base, rel);
+            const dst = path.join(project.path, rel);
+            if (!fs.existsSync(src)) return;
+            const data = fs.readFileSync(src);
+            let cur = null;
+            try { cur = fs.readFileSync(dst); } catch { /* missing */ }
+            if (cur && cur.equals(data)) return; // unchanged → don't churn the watcher
+            fs.mkdirSync(path.dirname(dst), { recursive: true });
+            fs.writeFileSync(dst, data);
+        } catch (err) {
+            console.error('orchestration syncManifest error:', err.message);
+        }
+    }
+
     function wireWorker(project, ctx, run, group) {
         const child = group.child;
         group.pid = child.pid;
+        // Live-mirror the worktree manifest → main project while the worker runs.
+        group.manifestSync = setInterval(() => syncManifest(project, group), 1500);
         let buf = '';
         const onData = (stream) => (data) => {
             buf += data.toString();
@@ -471,6 +498,8 @@ module.exports = function(deps) {
         child.on('close', (code) => {
             group.exitCode = code;
             group.finishedAt = new Date().toISOString();
+            if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
+            syncManifest(project, group); // final state (e.g. completed) → main project
             if (code === 0) {
                 try {
                     group.committed = commitWorktreeCtx(ctx, group.worktreePath, `feat(${group.featureId}): ${group.title}`);
@@ -505,11 +534,12 @@ module.exports = function(deps) {
         const wt = ensureWorktree(project, ctx, g);
         const group = {
             featureId: g.featureId, branch: wt.branch, title: g.title, taskIds: g.taskIds,
-            status: 'running', worktreePath: wt.worktreePath, baseSha: wt.baseSha,
+            status: 'running', worktreePath: wt.worktreePath, hostWorktreePath: wt.hostWorktreePath,
+            baseSha: wt.baseSha,
             startedAt: new Date().toISOString(), finishedAt: null, exitCode: null,
             committed: false, pushed: false, error: null, logTail: [],
             workerArgs: opts.workerArgs || null,
-            child: null,
+            child: null, manifestSync: null,
         };
         run.groups[g.featureId] = group;
         group.child = spawnGroupWorker(project, ctx, group);
