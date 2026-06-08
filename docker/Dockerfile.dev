@@ -39,12 +39,28 @@ ENV PATH="${GOPATH}/bin:${PATH}"
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# ── AI tools + jonggrang ─────────────────────────────────────────────────────
+# ── AI tools (jonggrang installed from local source, not npm) ────────────────
 RUN npm install -g --no-fund --no-audit \
-    jonggrang \
     @anthropic-ai/claude-code \
     opencode-ai \
     @openai/codex
+
+# ── jonggrang: install deps, then install CLI from local source ───────────────
+# Build context must be the repo root (see build.dev.sh).
+WORKDIR /tmp/jonggrang-src
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-fund --no-audit
+
+COPY bin/       ./bin/
+COPY lib/       ./lib/
+COPY templates/ ./templates/
+COPY hooks/     ./hooks/
+COPY skills/    ./skills/
+
+# Pack into a tarball so npm installs a real copy, not a symlink to the build dir
+RUN npm pack --no-fund --no-audit && \
+    npm install -g --no-fund --no-audit jonggrang-*.tgz && \
+    rm -rf /tmp/jonggrang-src
 
 # ── Git safe directory (allow mounted workspaces owned by any user) ───────────
 RUN git config --global --add safe.directory '*'

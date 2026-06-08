@@ -55,6 +55,11 @@
         <InputText v-model="sbx.shell" placeholder="/bin/bash" style="width:100%" />
         <p class="hint">Shell binary inside the container (e.g. /bin/bash, /bin/sh).</p>
       </div>
+      <div class="form-group">
+        <label>Docker Network</label>
+        <InputText v-model="sbx.network" placeholder="jonggrang" style="width:100%" />
+        <p class="hint">Docker network semua sandbox container akan dikoneksikan. Default: jonggrang.</p>
+      </div>
 
       <!-- Volume Mounts -->
       <div class="form-group">
@@ -106,6 +111,28 @@
       <Button :disabled="sbxSaving" @click="saveSandbox" :icon="sbxSaving ? 'pi pi-spin pi-spinner' : 'pi pi-check'" :label="sbxSaving ? 'Saving…' : 'Save'" />
     </div>
 
+    <!-- Git SSH Key (global) -->
+    <div class="settings-card">
+      <div class="card-title"><i class="pi pi-key" /> Git SSH Key (global)</div>
+      <p class="hint">Default private key mounted into every sandbox for in-container <code>git push</code>. A per-project key (set in a project's Settings) overrides this; if neither is set, <code>~/.ssh/id_rsa</code> is used. Restart sandboxes after changing.</p>
+      <div class="ssh-status">Active: <strong>{{ gssh.source }}</strong> <span v-if="gssh.path" class="ssh-path">{{ gssh.path }}</span></div>
+      <div v-if="gssh.fingerprint" class="ssh-fp">{{ gssh.fingerprint }}</div>
+      <label class="ssh-label">Paste the global private key</label>
+      <textarea
+        v-model="gsshInput"
+        class="ssh-input"
+        rows="4"
+        spellcheck="false"
+        placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
+      ></textarea>
+      <div v-if="gsshError" class="error-text"><i class="pi pi-times-circle" /> {{ gsshError }}</div>
+      <div v-if="gsshOk" class="ok-text"><i class="pi pi-check-circle" /> Saved — restart sandboxes to apply</div>
+      <div class="ssh-actions">
+        <Button :disabled="gsshSaving || !gsshInput.trim()" @click="saveGlobalSshKey" :icon="gsshSaving ? 'pi pi-spin pi-spinner' : 'pi pi-check'" :label="gsshSaving ? 'Saving…' : 'Save key'" />
+        <Button severity="secondary" :disabled="gsshSaving || !gssh.has_global_key" @click="clearGlobalSshKey" icon="pi pi-times" label="Remove global key" />
+      </div>
+    </div>
+
     <!-- About -->
     <div class="settings-card">
       <div class="card-title"><i class="pi pi-info-circle" /> About</div>
@@ -142,7 +169,7 @@ const saving = ref(false);
 const saveError = ref('');
 const saveOk = ref(false);
 
-const sbx = reactive({ image: '', shell: '', volumes: [] });
+const sbx = reactive({ image: '', shell: '', network: '', volumes: [] });
 const sbxSaving = ref(false);
 const sbxError = ref('');
 const sbxOk = ref(false);
@@ -150,6 +177,12 @@ const sbxOk = ref(false);
 const addingVolume = ref(false);
 const newVol = reactive({ source: '', destination: '', type: 'bind', readonly: false });
 const volCheckError = ref('');
+
+const gssh = reactive({ source: 'none', path: null, has_global_key: false, fingerprint: '' });
+const gsshInput = ref('');
+const gsshSaving = ref(false);
+const gsshError = ref('');
+const gsshOk = ref(false);
 
 onMounted(async () => {
   await workspace.fetch();
@@ -160,10 +193,42 @@ onMounted(async () => {
       const d = await res.json();
       sbx.image = d.image || '';
       sbx.shell = d.shell || '';
+      sbx.network = d.network || '';
       sbx.volumes = Array.isArray(d.volumes) ? d.volumes : [];
     }
   } catch {}
+  await loadGlobalSshKey();
 });
+
+async function loadGlobalSshKey() {
+  try {
+    const r = await fetch('/api/settings/ssh-key');
+    if (r.ok) Object.assign(gssh, await r.json());
+  } catch {}
+}
+
+async function saveGlobalSshKey() {
+  gsshSaving.value = true; gsshError.value = ''; gsshOk.value = false;
+  try {
+    const r = await fetch('/api/settings/ssh-key', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: gsshInput.value }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || 'Failed to save key');
+    Object.assign(gssh, d); gsshInput.value = ''; gsshOk.value = true;
+  } catch (e) { gsshError.value = e.message; } finally { gsshSaving.value = false; }
+}
+
+async function clearGlobalSshKey() {
+  gsshSaving.value = true; gsshError.value = ''; gsshOk.value = false;
+  try {
+    const r = await fetch('/api/settings/ssh-key', { method: 'DELETE' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || 'Failed');
+    Object.assign(gssh, d);
+  } catch (e) { gsshError.value = e.message; } finally { gsshSaving.value = false; }
+}
 
 function startAddVolume() {
   newVol.source = '';
@@ -256,6 +321,7 @@ async function saveSandbox() {
       body: JSON.stringify({
         image: sbx.image || 'orcinus/jonggrang-agent',
         shell: sbx.shell || '/bin/bash',
+        network: sbx.network || 'jonggrang',
         volumes: sbx.volumes,
       }),
     });
@@ -302,6 +368,18 @@ async function saveWorkspace() {
 .input-row { display: flex; gap: 8px; }
 .hint { font-size: 11px; color: var(--jg-text-faint); margin-top: 8px; }
 .ok-text { color: var(--jg-green); font-size: 12px; margin-top: 4px; display: flex; align-items: center; gap: 4px; }
+.ssh-status { font-size: 12px; color: var(--jg-text-muted); margin: 8px 0 4px; }
+.ssh-status strong { color: var(--jg-text); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
+.ssh-path { font-family: monospace; font-size: 11px; color: var(--jg-text-faint); margin-left: 8px; }
+.ssh-fp { font-family: monospace; font-size: 10px; color: var(--jg-text-faint); margin-bottom: 8px; word-break: break-all; }
+.ssh-label { display: block; font-size: 11px; color: var(--jg-text-faint); margin: 8px 0 4px; }
+.ssh-input {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  background: var(--jg-bg); border: 1px solid var(--jg-border); border-radius: var(--radius);
+  color: var(--jg-text-muted); font-family: monospace; font-size: 11px; padding: 8px;
+}
+.ssh-input:focus { outline: none; border-color: var(--jg-green); }
+.ssh-actions { display: flex; gap: 8px; margin-top: 8px; }
 .about-row {
   display: flex; justify-content: space-between;
   font-size: 12px; color: var(--jg-text-muted);

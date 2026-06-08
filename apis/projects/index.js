@@ -1,5 +1,7 @@
 'use strict';
 
+const sandbox = require('../../lib/sandbox');
+
 module.exports = function register(app, io, ctx) {
     const { JONGGRANG_HOME, webState, orchestration } = ctx;
 
@@ -11,11 +13,43 @@ module.exports = function register(app, io, ctx) {
     // ── Local state ──────────────────────────────────────────────
     const projectWatchers = new Map();
     const activeWork = new Map();
+    const activeRuns = new Map();
     const lastActivity = new Map();
 
     // ── Helpers ──────────────────────────────────────────────────
 
-    function spawnForProject(project, args, extraEnv = {}) {
+    // Spawn `jonggrang <args>` for a project.
+    // If project.sandbox.enabled → docker exec into the project container
+    // so the agent runs in isolation. Otherwise spawn locally on the host.
+    // Pass `{ local: true }` to force host execution (init bootstrap).
+    function spawnForProject(project, args, extraEnv = {}, opts = {}) {
+        const secretVars = webState.getProjectSecretVars(project.id);
+
+        if (project.sandbox?.enabled && !opts.local) {
+            const containerName = sandbox.getContainerName(project.id);
+            const containerPath = sandbox.getContainerPath(project);
+            const envFlags = [];
+            const envForContainer = {
+                JONGGRANG_PROJECT_ROOT: containerPath,
+                JONGGRANG_MODE: 'autonomous',
+                NO_UPDATE_NOTIFIER: '1',
+                FORCE_COLOR: '0',
+                ...secretVars,
+                ...extraEnv,
+            };
+            for (const [k, v] of Object.entries(envForContainer)) {
+                envFlags.push('--env', `${k}=${v}`);
+            }
+            const dockerArgs = [
+                'exec', '-i',
+                '--workdir', containerPath,
+                ...envFlags,
+                containerName,
+                'jonggrang', ...args,
+            ];
+            return spawn('docker', dockerArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+        }
+
         const nodeCli = path.join(__dirname, '..', '..', 'bin', 'jonggrang.js');
         return spawn('node', [nodeCli, ...args], {
             cwd: project.path,
@@ -26,6 +60,7 @@ module.exports = function register(app, io, ctx) {
                 JONGGRANG_MODE: 'autonomous',
                 NO_UPDATE_NOTIFIER: '1',
                 FORCE_COLOR: '0',
+                ...secretVars,
                 ...extraEnv,
             },
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -136,6 +171,7 @@ module.exports = function register(app, io, ctx) {
                     planMtime = fs.statSync(planPath).mtimeMs;
                 }
                 const running = activeWork.has(project_id);
+                const orchView = deps.orchestrationRunView ? deps.orchestrationRunView(project) : null;
                 socket.emit('subscribed', {
                     project_id,
                     snapshot: {
@@ -145,6 +181,7 @@ module.exports = function register(app, io, ctx) {
                         plan_content: planContent,
                         plan_mtime: planMtime,
                         process: running ? { command: 'work' } : null,
+                        orchestration: orchView,
                     },
                 });
                 if (!projectWatchers.has(project_id)) startProjectWatcher(project);
@@ -174,6 +211,7 @@ module.exports = function register(app, io, ctx) {
         fs,
         path,
         activeWork,
+        activeRuns,
         lastActivity,
         projectWatchers,
         spawnForProject,
@@ -194,6 +232,8 @@ module.exports = function register(app, io, ctx) {
     app.use('/api/projects', require('./approve')(deps));
     app.use('/api/projects', require('./tasks')(deps));
     app.use('/api/projects', require('./work')(deps));
+    app.use('/api/projects', require('./orchestration-run')(deps));
+    app.use('/api/projects', require('./base')(deps));
     app.use('/api/projects', require('./pty')(deps));
     app.use('/api/projects', require('./sandbox-routes')(deps));
     app.use('/api', require('../secrets')(deps));
@@ -206,6 +246,11 @@ module.exports = function register(app, io, ctx) {
     return function cleanup() {
         for (const [, child] of activeWork) {
             if (!child.killed) try { child.kill('SIGKILL'); } catch {}
+        }
+        for (const [, run] of activeRuns) {
+            for (const group of Object.values(run.groups || {})) {
+                if (group.child && !group.child.killed) try { group.child.kill('SIGKILL'); } catch {}
+            }
         }
         for (const [, w] of projectWatchers) {
             try { w.close(); } catch {}

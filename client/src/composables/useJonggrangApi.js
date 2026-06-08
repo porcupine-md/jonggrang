@@ -1,7 +1,14 @@
 import { ref } from 'vue';
 
 function buildRequestError(response, payload) {
-  const message = payload?.error || payload?.message || `Request failed (${response.status})`;
+  // Server errors use the shape { error: { code, message } }; older/simple ones
+  // use { error: "string" } or { message: "string" }. Extract a real string so
+  // the UI never shows "[object Object]".
+  const raw = payload?.error;
+  const message =
+    (raw && typeof raw === 'object' ? (raw.message || raw.code) : raw) ||
+    payload?.message ||
+    `Request failed (${response.status})`;
   const error = new Error(message);
   error.status = response.status;
   error.payload = payload;

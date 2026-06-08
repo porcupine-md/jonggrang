@@ -13,10 +13,11 @@
     </div>
     <div v-if="preview && task.status === 'in_progress'" class="card-preview"><i class="pi pi-arrow-right" style="font-size:9px" /> {{ preview }}</div>
     <div v-if="task.status === 'failed' && task.error" class="card-error">! {{ task.error }}</div>
-    <div v-if="task.status === 'blocked'" class="card-blocked-actions" @click.stop>
-      <Button size="small" severity="secondary" :disabled="resuming" @click="resumeTask">
-        <i class="pi pi-refresh" /> {{ resuming ? '...' : 'Resume' }}
+    <div v-if="canRun" class="card-actions" @click.stop>
+      <Button size="small" severity="secondary" :disabled="running" @click="runTask">
+        <i class="pi pi-play" /> {{ running ? '...' : 'Run' }}
       </Button>
+      <span v-if="runError" class="card-run-err">{{ runError }}</span>
     </div>
   </div>
 </template>
@@ -31,18 +32,36 @@ const props = defineProps({ task: Object });
 defineEmits(['click']);
 
 const route = useRoute();
-const resuming = ref(false);
+const featureId = computed(() => route.params.featureId || null);
+const running = ref(false);
+const runError = ref('');
 
-async function resumeTask() {
-  resuming.value = true;
+// Run button on every task that isn't finished — runs `jonggrang work --task`.
+const canRun = computed(() =>
+  !['completed', 'done', 'skipped', 'in_progress'].includes(props.task.status)
+);
+
+async function runTask() {
+  running.value = true; runError.value = '';
   try {
-    await fetch(`/api/projects/${route.params.id}/work`, {
+    // In Work Mode (featureId present) run inside the plan's worktree;
+    // otherwise fall back to the project-root work process.
+    const url = featureId.value
+      ? `/api/projects/${route.params.id}/orchestration/groups/${featureId.value}/run-task`
+      : `/api/projects/${route.params.id}/work`;
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task_id: props.task.id }),
     });
-  } catch {}
-  resuming.value = false;
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      runError.value = d.error?.message || `Failed (${res.status})`;
+    }
+  } catch (e) {
+    runError.value = e.message;
+  }
+  running.value = false;
 }
 
 const proc = useProcessStore();
@@ -98,5 +117,6 @@ const preview = computed(() => proc.taskLogPreview(props.task.id));
 .card-files { font-size: 10px; color: var(--jg-text-faint); margin-top: 4px; }
 .card-preview { font-size: 10px; color: var(--jg-text-muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 3px; }
 .card-error { font-size: 10px; color: var(--jg-red); margin-top: 4px; }
-.card-blocked-actions { margin-top: 8px; }
+.card-actions { margin-top: 8px; display: flex; align-items: center; gap: 6px; }
+.card-run-err { font-size: 9px; color: var(--jg-red); }
 </style>

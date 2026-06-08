@@ -5,6 +5,7 @@ import { useProjectsStore } from './projects.js';
 import { useTasksStore } from './tasks.js';
 import { useProcessStore } from './process.js';
 import { useManifestStore } from './manifest.js';
+import { useOrchestrationStore } from './orchestration.js';
 
 export const useWsStore = defineStore('ws', () => {
   const socket = ref(null);
@@ -31,6 +32,8 @@ export const useWsStore = defineStore('ws', () => {
         if (snapshot.state) projects.updateDerivedState(project_id, snapshot.state);
         if (snapshot.tasks) tasks.replaceAll(snapshot.tasks);
         if (snapshot.process) proc.setRunning(snapshot.process);
+        const orch = useOrchestrationStore();
+        if (orch.projectId === project_id && snapshot.orchestration) orch.hydrate(snapshot.orchestration);
       }
     });
 
@@ -91,8 +94,24 @@ export const useWsStore = defineStore('ws', () => {
 
     s.on('manifest.updated', ({ project_id, manifest }) => {
       const mStore = useManifestStore();
-      if (mStore.projectId === project_id) mStore.update(manifest);
+      if (mStore.projectId !== project_id) return;
+      // When scoped to one plan (Work Mode), ignore other plans' manifests.
+      if (mStore.featureId && manifest?.feature_id && manifest.feature_id !== mStore.featureId) return;
+      mStore.update(manifest);
     });
+
+    // Parallel orchestration (per-plan worktree runs)
+    const orchFor = (project_id) => {
+      const o = useOrchestrationStore();
+      return o.projectId === project_id ? o : null;
+    };
+    s.on('orchestration.started',         ({ project_id, run })  => orchFor(project_id)?.onStarted(run));
+    s.on('orchestration.group.started',   ({ project_id, ...p }) => orchFor(project_id)?.onGroupStarted(p));
+    s.on('orchestration.group.log',       ({ project_id, ...p }) => orchFor(project_id)?.onGroupLog(p));
+    s.on('orchestration.group.completed', ({ project_id, ...p }) => orchFor(project_id)?.onGroupCompleted(p));
+    s.on('orchestration.group.failed',    ({ project_id, ...p }) => orchFor(project_id)?.onGroupFailed(p));
+    s.on('orchestration.group.pushed',    ({ project_id, ...p }) => orchFor(project_id)?.onGroupPushed(p));
+    s.on('orchestration.completed',       ({ project_id, run })  => orchFor(project_id)?.onCompleted({ run }));
 
     socket.value = s;
   }

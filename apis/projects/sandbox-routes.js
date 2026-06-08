@@ -46,22 +46,30 @@ module.exports = function(deps) {
         res.status(202).json({ job_id: project.id, status: 'starting' });
 
         try {
-            // If container exists (stopped) → docker start, otherwise full docker run
-            const containerStatus = await sandbox.exists(project.id);
-            if (containerStatus === 'exited' || containerStatus === 'created') {
-                await sandbox.startExisting(project.id);
-                startingSet.delete(project.id);
-                io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
-                return;
-            }
-
             const secretVars = webState.getProjectSecretVars(project.id);
             const globalConfig = webState.getSandboxConfig();
             const sandboxConfig = {
                 image: project.sandbox?.image || globalConfig.image,
                 shell: project.sandbox?.shell || globalConfig.shell,
                 volumes: [...webState.getVolumes(), ...(project.sandbox?.volumes || [])],
+                network: project.sandbox?.network || globalConfig.network,
             };
+            const configuredImage = sandboxConfig.image || 'orcinus/jonggrang-agent';
+
+            // If container exists (stopped) → reuse it only if the image hasn't changed.
+            // If the image changed, remove the old container so it gets recreated with the new one.
+            const containerStatus = await sandbox.exists(project.id);
+            if (containerStatus === 'exited' || containerStatus === 'created') {
+                const runningImage = await sandbox.getContainerImage(project.id);
+                if (runningImage === configuredImage) {
+                    await sandbox.startExisting(project.id);
+                    startingSet.delete(project.id);
+                    io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
+                    return;
+                }
+                // Image changed — remove old container and fall through to create a new one
+                await sandbox.remove(project.id);
+            }
             await sandbox.start(project, sandboxConfig, secretVars, (line) => {
                 io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });
             });
@@ -113,6 +121,7 @@ module.exports = function(deps) {
                 image: project.sandbox?.image || globalConfig.image,
                 shell: project.sandbox?.shell || globalConfig.shell,
                 volumes: [...webState.getVolumes(), ...(project.sandbox?.volumes || [])],
+                network: project.sandbox?.network || globalConfig.network,
             };
             await sandbox.start(project, sandboxConfig, secretVars, (line) => {
                 io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });

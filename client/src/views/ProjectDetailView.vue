@@ -1,33 +1,59 @@
 <template>
   <div class="detail-root" v-if="project">
     <div class="detail-sidebar">
-      <div class="sidebar-header">
+      <!-- Plan Mode header -->
+      <div v-if="!isWorkMode" class="sidebar-header">
         <RouterLink to="/" class="sidebar-back"><i class="pi pi-arrow-left" /> Projects</RouterLink>
         <div class="sidebar-name">{{ project.name }}</div>
         <Tag :value="stateLabel" :severity="stateSeverity" size="small" />
       </div>
+      <!-- Work Mode header: one plan's workspace -->
+      <div v-else class="sidebar-header">
+        <RouterLink :to="`/projects/${id}/plan`" class="sidebar-back"><i class="pi pi-arrow-left" /> Plans</RouterLink>
+        <div class="sidebar-name" :title="workPlanTitle">{{ workPlanTitle }}</div>
+        <div v-if="workBranch" class="work-branch"><i class="pi pi-code-branch" /> {{ workBranch }}</div>
+        <div class="work-run-row">
+          <span class="work-status" :class="`ws--${groupStatus}`">{{ groupStatus }}</span>
+          <button v-if="!groupRunning" class="work-run-btn" :disabled="runBusy || worktreeStatus === 'creating'" @click="startRun">
+            <i class="pi pi-play" /> {{ runBusy ? 'Starting…' : 'Run' }}
+          </button>
+          <button v-else class="work-run-btn work-run-btn--stop" @click="cancelRun">
+            <i class="pi pi-stop" /> Cancel
+          </button>
+        </div>
+        <div v-if="worktreeStatus === 'creating'" class="work-wt-note"><i class="pi pi-spin pi-spinner" /> preparing worktree…</div>
+        <div v-if="worktreeStatus === 'error'" class="work-wt-note work-wt-note--err">{{ worktreeError }}</div>
+        <div v-if="runError" class="work-wt-note work-wt-note--err">{{ runError }}</div>
+      </div>
+
       <nav class="sidebar-nav">
-        <!-- Plan Mode: idle / draft -->
+        <!-- Plan Mode: project scope -->
         <template v-if="!isWorkMode">
           <RouterLink :to="`/projects/${id}/plan`" class="snav-link"><i class="pi pi-file-edit" /> Plan</RouterLink>
           <RouterLink :to="`/projects/${id}/changelog`" class="snav-link"><i class="pi pi-history" /> Changelog</RouterLink>
-        </template>
-        <!-- Work Mode: tasks_pending / working / done -->
-        <template v-else>
-          <RouterLink :to="`/projects/${id}/plan`" class="snav-link snav-back"><i class="pi pi-arrow-left" /> Plan</RouterLink>
           <div class="snav-divider"></div>
-          <RouterLink :to="`/projects/${id}/pipeline`" class="snav-link">
+          <RouterLink :to="`/projects/${id}/agent`" class="snav-link"><i class="pi pi-microchip-ai" /> Agent</RouterLink>
+          <RouterLink :to="`/projects/${id}/terminal`" class="snav-link"><i class="pi pi-dollar" /> Terminal</RouterLink>
+          <RouterLink :to="`/projects/${id}/settings`" class="snav-link"><i class="pi pi-cog" /> Settings</RouterLink>
+        </template>
+        <!-- Work Mode: everything scoped to this plan -->
+        <template v-else>
+          <RouterLink :to="`/projects/${id}/plans/${featureId}/pipeline`" class="snav-link">
             <i class="pi pi-sitemap" /> Pipeline
             <span v-if="manifest.data" class="snav-chip">{{ pipelineProgress }}</span>
           </RouterLink>
-          <RouterLink :to="`/projects/${id}/tasks`" class="snav-link"><i class="pi pi-list-check" /> Tasks</RouterLink>
-          <RouterLink :to="`/projects/${id}/logs`" class="snav-link"><i class="pi pi-desktop" /> Logs</RouterLink>
+          <RouterLink :to="`/projects/${id}/plans/${featureId}/tasks`" class="snav-link"><i class="pi pi-list-check" /> Tasks</RouterLink>
+          <RouterLink :to="`/projects/${id}/plans/${featureId}/graph`" class="snav-link"><i class="pi pi-share-alt" /> Graph</RouterLink>
+          <RouterLink :to="`/projects/${id}/plans/${featureId}/logs`" class="snav-link">
+            <i class="pi pi-desktop" /> Logs
+            <span v-if="groupRunning" class="snav-chip snav-chip--live">live</span>
+          </RouterLink>
+          <RouterLink :to="`/projects/${id}/plans/${featureId}/changes`" class="snav-link"><i class="pi pi-file-export" /> Changes</RouterLink>
+          <div class="snav-divider"></div>
+          <RouterLink :to="`/projects/${id}/plans/${featureId}/agent`" class="snav-link"><i class="pi pi-microchip-ai" /> Agent</RouterLink>
+          <RouterLink :to="`/projects/${id}/plans/${featureId}/terminal`" class="snav-link"><i class="pi pi-dollar" /> Terminal</RouterLink>
+          <RouterLink :to="`/projects/${id}/settings`" class="snav-link"><i class="pi pi-cog" /> Settings</RouterLink>
         </template>
-        <!-- Always visible -->
-        <div class="snav-divider"></div>
-        <RouterLink :to="`/projects/${id}/agent`" class="snav-link"><i class="pi pi-microchip-ai" /> Agent</RouterLink>
-        <RouterLink :to="`/projects/${id}/terminal`" class="snav-link"><i class="pi pi-dollar" /> Terminal</RouterLink>
-        <RouterLink :to="`/projects/${id}/settings`" class="snav-link"><i class="pi pi-cog" /> Settings</RouterLink>
       </nav>
       <!-- Sandbox panel -->
       <div v-if="project.sandbox?.enabled" class="sandbox-panel">
@@ -89,7 +115,7 @@
           </div>
         </div>
       </template>
-      <RouterView v-else />
+      <RouterView v-else :key="route.path" />
     </div>
   </div>
 
@@ -117,10 +143,13 @@ import { useProjectsStore } from '../stores/projects.js';
 import { useTasksStore } from '../stores/tasks.js';
 import { useWsStore } from '../stores/ws.js';
 import { useManifestStore } from '../stores/manifest.js';
+import { useOrchestrationStore } from '../stores/orchestration.js';
 import InitWizard from '../components/project/InitWizard.vue';
 
 const route = useRoute();
 const id = computed(() => route.params.id);
+const featureId = computed(() => route.params.featureId || null);
+const isWorkMode = computed(() => !!featureId.value);
 const projects = useProjectsStore();
 const tasks = useTasksStore();
 const ws = useWsStore();
@@ -131,12 +160,22 @@ const sandboxLogTail = ref('');
 const containerName = computed(() => project.value ? `jonggrang-${id.value}` : '');
 
 const manifest = useManifestStore();
+const orchestration = useOrchestrationStore();
 const project = computed(() => projects.byId[id.value] || null);
 const derivedState = computed(() => project.value?.derived_state);
-const isWorkMode = computed(() => {
-  const s = derivedState.value?.state;
-  return ['tasks_pending', 'working', 'done'].includes(s);
-});
+
+// ── Work Mode state ───────────────────────────────────────────
+const workPlan = ref(null);            // plan record from /plans (title, branch)
+const worktreeStatus = ref('idle');    // idle | creating | ready | error
+const worktreeError = ref('');
+const runBusy = ref(false);
+const runError = ref('');
+
+const group = computed(() => featureId.value ? orchestration.groups[featureId.value] : null);
+const groupRunning = computed(() => ['running', 'queued'].includes(group.value?.status));
+const groupStatus = computed(() => group.value?.status || 'idle');
+const workPlanTitle = computed(() => workPlan.value?.title || featureId.value || '');
+const workBranch = computed(() => group.value?.branch || workPlan.value?.branch || '');
 
 const pipelineProgress = computed(() => {
   if (!manifest.data) return '';
@@ -154,6 +193,80 @@ const stateSeverity = computed(() => {
   const s = derivedState.value?.state || 'idle';
   return { idle: 'secondary', draft: 'info', tasks_pending: 'warn', working: 'success', done: 'success' }[s] || 'secondary';
 });
+
+// ── Work Mode actions ─────────────────────────────────────────
+
+async function loadWorkPlan(fid) {
+  try {
+    const res = await fetch(`/api/projects/${id.value}/plans`);
+    if (!res.ok) return;
+    const plans = await res.json();
+    workPlan.value = plans.find(p => p.id === fid) || null;
+  } catch {}
+}
+
+async function refreshOrchestration() {
+  try {
+    const res = await fetch(`/api/projects/${id.value}/orchestration`);
+    if (!res.ok) return;
+    const view = await res.json();
+    if (view && Array.isArray(view.groups) && view.groups.length) orchestration.hydrate(view);
+  } catch {}
+}
+
+// Idempotent: create the plan's worktree so Agent/Terminal work pre-run.
+async function ensureWorktree(fid) {
+  worktreeStatus.value = 'creating';
+  worktreeError.value = '';
+  try {
+    const res = await fetch(`/api/projects/${id.value}/plans/${fid}/worktree`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Worktree failed');
+    worktreeStatus.value = 'ready';
+    if (!workPlan.value?.branch && data.branch) {
+      workPlan.value = { ...(workPlan.value || {}), branch: data.branch, title: workPlan.value?.title || data.title };
+    }
+  } catch (e) {
+    worktreeStatus.value = 'error';
+    worktreeError.value = e.message;
+  }
+}
+
+async function enterWorkMode(fid) {
+  runError.value = '';
+  workPlan.value = null;
+  manifest.fetch(id.value, fid);
+  loadWorkPlan(fid);
+  refreshOrchestration();
+  ensureWorktree(fid);
+}
+
+async function startRun() {
+  runBusy.value = true;
+  runError.value = '';
+  try {
+    const res = await fetch(`/api/projects/${id.value}/orchestration/groups/${featureId.value}/start`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Failed to start run');
+    if (data.run) orchestration.onStarted(data.run);
+  } catch (e) {
+    runError.value = e.message;
+  } finally {
+    runBusy.value = false;
+  }
+}
+
+async function cancelRun() {
+  try {
+    await fetch(`/api/projects/${id.value}/orchestration/groups/${featureId.value}/cancel`, { method: 'POST' });
+  } catch {}
+}
+
+watch(featureId, (fid) => {
+  if (fid) enterWorkMode(fid);
+}, { immediate: false });
+
+// ── Sandbox actions ───────────────────────────────────────────
 
 async function startSandbox() {
   sandboxLogTail.value = '';
@@ -187,8 +300,9 @@ onMounted(async () => {
     await projects.fetchOne(id.value);
     tasks.setProject(id.value);
     await tasks.fetchTasks(id.value);
+    orchestration.setProject(id.value);
     ws.subscribe(id.value);
-    manifest.fetch(id.value);
+    if (featureId.value) enterWorkMode(featureId.value);
 
     if (project.value?.sandbox?.enabled) {
       const res = await fetch(`/api/projects/${id.value}/sandbox/status`);
@@ -222,6 +336,7 @@ watch(id, async (newId, oldId) => {
     await projects.fetchOne(newId);
     tasks.setProject(newId);
     await tasks.fetchTasks(newId);
+    orchestration.setProject(newId);
     ws.subscribe(newId);
   }
 });
@@ -246,6 +361,40 @@ async function onInitDone() {
 .sidebar-back:hover { color: var(--jg-text-muted); }
 .sidebar-name { font-weight: 600; font-size: 13px; color: var(--jg-text); margin: 8px 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Work Mode header */
+.work-branch {
+  font-size: 10px; font-family: monospace; color: var(--jg-text-muted);
+  display: flex; align-items: center; gap: 4px; margin-bottom: 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.work-run-row { display: flex; align-items: center; gap: 8px; }
+.work-status {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 2px 6px; border: 1px solid var(--jg-border); color: var(--jg-text-faint);
+}
+.ws--running   { color: var(--jg-green); border-color: var(--jg-green); animation: pulse 1.2s infinite; }
+.ws--queued    { color: #f59e0b; border-color: #f59e0b; }
+.ws--completed { color: var(--jg-green); }
+.ws--failed    { color: var(--jg-red); border-color: var(--jg-red); }
+.ws--cancelled { color: var(--jg-red); }
+.work-run-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  flex: 1; justify-content: center;
+  padding: 4px 10px; font-size: 11px; font-family: inherit; cursor: pointer;
+  background: var(--jg-green); color: #000; border: 1px solid var(--jg-green);
+  transition: opacity 0.15s;
+}
+.work-run-btn:hover:not(:disabled) { opacity: 0.85; }
+.work-run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.work-run-btn--stop { background: transparent; color: var(--jg-red); border-color: var(--jg-red); }
+.work-run-btn--stop:hover { background: color-mix(in oklch, var(--jg-red) 12%, transparent); opacity: 1; }
+.work-wt-note {
+  margin-top: 8px; font-size: 10px; color: var(--jg-text-faint);
+  display: flex; align-items: center; gap: 5px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.work-wt-note--err { color: var(--jg-red); white-space: normal; }
+
 .sidebar-nav { padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .snav-link {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--radius);
@@ -255,8 +404,7 @@ async function onInitDone() {
 .snav-link:hover { background: var(--jg-hover); color: var(--jg-text); }
 .snav-link.router-link-active { background: color-mix(in oklch, var(--jg-green) 12%, transparent); color: var(--jg-green); }
 .snav-chip { font-size: 9px; background: var(--jg-hover); color: var(--jg-text-faint); padding: 1px 4px; border-radius: 0px; margin-left: auto; letter-spacing: 0.04em; }
-.snav-back { color: var(--jg-text-faint) !important; font-size: 11px; }
-.snav-back:hover { color: var(--jg-text-muted) !important; }
+.snav-chip--live { color: var(--jg-green); animation: pulse 1.2s infinite; }
 .snav-divider { height: 1px; background: var(--jg-border); margin: 4px 8px; }
 
 .sandbox-panel {

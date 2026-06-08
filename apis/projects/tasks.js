@@ -14,7 +14,11 @@ module.exports = function(deps) {
         if (!fs.existsSync(tasksPath)) return res.json({ tasks: [] });
         try {
             const data = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'));
-            res.json({ tasks: data.tasks || [] });
+            let tasks = data.tasks || [];
+            // Optional per-plan scope (Work Mode kanban).
+            const { feature_id } = req.query;
+            if (feature_id) tasks = tasks.filter(t => t.feature_id === feature_id);
+            res.json({ tasks });
         } catch (err) {
             res.status(500).json({ error: err.message });
         }

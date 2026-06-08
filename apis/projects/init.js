@@ -2,8 +2,6 @@
 
 const { Router } = require('express');
 
-const VALID_INIT_TYPE = ['api', 'cli', 'web-app', 'library'];
-const VALID_INIT_STACK = ['node-typescript', 'express-typescript', 'nextjs-typescript', 'python-fastapi', 'go', 'rust'];
 const VALID_INIT_TOOL = ['claude', 'opencode', 'codex', 'jonggrang'];
 const VALID_INIT_AUTONOMY = ['manual', 'supervised', 'autonomous'];
 const MAX_STRING_LEN = 100;
@@ -19,14 +17,8 @@ module.exports = function(deps) {
             return res.status(409).json({ error: { code: 'ALREADY_INITIALIZED', message: 'Project not in importable state' } });
         }
 
-        const { type = 'api', stack = 'node-typescript', tool = 'opencode', autonomy = 'autonomous', sandbox } = req.body || {};
+        const { tool = 'opencode', autonomy = 'autonomous', sandbox } = req.body || {};
 
-        if (!VALID_INIT_TYPE.includes(type)) {
-            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `type must be one of: ${VALID_INIT_TYPE.join(', ')}` } });
-        }
-        if (!VALID_INIT_STACK.includes(stack)) {
-            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `stack must be one of: ${VALID_INIT_STACK.join(', ')}` } });
-        }
         if (!VALID_INIT_TOOL.includes(tool)) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `tool must be one of: ${VALID_INIT_TOOL.join(', ')}` } });
         }
@@ -36,8 +28,6 @@ module.exports = function(deps) {
         const initArgs = [
             'init', '--force',
             '--name', project.name,
-            '--type', type,
-            '--stack', stack,
             '--tool', tool,
             '--autonomy', autonomy,
             '--state', fs.existsSync(path.join(project.path, '.git')) ? 'existing' : 'new',
@@ -49,7 +39,9 @@ module.exports = function(deps) {
         webState.updateProject(project.id, { init_status: 'initializing' });
         res.status(202).json({ job_id: project.id });
 
-        const child = spawnForProject(project, initArgs);
+        // init always runs on the host — the sandbox container is started later, after
+        // .jonggrang/jonggrang.json exists on disk to be mounted in.
+        const child = spawnForProject(project, initArgs, {}, { local: true });
         wireProjectProcess(project.id, child, 'init');
         child.on('close', (code) => {
             if (code === 0) {
