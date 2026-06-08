@@ -41,7 +41,7 @@
         <div class="sandbox-field">
           <label class="sandbox-field-label">Image</label>
           <input v-model="form.sandbox_image" :disabled="!form.sandbox_enabled"
-            :placeholder="globalSbx.image || 'orcinus/jonggrang-agent'" class="sandbox-input" />
+            :placeholder="globalSbx.image || 'ghcr.io/porcupine-md/jonggrang-agent'" class="sandbox-input" />
         </div>
         <div class="sandbox-field">
           <label class="sandbox-field-label">Shell</label>

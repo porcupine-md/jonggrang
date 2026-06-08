@@ -1,0 +1,106 @@
+name: Build & Push Docker Images
+
+# Builds and pushes the three Jonggrang images to GitHub Container Registry:
+#   - ghcr.io/porcupine-md/jonggrang-agent:latest  (prod agent, jonggrang from npm)
+#   - ghcr.io/porcupine-md/jonggrang-agent:dev     (dev agent, jonggrang from this source tree)
+#   - ghcr.io/porcupine-md/jonggrang-tunnel:latest (SSH jump host)
+# Auth uses the built-in GITHUB_TOKEN — no extra secrets needed.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'docker/**'
+      - 'bin/**'
+      - 'lib/**'
+      - 'templates/**'
+      - 'hooks/**'
+      - 'skills/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: porcupine-md
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # moving = tag updated on every main push; suffix = appended to the
+          # version tag on a release (so dev gets e.g. 0.7.3-dev).
+          - name: agent-latest
+            image: jonggrang-agent
+            moving: latest
+            suffix: ''
+            context: ./docker
+            dockerfile: ./docker/Dockerfile
+          - name: agent-dev
+            image: jonggrang-agent
+            moving: dev
+            suffix: '-dev'
+            context: .
+            dockerfile: ./docker/Dockerfile.dev
+          - name: tunnel
+            image: jonggrang-tunnel
+            moving: latest
+            suffix: ''
+            context: ./docker/tunnel
+            dockerfile: ./docker/tunnel/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            echo "is_release=true"   >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
+            # e.g. 1.2.3 -> 1.2
+            echo "minor=${VERSION%.*}" >> "$GITHUB_OUTPUT"
+            echo "Release build: $VERSION"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "Non-release build (moving tag only)"
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # On every build: the moving tag (latest / dev).
+      # On a release tag (vX.Y.Z): also X.Y.Z(+suffix) and X.Y(+suffix), so the
+      # default image <repo>:<version> resolves to the matching release.
+      - name: Build & push ${{ matrix.image }} (${{ matrix.name }})
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:${{ matrix.moving }}
+            ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}{4}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.version, matrix.suffix) || '' }}
+            ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}{4}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.minor, matrix.suffix) || '' }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

@@ -125,7 +125,7 @@ docker exec \
 - Config/docs: document `~/.jonggrang/web/ssh/{global.key, <project_id>.key}` in `docs/CONFIG.md`; expose the per-project key in sandbox settings UI later.
 
 ### IMPLEMENTED REALITY (E2E 2026-06-03)
-The agent image originally shipped git but **no `openssh-client`**, so in-container SSH push wasn't possible. **Fixed:** `docker/Dockerfile` + `docker/Dockerfile.dev` now install `openssh-client`. After rebuilding `orcinus/jonggrang-agent:dev`, in-container SSH push works and was verified green: `feat/beta-note` (with BETA.md, agent commit + orchestrator commit) pushed to `git@github.com:anak10thn/jonggrang-sandbox-test.git` via `docker exec … git push` using the mounted key (proof: `/root/.ssh/id_jonggrang` staged inside the container).
+The agent image originally shipped git but **no `openssh-client`**, so in-container SSH push wasn't possible. **Fixed:** `docker/Dockerfile` + `docker/Dockerfile.dev` now install `openssh-client`. After rebuilding `ghcr.io/porcupine-md/jonggrang-agent:dev`, in-container SSH push works and was verified green: `feat/beta-note` (with BETA.md, agent commit + orchestrator commit) pushed to `git@github.com:anak10thn/jonggrang-sandbox-test.git` via `docker exec … git push` using the mounted key (proof: `/root/.ssh/id_jonggrang` staged inside the container).
 
 A **host-side push fallback** remains for images that still lack ssh: since the project dir (incl. `.git`) is bind-mounted, the host can push the in-container-created branch (ref + objects are in the shared `.git`). `pushBranchCtx` probes `containerHasSsh` and chooses in-container vs host automatically.
 

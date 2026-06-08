@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-IMAGE="orcinus/jonggrang-agent:dev"
+IMAGE="ghcr.io/porcupine-md/jonggrang-agent:dev"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -18,5 +18,5 @@ echo ""
 echo "Built: $IMAGE"
 echo ""
 echo "To use this image:"
-echo "  1. Set sandbox image to 'orcinus/jonggrang-agent:dev' in project settings"
+echo "  1. Set sandbox image to 'ghcr.io/porcupine-md/jonggrang-agent:dev' in project settings"
 echo "  2. Restart the project container so it picks up the new image"

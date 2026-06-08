@@ -47,7 +47,7 @@
       <div class="card-title"><i class="pi pi-box" /> Docker Sandbox</div>
       <div class="form-group">
         <label>Default Image</label>
-        <InputText v-model="sbx.image" placeholder="orcinus/jonggrang-agent" style="width:100%" />
+        <InputText v-model="sbx.image" placeholder="ghcr.io/porcupine-md/jonggrang-agent" style="width:100%" />
         <p class="hint">Docker image used for all sandbox projects.</p>
       </div>
       <div class="form-group">
@@ -367,7 +367,7 @@ async function saveSandbox() {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        image: sbx.image || 'orcinus/jonggrang-agent',
+        image: sbx.image || '',  // blank → backend applies the version-pinned default
         shell: sbx.shell || '/bin/bash',
         network: sbx.network || 'jonggrang',
         volumes: sbx.volumes,

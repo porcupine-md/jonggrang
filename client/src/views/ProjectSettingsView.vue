@@ -44,7 +44,7 @@
           </label>
           <div class="field-group" :class="{ 'field-disabled': !sbx.enabled }">
             <label>Image <span class="override-hint">(leave blank to use global)</span></label>
-            <input v-model="sbx.image" :disabled="!sbx.enabled" :placeholder="globalSbx.image || 'orcinus/jonggrang-agent'" class="sandbox-image-input" />
+            <input v-model="sbx.image" :disabled="!sbx.enabled" :placeholder="globalSbx.image || 'ghcr.io/porcupine-md/jonggrang-agent'" class="sandbox-image-input" />
           </div>
           <div class="field-group" :class="{ 'field-disabled': !sbx.enabled }">
             <label>Shell <span class="override-hint">(leave blank to use global)</span></label>

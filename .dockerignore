@@ -1,0 +1,9 @@
+node_modules
+client/node_modules
+client/dist
+.git
+.github
+.jonggrang
+docs/plans
+*.log
+.DS_Store

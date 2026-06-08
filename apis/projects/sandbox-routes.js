@@ -54,7 +54,7 @@ module.exports = function(deps) {
                 volumes: [...webState.getVolumes(), ...(project.sandbox?.volumes || [])],
                 network: project.sandbox?.network || globalConfig.network,
             };
-            const configuredImage = sandboxConfig.image || 'orcinus/jonggrang-agent';
+            const configuredImage = sandboxConfig.image || sandbox.DEFAULT_AGENT_IMAGE;
 
             // If container exists (stopped) → reuse it only if the image hasn't changed.
             // If the image changed, remove the old container so it gets recreated with the new one.
