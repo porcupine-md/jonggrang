@@ -236,9 +236,9 @@ module.exports = function(deps) {
         return new Promise((resolve, reject) => {
             const script =
                 `set -e; ` +
-                `mkdir -p /root/.ssh && cp ${sandbox.SSH_KEY_MOUNT} /root/.ssh/id_jonggrang && chmod 600 /root/.ssh/id_jonggrang; ` +
+                `mkdir -p /root/.ssh && cp ${sandbox.SSH_KEY_MOUNT} /root/.ssh/id_rsa && chmod 600 /root/.ssh/id_rsa; ` +
                 `GIT_TERMINAL_PROMPT=0 ` +
-                `GIT_SSH_COMMAND='ssh -i /root/.ssh/id_jonggrang -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes' ` +
+                `GIT_SSH_COMMAND='ssh -i /root/.ssh/id_rsa -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes' ` +
                 `git -C ${ctx.root} push -u origin "${branch}"`;
             execFile('docker', ['exec', ctx.container, 'sh', '-c', script],
                 { timeout: 60000, maxBuffer: GIT_MAXBUF }, (err, stdout, stderr) => {
