@@ -1,9 +1,10 @@
 name: Build & Push Docker Images
 
-# Builds and pushes the three Jonggrang images to GitHub Container Registry:
-#   - ghcr.io/porcupine-md/jonggrang-agent:latest  (prod agent, jonggrang from npm)
-#   - ghcr.io/porcupine-md/jonggrang-agent:dev     (dev agent, jonggrang from this source tree)
-#   - ghcr.io/porcupine-md/jonggrang-tunnel:latest (SSH jump host)
+# Builds the three Jonggrang images for GitHub Container Registry, selected by event:
+#   PR update     -> jonggrang-agent:dev only            (build; push if same-repo PR)
+#   merge to main -> jonggrang-agent:latest + jonggrang-tunnel:latest
+#   tag vX.Y.Z    -> agent + tunnel :X.Y.Z, :X.Y, :latest
+#   manual run    -> all images (moving tags)
 # Auth uses the built-in GITHUB_TOKEN — no extra secrets needed.
 
 on:
@@ -25,28 +26,37 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # Per-event image selection:
+    #   PR update     -> only the dev image (jonggrang-agent:dev)
+    #   merge to main -> latest + tunnel
+    #   tag vX.Y.Z    -> versioned agent + tunnel (X.Y.Z, X.Y, latest)
+    #   manual run    -> all images (moving tags)
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'pull_request' && contains(matrix.events, 'pr'))
+      || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && contains(matrix.events, 'tag'))
+      || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && contains(matrix.events, 'main'))
     strategy:
       fail-fast: false
       matrix:
         include:
-          # moving = tag updated on every main push; suffix = appended to the
-          # version tag on a release (so dev gets e.g. 0.7.3-dev).
-          - name: agent-latest
-            image: jonggrang-agent
-            moving: latest
-            suffix: ''
-            context: ./docker
-            dockerfile: ./docker/Dockerfile
+          # events = which triggers build this image; moving = the rolling tag.
           - name: agent-dev
             image: jonggrang-agent
             moving: dev
-            suffix: '-dev'
+            events: pr
             context: .
             dockerfile: ./docker/Dockerfile.dev
+          - name: agent-latest
+            image: jonggrang-agent
+            moving: latest
+            events: main,tag
+            context: ./docker
+            dockerfile: ./docker/Dockerfile
           - name: tunnel
             image: jonggrang-tunnel
             moving: latest
-            suffix: ''
+            events: main,tag
             context: ./docker/tunnel
             dockerfile: ./docker/tunnel/Dockerfile
     steps:
@@ -56,16 +66,16 @@ jobs:
       - name: Resolve release version
         id: ver
         run: |
+          # Version tags only on a release tag push (vX.Y.Z).
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
-            echo "is_release=true"   >> "$GITHUB_OUTPUT"
-            echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
-            # e.g. 1.2.3 -> 1.2
-            echo "minor=${VERSION%.*}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true"      >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION"     >> "$GITHUB_OUTPUT"
+            echo "minor=${VERSION%.*}"  >> "$GITHUB_OUTPUT"   # 1.2.3 -> 1.2
             echo "Release build: $VERSION"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
-            echo "Non-release build (moving tag only)"
+            echo "Build: ${{ matrix.image }}:${{ matrix.moving }}"
           fi
 
       - name: Set up QEMU
@@ -74,29 +84,26 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Only needed when we actually push (skip on PRs / forks without secrets).
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # PRs build for validation only (amd64, no push). main/tags push multi-arch.
-      # On every push build: the moving tag (latest / dev).
-      # On a release tag (vX.Y.Z): also X.Y.Z(+suffix) and X.Y(+suffix), so the
-      # default image <repo>:<version> resolves to the matching release.
-      - name: Build${{ github.event_name != 'pull_request' && ' & push' || '' }} ${{ matrix.image }} (${{ matrix.name }})
+      # Always push (PRs push :dev too). PR builds amd64 only for speed;
+      # main/tag builds multi-arch. tags: the moving tag, plus X.Y.Z and X.Y
+      # on a release tag.
+      - name: Build & push ${{ matrix.image }} (${{ matrix.name }})
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:${{ matrix.moving }}
-            ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}{4}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.version, matrix.suffix) || '' }}
-            ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}{4}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.minor, matrix.suffix) || '' }}
+            ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.version) || '' }}
+            ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.minor) || '' }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
