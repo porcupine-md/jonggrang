@@ -38,7 +38,48 @@
           <span class="chg-fname">{{ f.file }}</span>
         </button>
       </div>
-      <pre class="changes-diff">{{ loading ? 'Loading…' : (diffContent || 'Select a file to view its diff.') }}</pre>
+
+      <div class="diff-pane">
+        <div v-if="loading" class="diff-placeholder">Loading…</div>
+        <div v-else-if="!activeFile" class="diff-placeholder">Select a file to view its diff.</div>
+        <div v-else-if="!diffRows.length" class="diff-placeholder">{{ diffContent || '(no diff)' }}</div>
+
+        <template v-else>
+          <!-- file header with +/- counts -->
+          <div class="diff-filebar">
+            <span class="diff-filename">{{ activeFile }}</span>
+            <span class="diff-counts">
+              <span class="dc-add">+{{ addCount }}</span>
+              <span class="dc-del">−{{ delCount }}</span>
+            </span>
+          </div>
+          <div class="diff-table">
+            <div
+              v-for="(row, i) in diffRows" :key="i"
+              class="diff-row" :class="`dr--${row.type}`"
+            >
+              <template v-if="row.type === 'hunk'">
+                <span class="dl-gutter dl-hunk" />
+                <span class="dl-gutter dl-hunk" />
+                <span class="dl-sign" />
+                <span class="dl-code dl-hunk-text">{{ row.text }}</span>
+              </template>
+              <template v-else-if="row.type === 'meta'">
+                <span class="dl-gutter" />
+                <span class="dl-gutter" />
+                <span class="dl-sign" />
+                <span class="dl-code dl-meta-text">{{ row.text }}</span>
+              </template>
+              <template v-else>
+                <span class="dl-gutter">{{ row.oldNum || '' }}</span>
+                <span class="dl-gutter">{{ row.newNum || '' }}</span>
+                <span class="dl-sign">{{ row.sign }}</span>
+                <span class="dl-code">{{ row.text }}</span>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
     </div>
   </div>
 </template>
@@ -67,6 +108,46 @@ const pushed = computed(() => !!group.value?.pushed || locallyPushed.value);
 const locallyPushed = ref(false);
 
 const base = () => `/api/projects/${projectId.value}/orchestration/groups/${featureId.value}`;
+
+// Parse a unified `git diff` into rows with old/new line numbers — GitHub style.
+const diffRows = computed(() => {
+  const text = diffContent.value;
+  if (!text || text === '(no diff)') return [];
+  const rows = [];
+  let oldNum = 0, newNum = 0;
+  for (const line of text.split('\n')) {
+    if (line.startsWith('@@')) {
+      // @@ -oldStart,oldCount +newStart,newCount @@ context
+      const m = line.match(/@@\s*-(\d+)(?:,\d+)?\s*\+(\d+)(?:,\d+)?\s*@@/);
+      if (m) { oldNum = parseInt(m[1], 10); newNum = parseInt(m[2], 10); }
+      rows.push({ type: 'hunk', text: line });
+      continue;
+    }
+    // File-level headers / metadata — show muted, no line numbers
+    if (/^(diff --git |index |--- |\+\+\+ |new file mode |deleted file mode |old mode |new mode |similarity index |rename |copy |Binary files )/.test(line)) {
+      rows.push({ type: 'meta', text: line });
+      continue;
+    }
+    if (line.startsWith('\\')) { // "\ No newline at end of file"
+      rows.push({ type: 'meta', text: line });
+      continue;
+    }
+    if (line.startsWith('+')) {
+      rows.push({ type: 'add', sign: '+', newNum: newNum++, text: line.slice(1) });
+    } else if (line.startsWith('-')) {
+      rows.push({ type: 'del', sign: '-', oldNum: oldNum++, text: line.slice(1) });
+    } else {
+      // context (leading space) or empty trailing line
+      rows.push({ type: 'context', sign: ' ', oldNum: oldNum++, newNum: newNum++, text: line.startsWith(' ') ? line.slice(1) : line });
+    }
+  }
+  // drop a trailing empty context row from the final split('\n')
+  if (rows.length && rows[rows.length - 1].type === 'context' && rows[rows.length - 1].text === '') rows.pop();
+  return rows;
+});
+
+const addCount = computed(() => diffRows.value.filter(r => r.type === 'add').length);
+const delCount = computed(() => diffRows.value.filter(r => r.type === 'del').length);
 
 async function loadFiles() {
   loading.value = true; error.value = '';
@@ -176,8 +257,58 @@ onMounted(loadFiles);
 .cs--M { color: #f59e0b; }
 .cs--D { color: var(--jg-red); }
 .chg-fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.changes-diff {
-  flex: 1; overflow: auto; margin: 0; padding: 12px;
-  font-size: 11px; font-family: monospace; color: var(--jg-text-muted); white-space: pre;
+
+/* ── GitHub-style diff ─────────────────────────────────────── */
+.diff-pane { flex: 1; overflow: auto; background: var(--jg-bg); }
+.diff-placeholder { padding: 16px; font-size: 12px; color: var(--jg-text-faint); }
+
+.diff-filebar {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 14px; background: var(--jg-card);
+  border-bottom: 1px solid var(--jg-border);
 }
+.diff-filename { font-family: var(--font-mono); font-size: 12px; color: var(--jg-text); }
+.diff-counts { display: flex; gap: 10px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; }
+.dc-add { color: var(--jg-green); }
+.dc-del { color: var(--jg-red); }
+
+.diff-table {
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.55;
+  min-width: max-content;
+}
+.diff-row { display: flex; white-space: pre; }
+
+.dl-gutter {
+  flex: 0 0 auto; width: 44px; padding: 0 8px; text-align: right;
+  color: var(--jg-text-faint); opacity: 0.65; user-select: none;
+  border-right: 1px solid var(--jg-border);
+  background: color-mix(in oklch, var(--jg-card) 55%, transparent);
+}
+.dl-sign {
+  flex: 0 0 auto; width: 20px; text-align: center; user-select: none;
+  color: var(--jg-text-faint);
+}
+.dl-code { flex: 1 1 auto; padding-right: 16px; color: var(--jg-text); }
+
+/* additions */
+.dr--add { background: color-mix(in oklch, var(--jg-green) 12%, transparent); }
+.dr--add .dl-sign { color: var(--jg-green); }
+.dr--add .dl-gutter { background: color-mix(in oklch, var(--jg-green) 14%, transparent); }
+/* deletions */
+.dr--del { background: color-mix(in oklch, var(--jg-red) 12%, transparent); }
+.dr--del .dl-sign { color: var(--jg-red); }
+.dr--del .dl-gutter { background: color-mix(in oklch, var(--jg-red) 13%, transparent); }
+/* context */
+.dr--context { background: transparent; }
+.dr--context .dl-code { color: var(--jg-text-muted); }
+
+/* hunk header */
+.dr--hunk { background: color-mix(in oklch, var(--jg-cyan) 10%, transparent); }
+.dl-hunk { background: color-mix(in oklch, var(--jg-cyan) 8%, transparent) !important; }
+.dl-hunk-text { color: var(--jg-cyan); opacity: 0.85; }
+
+/* file metadata */
+.dr--meta { background: transparent; }
+.dl-meta-text { color: var(--jg-text-faint); opacity: 0.6; }
 </style>
