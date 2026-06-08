@@ -18,6 +18,7 @@ const routes = [
       { path: 'plans/:featureId', redirect: to => ({ path: `/projects/${to.params.id}/plans/${to.params.featureId}/pipeline` }) },
       { path: 'plans/:featureId/pipeline', component: () => import('../views/PipelineView.vue') },
       { path: 'plans/:featureId/tasks',    component: () => import('../components/kanban/KanbanBoard.vue') },
+      { path: 'plans/:featureId/graph',    component: () => import('../views/TaskGraphView.vue') },
       { path: 'plans/:featureId/logs',     component: () => import('../views/PlanLogsView.vue') },
       { path: 'plans/:featureId/changes',  component: () => import('../views/ChangesView.vue') },
       { path: 'plans/:featureId/agent',    component: () => import('../views/AgentView.vue') },

@@ -43,6 +43,7 @@
             <span v-if="manifest.data" class="snav-chip">{{ pipelineProgress }}</span>
           </RouterLink>
           <RouterLink :to="`/projects/${id}/plans/${featureId}/tasks`" class="snav-link"><i class="pi pi-list-check" /> Tasks</RouterLink>
+          <RouterLink :to="`/projects/${id}/plans/${featureId}/graph`" class="snav-link"><i class="pi pi-share-alt" /> Graph</RouterLink>
           <RouterLink :to="`/projects/${id}/plans/${featureId}/logs`" class="snav-link">
             <i class="pi pi-desktop" /> Logs
             <span v-if="groupRunning" class="snav-chip snav-chip--live">live</span>
