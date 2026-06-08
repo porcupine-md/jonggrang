@@ -638,7 +638,10 @@ module.exports = function(deps) {
         res.status(202).json({ run: serializeRun(run) });
     }
 
-    // Run a SINGLE task in the plan's worktree: `jonggrang work --task <id>`.
+    // Run this task in the plan's worktree, including its blocked_by deps.
+    // `--task` resolves the dependency chain via lib.getTaskQueue, which already
+    // skips any dependency that is already `completed` — so completed deps are
+    // never re-run, only the task and its unfinished prerequisites execute.
     router.post('/:id/orchestration/groups/:featureId/run-task', (req, res) => {
         const { task_id } = req.body || {};
         if (!task_id) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'task_id required' } });
