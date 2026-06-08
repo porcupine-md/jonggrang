@@ -48,6 +48,28 @@ module.exports = function(deps) {
         }
     });
 
+    // Global git-host tokens (GH_TOKEN / GITLAB_TOKEN) for the gh & glab CLIs.
+    // GET never returns the secret values — only whether each is set.
+    router.get('/settings/git-tokens', (req, res) => {
+        const t = webState.getGitTokens();
+        res.json({ has_gh: !!t.GH_TOKEN, has_gitlab: !!t.GITLAB_TOKEN });
+    });
+
+    router.put('/settings/git-tokens', (req, res) => {
+        const { GH_TOKEN, GITLAB_TOKEN } = req.body || {};
+        try {
+            const patch = {};
+            // undefined = leave as-is; '' = clear; string = set.
+            if (GH_TOKEN !== undefined) patch.GH_TOKEN = String(GH_TOKEN);
+            if (GITLAB_TOKEN !== undefined) patch.GITLAB_TOKEN = String(GITLAB_TOKEN);
+            webState.setGitTokens(patch);
+            const t = webState.getGitTokens();
+            res.json({ has_gh: !!t.GH_TOKEN, has_gitlab: !!t.GITLAB_TOKEN });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     // ── Global SSH key for in-container git push ─────────────────
     // Used when a project has no per-project key. GET never returns the key.
     router.get('/settings/ssh-key', (req, res) => {

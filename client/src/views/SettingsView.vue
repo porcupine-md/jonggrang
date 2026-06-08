@@ -133,6 +133,21 @@
       </div>
     </div>
 
+    <!-- Git host tokens (global) -->
+    <div class="settings-card">
+      <div class="card-title"><i class="pi pi-github" /> Git Host Tokens (global)</div>
+      <p class="hint">Personal access tokens for the <code>gh</code> (GitHub) and <code>glab</code> (GitLab) CLIs. Injected into every sandbox as <code>GH_TOKEN</code> / <code>GITLAB_TOKEN</code>. Restart sandboxes after changing. Leave blank to keep the current value; clear the field and save to remove.</p>
+      <label class="ssh-label">GitHub token (GH_TOKEN) <span v-if="gitTok.has_gh" class="tok-set">● set</span><span v-else class="tok-unset">not set</span></label>
+      <input v-model="ghTokenInput" type="password" class="tok-input" spellcheck="false" autocomplete="off" placeholder="ghp_… (leave blank to keep)" />
+      <label class="ssh-label">GitLab token (GITLAB_TOKEN) <span v-if="gitTok.has_gitlab" class="tok-set">● set</span><span v-else class="tok-unset">not set</span></label>
+      <input v-model="glabTokenInput" type="password" class="tok-input" spellcheck="false" autocomplete="off" placeholder="glpat-… (leave blank to keep)" />
+      <div v-if="gitTokError" class="error-text"><i class="pi pi-times-circle" /> {{ gitTokError }}</div>
+      <div v-if="gitTokOk" class="ok-text"><i class="pi pi-check-circle" /> Saved — restart sandboxes to apply</div>
+      <div class="ssh-actions">
+        <Button :disabled="gitTokSaving || (!ghTokenInput && !glabTokenInput)" @click="saveGitTokens" :icon="gitTokSaving ? 'pi pi-spin pi-spinner' : 'pi pi-check'" :label="gitTokSaving ? 'Saving…' : 'Save tokens'" />
+      </div>
+    </div>
+
     <!-- About -->
     <div class="settings-card">
       <div class="card-title"><i class="pi pi-info-circle" /> About</div>
@@ -184,6 +199,13 @@ const gsshSaving = ref(false);
 const gsshError = ref('');
 const gsshOk = ref(false);
 
+const gitTok = reactive({ has_gh: false, has_gitlab: false });
+const ghTokenInput = ref('');
+const glabTokenInput = ref('');
+const gitTokSaving = ref(false);
+const gitTokError = ref('');
+const gitTokOk = ref(false);
+
 onMounted(async () => {
   await workspace.fetch();
   workspacePath.value = workspace.path;
@@ -198,7 +220,33 @@ onMounted(async () => {
     }
   } catch {}
   await loadGlobalSshKey();
+  try {
+    const r = await fetch('/api/settings/git-tokens');
+    if (r.ok) Object.assign(gitTok, await r.json());
+  } catch {}
 });
+
+async function saveGitTokens() {
+  gitTokSaving.value = true; gitTokError.value = ''; gitTokOk.value = false;
+  try {
+    const body = {};
+    if (ghTokenInput.value) body.GH_TOKEN = ghTokenInput.value;
+    if (glabTokenInput.value) body.GITLAB_TOKEN = glabTokenInput.value;
+    const r = await fetch('/api/settings/git-tokens', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Save failed');
+    Object.assign(gitTok, d);
+    ghTokenInput.value = ''; glabTokenInput.value = '';
+    gitTokOk.value = true; setTimeout(() => { gitTokOk.value = false; }, 3000);
+  } catch (e) {
+    gitTokError.value = e.message;
+  } finally {
+    gitTokSaving.value = false;
+  }
+}
 
 async function loadGlobalSshKey() {
   try {
@@ -380,6 +428,14 @@ async function saveWorkspace() {
 }
 .ssh-input:focus { outline: none; border-color: var(--jg-green); }
 .ssh-actions { display: flex; gap: 8px; margin-top: 8px; }
+.tok-input {
+  width: 100%; box-sizing: border-box;
+  background: var(--jg-bg); border: 1px solid var(--jg-border); border-radius: var(--radius);
+  color: var(--jg-text-muted); font-family: monospace; font-size: 11px; padding: 8px; margin-bottom: 4px;
+}
+.tok-input:focus { outline: none; border-color: var(--jg-green); }
+.tok-set { color: var(--jg-green); font-size: 10px; margin-left: 6px; }
+.tok-unset { color: var(--jg-text-faint); font-size: 10px; margin-left: 6px; }
 .about-row {
   display: flex; justify-content: space-between;
   font-size: 12px; color: var(--jg-text-muted);

@@ -57,6 +57,23 @@ RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/;s/arm64/arm64/') \
     | tar -xz -C /opt/openvscode-server --strip-components=1 \
     && ln -sf /opt/openvscode-server/bin/openvscode-server /usr/local/bin/openvscode-server
 
+# ── GitHub CLI (gh) — auth via GH_TOKEN env ───────────────────────────────────
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── GitLab CLI (glab) — auth via GITLAB_TOKEN env ─────────────────────────────
+RUN ARCH=$(dpkg --print-architecture) \
+    && TAG=$(curl -fsSL "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases" | jq -r '.[0].tag_name') \
+    && VER=${TAG#v} \
+    && curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/${TAG}/downloads/glab_${VER}_linux_${ARCH}.tar.gz" -o /tmp/glab.tar.gz \
+    && tar -xzf /tmp/glab.tar.gz -C /tmp \
+    && install -m 755 /tmp/bin/glab /usr/local/bin/glab \
+    && rm -rf /tmp/glab.tar.gz /tmp/bin
+
 # ── Git safe directory (allow mounted workspaces owned by any user) ───────────
 RUN git config --global --add safe.directory '*'
 
