@@ -9,6 +9,10 @@ const orchestration = require('./lib/orchestration');
 const compaction = require('./lib/compaction');
 const feedback = require('./lib/feedback');
 const webState = require('./lib/web-state');
+const sandbox = require('./lib/sandbox');
+
+// Central worktree root (~/.jonggrang/worktree). Worktrees live here, per project.
+sandbox.ensureWorktreeRoot();
 
 const app = express();
 const server = http.createServer(app);
@@ -88,7 +92,7 @@ const cleanupLegacy = require('./apis/legacy')(app, io, legacyCtx);
 webState.cleanupStaleImports();
 webState.initVolumes();
 
-const projectsCtx = { JONGGRANG_HOME, webState, orchestration };
+const projectsCtx = { JONGGRANG_HOME, webState, orchestration, server };
 const cleanupProjects = require('./apis/projects')(app, io, projectsCtx);
 
 // ── STATIC FRONTEND ───────────────────────────────────────────

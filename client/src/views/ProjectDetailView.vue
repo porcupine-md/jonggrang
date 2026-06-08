@@ -32,6 +32,7 @@
           <RouterLink :to="`/projects/${id}/plan`" class="snav-link"><i class="pi pi-file-edit" /> Plan</RouterLink>
           <RouterLink :to="`/projects/${id}/changelog`" class="snav-link"><i class="pi pi-history" /> Changelog</RouterLink>
           <div class="snav-divider"></div>
+          <RouterLink v-if="codeEditor !== 'off'" :to="`/projects/${id}/files`" class="snav-link"><i class="pi pi-folder-open" /> Files</RouterLink>
           <RouterLink :to="`/projects/${id}/agent`" class="snav-link"><i class="pi pi-microchip-ai" /> Agent</RouterLink>
           <RouterLink :to="`/projects/${id}/terminal`" class="snav-link"><i class="pi pi-dollar" /> Terminal</RouterLink>
           <RouterLink :to="`/projects/${id}/settings`" class="snav-link"><i class="pi pi-cog" /> Settings</RouterLink>
@@ -50,6 +51,7 @@
           </RouterLink>
           <RouterLink :to="`/projects/${id}/plans/${featureId}/changes`" class="snav-link"><i class="pi pi-file-export" /> Changes</RouterLink>
           <div class="snav-divider"></div>
+          <RouterLink v-if="codeEditor !== 'off'" :to="`/projects/${id}/plans/${featureId}/files`" class="snav-link"><i class="pi pi-folder-open" /> Files</RouterLink>
           <RouterLink :to="`/projects/${id}/plans/${featureId}/agent`" class="snav-link"><i class="pi pi-microchip-ai" /> Agent</RouterLink>
           <RouterLink :to="`/projects/${id}/plans/${featureId}/terminal`" class="snav-link"><i class="pi pi-dollar" /> Terminal</RouterLink>
           <RouterLink :to="`/projects/${id}/settings`" class="snav-link"><i class="pi pi-cog" /> Settings</RouterLink>
@@ -163,6 +165,7 @@ const manifest = useManifestStore();
 const orchestration = useOrchestrationStore();
 const project = computed(() => projects.byId[id.value] || null);
 const derivedState = computed(() => project.value?.derived_state);
+const codeEditor = computed(() => project.value?.code_editor || 'off');
 
 // ── Work Mode state ───────────────────────────────────────────
 const workPlan = ref(null);            // plan record from /plans (title, branch)

@@ -55,6 +55,10 @@ module.exports = function(deps) {
     // ── execution context (host vs sandbox container) ─────────────
 
     function buildCtx(project) {
+        // Worktrees live centrally under ~/.jonggrang/worktree/<id>/<fid>; for
+        // sandbox projects that dir is bind-mounted into the container at
+        // sandbox.WORKTREE_MOUNT, so git ops run on container-absolute paths.
+        const hostDir = sandbox.projectWorktreeDir(project.id);
         if (project.sandbox?.enabled) {
             const container = sandbox.getContainerName(project.id);
             const root = sandbox.getContainerPath(project); // e.g. /root/<name>
@@ -62,17 +66,15 @@ module.exports = function(deps) {
                 mode: 'container',
                 container,
                 root,
-                // worktree path INSIDE the container
-                wt: (fid) => `${root}/.jonggrang/.worktree/${fid}`,
-                // same worktree on the HOST (bind mount) — for fs seeding / mkdir
-                hostWt: (fid) => path.join(project.path, '.jonggrang', '.worktree', fid),
+                wt: (fid) => `${sandbox.WORKTREE_MOUNT}/${fid}`,
+                hostWt: (fid) => path.join(hostDir, fid),
             };
         }
         return {
             mode: 'host',
             root: project.path,
-            wt: (fid) => path.join(project.path, '.jonggrang', '.worktree', fid),
-            hostWt: (fid) => path.join(project.path, '.jonggrang', '.worktree', fid),
+            wt: (fid) => path.join(hostDir, fid),
+            hostWt: (fid) => path.join(hostDir, fid),
         };
     }
 
@@ -102,6 +104,8 @@ module.exports = function(deps) {
         const branch = g.branch;
         try { gitSync(ctx, ctx.root, ['worktree', 'prune']); } catch {}
         try { gitSync(ctx, ctx.root, ['worktree', 'remove', wt, '--force']); } catch {}
+        // Best-effort: drop a worktree left at the OLD in-repo location (migration).
+        try { gitSync(ctx, ctx.root, ['worktree', 'remove', `${ctx.root}/.jonggrang/.worktree/${g.featureId}`, '--force']); } catch {}
         try { gitSync(ctx, ctx.root, ['branch', '-D', branch]); } catch {}
         try { fs.mkdirSync(path.dirname(ctx.hostWt(g.featureId)), { recursive: true }); } catch {}
         const baseSha = gitSync(ctx, ctx.root, ['rev-parse', 'HEAD']).trim();
@@ -232,9 +236,9 @@ module.exports = function(deps) {
         return new Promise((resolve, reject) => {
             const script =
                 `set -e; ` +
-                `mkdir -p /root/.ssh && cp ${sandbox.SSH_KEY_MOUNT} /root/.ssh/id_jonggrang && chmod 600 /root/.ssh/id_jonggrang; ` +
+                `mkdir -p /root/.ssh && cp ${sandbox.SSH_KEY_MOUNT} /root/.ssh/id_rsa && chmod 600 /root/.ssh/id_rsa; ` +
                 `GIT_TERMINAL_PROMPT=0 ` +
-                `GIT_SSH_COMMAND='ssh -i /root/.ssh/id_jonggrang -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes' ` +
+                `GIT_SSH_COMMAND='ssh -i /root/.ssh/id_rsa -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes' ` +
                 `git -C ${ctx.root} push -u origin "${branch}"`;
             execFile('docker', ['exec', ctx.container, 'sh', '-c', script],
                 { timeout: 60000, maxBuffer: GIT_MAXBUF }, (err, stdout, stderr) => {
@@ -405,6 +409,10 @@ module.exports = function(deps) {
             cwd: group.worktreePath,
             env: {
                 ...process.env,
+                // Override inherited PWD so the agent CLI (opencode resolves its
+                // project root from $PWD, not process.cwd()) runs inside the
+                // worktree instead of the server's launch dir.
+                PWD: group.worktreePath,
                 JONGGRANG_HOME,
                 JONGGRANG_PROJECT_ROOT: group.worktreePath,
                 JONGGRANG_MODE: 'autonomous',
@@ -433,9 +441,36 @@ module.exports = function(deps) {
         }
     }
 
+    // The worktree worker updates the manifest in its OWN seeded copy
+    // (<worktree>/.jonggrang/.output/...), but the web pipeline view reads the
+    // MAIN project's manifest. Mirror the worktree manifest back to the main
+    // project so the project's file watcher emits `manifest.updated` and the
+    // pipeline view advances live (Implement → … → Complete) instead of
+    // stalling at the phase it was seeded with.
+    function syncManifest(project, group) {
+        try {
+            const base = group.hostWorktreePath || group.worktreePath;
+            if (!base) return;
+            const rel = path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml');
+            const src = path.join(base, rel);
+            const dst = path.join(project.path, rel);
+            if (!fs.existsSync(src)) return;
+            const data = fs.readFileSync(src);
+            let cur = null;
+            try { cur = fs.readFileSync(dst); } catch { /* missing */ }
+            if (cur && cur.equals(data)) return; // unchanged → don't churn the watcher
+            fs.mkdirSync(path.dirname(dst), { recursive: true });
+            fs.writeFileSync(dst, data);
+        } catch (err) {
+            console.error('orchestration syncManifest error:', err.message);
+        }
+    }
+
     function wireWorker(project, ctx, run, group) {
         const child = group.child;
         group.pid = child.pid;
+        // Live-mirror the worktree manifest → main project while the worker runs.
+        group.manifestSync = setInterval(() => syncManifest(project, group), 1500);
         let buf = '';
         const onData = (stream) => (data) => {
             buf += data.toString();
@@ -463,6 +498,8 @@ module.exports = function(deps) {
         child.on('close', (code) => {
             group.exitCode = code;
             group.finishedAt = new Date().toISOString();
+            if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
+            syncManifest(project, group); // final state (e.g. completed) → main project
             if (code === 0) {
                 try {
                     group.committed = commitWorktreeCtx(ctx, group.worktreePath, `feat(${group.featureId}): ${group.title}`);
@@ -497,11 +534,12 @@ module.exports = function(deps) {
         const wt = ensureWorktree(project, ctx, g);
         const group = {
             featureId: g.featureId, branch: wt.branch, title: g.title, taskIds: g.taskIds,
-            status: 'running', worktreePath: wt.worktreePath, baseSha: wt.baseSha,
+            status: 'running', worktreePath: wt.worktreePath, hostWorktreePath: wt.hostWorktreePath,
+            baseSha: wt.baseSha,
             startedAt: new Date().toISOString(), finishedAt: null, exitCode: null,
             committed: false, pushed: false, error: null, logTail: [],
             workerArgs: opts.workerArgs || null,
-            child: null,
+            child: null, manifestSync: null,
         };
         run.groups[g.featureId] = group;
         group.child = spawnGroupWorker(project, ctx, group);

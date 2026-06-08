@@ -36,7 +36,10 @@ module.exports = function(deps) {
 
         startingSet.add(project.id);
         const running = await sandbox.isRunning(project.id);
-        if (running) {
+        // Reuse a running container only if its SSH-key mount still matches the
+        // resolved key. If the key changed after the container was created, fall
+        // through to recreate it (Docker can't remount on start/restart).
+        if (running && !sandbox.sshMountDrifted(project.id)) {
             startingSet.delete(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
             return res.json({ ok: true, status: 'running' });
@@ -54,20 +57,23 @@ module.exports = function(deps) {
                 volumes: [...webState.getVolumes(), ...(project.sandbox?.volumes || [])],
                 network: project.sandbox?.network || globalConfig.network,
             };
-            const configuredImage = sandboxConfig.image || 'orcinus/jonggrang-agent';
+            const configuredImage = sandboxConfig.image || sandbox.DEFAULT_AGENT_IMAGE;
 
-            // If container exists (stopped) → reuse it only if the image hasn't changed.
-            // If the image changed, remove the old container so it gets recreated with the new one.
+            // Reconcile an existing container against the current config. Reuse it
+            // only if BOTH the image and the SSH-key mount still match — otherwise
+            // remove it and create a fresh one (mounts are fixed at `docker run`
+            // time, so a changed image OR a changed key both need a recreate).
             const containerStatus = await sandbox.exists(project.id);
-            if (containerStatus === 'exited' || containerStatus === 'created') {
+            if (containerStatus) {
                 const runningImage = await sandbox.getContainerImage(project.id);
-                if (runningImage === configuredImage) {
-                    await sandbox.startExisting(project.id);
+                const drifted = runningImage !== configuredImage || sandbox.sshMountDrifted(project.id);
+                if (!drifted) {
+                    if (containerStatus !== 'running') await sandbox.startExisting(project.id);
                     startingSet.delete(project.id);
                     io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
                     return;
                 }
-                // Image changed — remove old container and fall through to create a new one
+                // Image or key/mount config changed — recreate with current config.
                 await sandbox.remove(project.id);
             }
             await sandbox.start(project, sandboxConfig, secretVars, (line) => {

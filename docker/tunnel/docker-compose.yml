@@ -1,6 +1,6 @@
 services:
   tunnel:
-    image: orcinus/jonggrang-tunnel
+    image: ghcr.io/porcupine-md/jonggrang-tunnel
     build:
       context: .
       dockerfile: Dockerfile

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-IMAGE="orcinus/jonggrang-agent"
+IMAGE="ghcr.io/porcupine-md/jonggrang-agent"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "Building $IMAGE ..."

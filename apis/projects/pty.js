@@ -27,12 +27,12 @@ module.exports = function(deps) {
                 containerCwd: project.sandbox?.enabled ? sandbox.getContainerPath(project) : null,
             };
         }
-        const hostWt = path.join(project.path, '.jonggrang', '.worktree', featureId);
+        const hostWt = path.join(sandbox.projectWorktreeDir(project.id), featureId);
         return {
             session: `${base}:${featureId}`,
             hostCwd: hostWt,
             containerCwd: project.sandbox?.enabled
-                ? `${sandbox.getContainerPath(project)}/.jonggrang/.worktree/${featureId}`
+                ? `${sandbox.WORKTREE_MOUNT}/${featureId}`
                 : null,
             hostWt,
         };
