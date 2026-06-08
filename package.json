@@ -21,6 +21,7 @@
     "jonggrang": "./bin/jonggrang.js"
   },
   "files": [
+    "apis",
     "bin",
     "lib",
     "client/dist",
@@ -51,7 +52,9 @@
     "chokidar": "^4.0.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "http-proxy": "^1.18.1",
     "js-yaml": "^4.1.1",
+    "node-pty": "^1.1.0",
     "socket.io": "^4.8.1"
   }
 }

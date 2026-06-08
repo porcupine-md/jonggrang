@@ -1,6 +1,6 @@
 # Jonggrang Workflow — Deep Dive
 
-Jonggrang runs in two distinct modes. The **Work Loop** is the original iterative mode: one agent, one task at a time, stateless iterations. The **Orchestrate Mode** is the new deterministic multi-phase pipeline: five specialist agents, 16 phases, persistent MANIFEST state.
+Jonggrang runs in two distinct modes. The **Work Loop** is the original iterative mode: one agent, one task at a time, stateless iterations. The **Orchestrate Mode** is the new deterministic multi-phase pipeline: five specialist agents, 17 phases, persistent MANIFEST state.
 
 ---
 
@@ -266,7 +266,7 @@ jonggrang review --tool jonggrang --model anthropic/claude-sonnet-4-5 --effort m
 
 ---
 
-## Mode 2: Orchestrate — 16-Phase Pipeline
+## Mode 2: Orchestrate — 17-Phase Pipeline
 
 ### Overview
 
@@ -275,7 +275,7 @@ jonggrang orchestrate "add payment flow"
 jonggrang orchestrate --resume          # resume from saved MANIFEST
 ```
 
-The orchestrate command runs a deterministic 16-phase pipeline. Each phase is executed by a specific specialist agent. State is persisted in `MANIFEST.yaml` so the pipeline can survive session resets.
+The orchestrate command runs a deterministic 17-phase pipeline. Each phase is executed by a specific specialist agent. State is persisted in `MANIFEST.yaml` so the pipeline can survive session resets.
 
 ### Phase Table
 
@@ -289,22 +289,23 @@ The orchestrate command runs a deterministic 16-phase pipeline. Each phase is ex
 | 6 | Brainstorm | Lead | Generate alternative approaches **(human pause)** | BUGFIX, SMALL |
 | 7 | Architect | Lead | Output architecture_plan_json → ARCHITECTURE_PLAN_COMPLETE | BUGFIX, SMALL |
 | 8 | Implement | Developer | Execute plan, typecheck+lint+test → IMPLEMENTATION_COMPLETE | — |
-| 9 | DesignVerify | Reviewer | Verify design matches architecture plan | BUGFIX, SMALL |
-| 10 | Compliance | Reviewer | AGENTS.md compliance, security patterns | — |
-| 11 | Quality | Reviewer | Code quality, test coverage gaps → REVIEW_COMPLETE | — |
-| 12 | TestPlan | TestLead | Output test_plan_json → TEST_PLAN_COMPLETE | BUGFIX |
-| 13 | Test | Tester | Execute test plan, run all tests | — |
-| 14 | Coverage | Tester | Enforce coverage thresholds | — |
-| 15 | TestQuality | Reviewer | Test quality review → REVIEW_COMPLETE | — |
-| 16 | Complete | Lead | Final summary, update `.jonggrang/progress.txt`, MANIFEST → done | — |
+| 9 | Simplify | Developer | Clarity and conciseness pass on changed files — no behavior changes, run tests after → IMPLEMENTATION_COMPLETE | BUGFIX |
+| 10 | DesignVerify | Reviewer | Verify design matches architecture plan | BUGFIX, SMALL |
+| 11 | Compliance | Reviewer | AGENTS.md compliance, security patterns | — |
+| 12 | Quality | Reviewer | Code quality, test coverage gaps → REVIEW_COMPLETE | — |
+| 13 | TestPlan | TestLead | Output test_plan_json → TEST_PLAN_COMPLETE | BUGFIX |
+| 14 | Test | Tester | Execute test plan, run all tests | — |
+| 15 | Coverage | Tester | Enforce coverage thresholds | — |
+| 16 | TestQuality | Reviewer | Test quality review → REVIEW_COMPLETE | — |
+| 17 | Complete | Lead | Final summary, update `.jonggrang/progress.txt`, MANIFEST → done | — |
 
 ### Phase Skipping by Work Type
 
 ```
-BUGFIX  → skip phases [5, 6, 7, 9, 12]    (fast track, no architecture)
-SMALL   → skip phases [5, 6, 7, 9]         (skip architecture, keep test plan)
-MEDIUM  → run all 16 phases
-LARGE   → run all 16 phases
+BUGFIX  → skip phases [5, 6, 7, 9, 10, 13]   (fast track, no architecture, no simplification, no design-verify)
+SMALL   → skip phases [5, 6, 7, 10]            (skip architecture + design-verify; simplification runs for SMALL+)
+MEDIUM  → run all 17 phases
+LARGE   → run all 17 phases
 ```
 
 Work type is auto-classified by the Lead agent in phase 2 based on the description and discovered scope.
@@ -319,7 +320,7 @@ description: "add payment flow"
 work_type: MEDIUM
 status: in_progress
 current_phase: 8
-active_phases: [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+active_phases: [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
 phases:
   "1": { status: completed, completed_at: "2026-04-11T10:00:00Z", agent_output: "..." }
   "2": { status: completed, completed_at: "2026-04-11T10:01:00Z", agent_output: "..." }
@@ -350,11 +351,11 @@ jonggrang orchestrate --resume
 Each phase is handled by exactly one specialist agent. Agents are stateless — they receive a crafted prompt, do their work, and signal completion.
 
 ```
-Phase 1-7, 16 → Lead
-Phase 8       → Developer
-Phase 9-11,15 → Reviewer
-Phase 12      → TestLead
-Phase 13-14   → Tester
+Phase 1-7, 17  → Lead
+Phase 8-9      → Developer
+Phase 10-12,16 → Reviewer
+Phase 13       → TestLead
+Phase 14-15    → Tester
 ```
 
 ### Role Boundaries
@@ -431,7 +432,7 @@ This writes:
 
 ## Compaction Gate
 
-The compaction gate prevents agents from exhausting context mid-phase. It is checked **before heavy phases** (3: Discovery, 8: Implement, 13: Test).
+The compaction gate prevents agents from exhausting context mid-phase. It is checked **before heavy phases** (3: Discovery, 8: Implement, 9: Simplify, 14: Test).
 
 ### Thresholds
 
@@ -555,7 +556,7 @@ skills/library/              → library skills (JIT loaded)
 | `jonggrang review --security` | OWASP Top 10, hardcoded secrets, auth gaps |
 | `jonggrang review --performance` | N+1 queries, re-renders, memory leaks |
 
-In orchestrate mode, review is handled by the **Reviewer role** at phases 9, 10, 11, and 15 — no separate CLI call needed.
+In orchestrate mode, review is handled by the **Reviewer role** at phases 10, 11, 12, and 16 — no separate CLI call needed.
 
 ### Review Output Format
 
@@ -563,7 +564,7 @@ In orchestrate mode, review is handled by the **Reviewer role** at phases 9, 10,
 # Jonggrang Review — 2026-04-11T15:30:00Z
 
 ## Summary
-- Phases reviewed: 9, 10, 11
+- Phases reviewed: 10, 11, 12
 - Issues found: 2 (1 high, 1 low)
 
 ## Issues

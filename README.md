@@ -76,7 +76,7 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 | `jonggrang status` | Shows task board |
 | `jonggrang review` | Comprehensive code review → markdown report |
 | `jonggrang agent` | Full TUI chat session with `/plan`, `/work`, `/review` commands |
-| `jonggrang web` | Visual Kanban dashboard with real-time logs |
+| `jonggrang web` | Visual Kanban dashboard with real-time logs + parallel run (one worktree/branch per plan, review & push per branch) |
 
 ```bash
 # Quick flags
