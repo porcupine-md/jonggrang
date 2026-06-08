@@ -379,9 +379,12 @@ module.exports = function(deps) {
     }
 
     // Spawn one worktree worker for a plan, in the right context.
+    // group.workerArgs lets callers run a single task (`--task`) or resume the
+    // pipeline (`--resume`) instead of the default all-group-tasks run.
     function spawnGroupWorker(project, ctx, group) {
         const secretVars = webState.getProjectSecretVars(project.id);
-        const workerArgs = ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--branch', group.branch];
+        const workerArgs = group.workerArgs
+            || ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--branch', group.branch];
 
         if (ctx.mode === 'container') {
             const envFlags = [];
@@ -489,13 +492,15 @@ module.exports = function(deps) {
 
     // Ensure worktree + register group in the run + spawn its worker.
     // `g` comes from lib.groupPlans (has featureId/branch/title/taskIds).
-    function startGroup(project, ctx, run, g) {
+    // opts.workerArgs overrides the default all-tasks args (single task / resume).
+    function startGroup(project, ctx, run, g, opts = {}) {
         const wt = ensureWorktree(project, ctx, g);
         const group = {
             featureId: g.featureId, branch: wt.branch, title: g.title, taskIds: g.taskIds,
             status: 'running', worktreePath: wt.worktreePath, baseSha: wt.baseSha,
             startedAt: new Date().toISOString(), finishedAt: null, exitCode: null,
             committed: false, pushed: false, error: null, logTail: [],
+            workerArgs: opts.workerArgs || null,
             child: null,
         };
         run.groups[g.featureId] = group;
@@ -595,6 +600,60 @@ module.exports = function(deps) {
         persist(project, run);
         emit(project.id, 'orchestration.started', { run: serializeRun(run) });
         res.status(202).json({ run: serializeRun(run) });
+    });
+
+    // Shared guard + spawn for the single-task and resume variants below.
+    async function startGroupVariant(req, res, buildArgs, fallbackTitle) {
+        const project = projectOr404(req, res);
+        if (!project) return;
+        const fid = req.params.featureId;
+
+        if (deps.activeWork?.has(project.id)) {
+            return res.status(409).json({ error: { code: 'PROCESS_ALREADY_RUNNING', message: 'A work process is already running' } });
+        }
+        const existing = activeRuns.get(project.id)?.groups?.[fid];
+        if (existing && (existing.status === 'running' || existing.status === 'queued')) {
+            return res.status(409).json({ error: { code: 'GROUP_ALREADY_RUNNING', message: 'This plan is already running' } });
+        }
+
+        const info = planGroupInfo(project, fid);
+        if (!info) return res.status(404).json({ error: { code: 'PLAN_NOT_FOUND', message: 'Plan not found' } });
+
+        const built = buildArgs(info);
+        if (built.error) return res.status(built.code || 422).json({ error: { code: built.error, message: built.message } });
+
+        const ctx = buildCtx(project);
+        if (!await readyCtx(project, ctx, res)) return;
+
+        const run = ensureRun(project, ctx.mode);
+        const g = { featureId: info.featureId, branch: info.branch, title: built.title || fallbackTitle, taskIds: built.taskIds || [] };
+        try {
+            const workerArgs = [...built.args, '--branch', info.branch];
+            startGroup(project, ctx, run, g, { workerArgs });
+        } catch (err) {
+            return res.status(500).json({ error: { code: 'WORKTREE_ERROR', message: err.message } });
+        }
+        persist(project, run);
+        emit(project.id, 'orchestration.started', { run: serializeRun(run) });
+        res.status(202).json({ run: serializeRun(run) });
+    }
+
+    // Run a SINGLE task in the plan's worktree: `jonggrang work --task <id>`.
+    router.post('/:id/orchestration/groups/:featureId/run-task', (req, res) => {
+        const { task_id } = req.body || {};
+        if (!task_id) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'task_id required' } });
+        return startGroupVariant(req, res,
+            () => ({ args: ['work', '--worktree', '--task', task_id], taskIds: [task_id], title: `task ${task_id}` }),
+            `task ${task_id}`);
+    });
+
+    // Resume the pipeline phases (Simplify → … → Completion) in the worktree:
+    // `jonggrang work --resume`. Used when all tasks are done but the phase
+    // machine stopped at Implement (worktree workers skip post-work phases).
+    router.post('/:id/orchestration/groups/:featureId/resume', (req, res) => {
+        return startGroupVariant(req, res,
+            () => ({ args: ['work', '--worktree', '--resume'], title: 'resume pipeline' }),
+            'resume pipeline');
     });
 
     // Cancel ONE plan's group.

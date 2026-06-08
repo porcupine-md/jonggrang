@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 
+// Must match lib/orchestration.js PHASES (17 phases). Phase 9 = Simplify.
 const PHASES = [
   { num: 1,  name: 'Setup',        role: 'Lead' },
   { num: 2,  name: 'Triage',       role: 'Lead' },
@@ -10,14 +11,15 @@ const PHASES = [
   { num: 6,  name: 'Brainstorm',   role: 'Lead' },
   { num: 7,  name: 'Architect',    role: 'Lead' },
   { num: 8,  name: 'Implement',    role: 'Developer' },
-  { num: 9,  name: 'DesignVerify', role: 'Reviewer' },
-  { num: 10, name: 'Compliance',   role: 'Reviewer' },
-  { num: 11, name: 'Quality',      role: 'Reviewer' },
-  { num: 12, name: 'TestPlan',     role: 'TestLead' },
-  { num: 13, name: 'Test',         role: 'Tester' },
-  { num: 14, name: 'Coverage',     role: 'Tester' },
-  { num: 15, name: 'TestQuality',  role: 'Reviewer' },
-  { num: 16, name: 'Complete',     role: 'Lead' },
+  { num: 9,  name: 'Simplify',     role: 'Developer' },
+  { num: 10, name: 'DesignVerify', role: 'Reviewer' },
+  { num: 11, name: 'Compliance',   role: 'Reviewer' },
+  { num: 12, name: 'Quality',      role: 'Reviewer' },
+  { num: 13, name: 'TestPlan',     role: 'TestLead' },
+  { num: 14, name: 'Test',         role: 'Tester' },
+  { num: 15, name: 'Coverage',     role: 'Tester' },
+  { num: 16, name: 'TestQuality',  role: 'Reviewer' },
+  { num: 17, name: 'Complete',     role: 'Lead' },
 ];
 
 export const useManifestStore = defineStore('manifest', () => {
