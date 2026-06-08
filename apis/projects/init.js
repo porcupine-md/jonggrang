@@ -17,7 +17,7 @@ module.exports = function(deps) {
             return res.status(409).json({ error: { code: 'ALREADY_INITIALIZED', message: 'Project not in importable state' } });
         }
 
-        const { tool = 'opencode', autonomy = 'autonomous', sandbox } = req.body || {};
+        const { tool = 'opencode', autonomy = 'autonomous', sandbox, code_editor } = req.body || {};
 
         if (!VALID_INIT_TOOL.includes(tool)) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `tool must be one of: ${VALID_INIT_TOOL.join(', ')}` } });
@@ -35,6 +35,9 @@ module.exports = function(deps) {
 
         if (sandbox?.enabled) {
             webState.updateProject(project.id, { sandbox });
+        }
+        if (['off', 'lite', 'full'].includes(code_editor)) {
+            webState.updateProject(project.id, { code_editor });
         }
         webState.updateProject(project.id, { init_status: 'initializing' });
         res.status(202).json({ job_id: project.id });

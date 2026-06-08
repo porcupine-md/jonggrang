@@ -45,6 +45,17 @@ RUN npm install -g --no-fund --no-audit \
     opencode-ai \
     @openai/codex
 
+# ── openvscode-server (powers the "Full" code-editor mode in the dashboard) ───
+# Installed to /opt/openvscode-server, symlinked onto PATH. Latest stable tag is
+# resolved at build time. Override with --build-arg OPENVSCODE_TAG=openvscode-server-vX.Y.Z.
+ARG OPENVSCODE_TAG=
+RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/;s/arm64/arm64/') \
+    && VER=${OPENVSCODE_TAG:-$(curl -fsSL https://api.github.com/repos/gitpod-io/openvscode-server/releases/latest | jq -r .tag_name)} \
+    && mkdir -p /opt/openvscode-server \
+    && curl -fsSL "https://github.com/gitpod-io/openvscode-server/releases/download/${VER}/${VER}-linux-${ARCH}.tar.gz" \
+    | tar -xz -C /opt/openvscode-server --strip-components=1 \
+    && ln -sf /opt/openvscode-server/bin/openvscode-server /usr/local/bin/openvscode-server
+
 # ── jonggrang: install deps, then install CLI from local source ───────────────
 # Build context must be the repo root (see build.dev.sh).
 WORKDIR /tmp/jonggrang-src

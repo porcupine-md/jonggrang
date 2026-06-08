@@ -16,6 +16,13 @@
               <Select v-model="cfg.autonomy" :options="autonomyOptions" optionLabel="label" optionValue="value" class="field-select" />
             </div>
           </div>
+          <div class="field-row">
+            <div class="field-group">
+              <label>Code editor</label>
+              <Select v-model="codeEditor" :options="codeEditorOptions" optionLabel="label" optionValue="value" class="field-select" />
+            </div>
+            <div class="field-group" />
+          </div>
           <div v-if="cfgError" class="error-text">{{ cfgError }}</div>
           <div v-if="cfgSaved" class="saved-text"><i class="pi pi-check" /> Saved</div>
           <div class="section-footer">
@@ -191,6 +198,12 @@ const autonomyOptions = [
 ];
 
 const cfg = reactive({ tool: 'jonggrang', autonomy: 'autonomous' });
+const codeEditor = ref('off');
+const codeEditorOptions = [
+  { label: 'Off', value: 'off' },
+  { label: 'Lite (file explorer + editor)', value: 'lite' },
+  { label: 'Full (VS Code server)', value: 'full' },
+];
 const cfgSaving = ref(false);
 const cfgError = ref('');
 const cfgSaved = ref(false);
@@ -260,6 +273,7 @@ onMounted(async () => {
       const data = await settingsRes.json();
       if (data.jonggrang_config?.tool) cfg.tool = data.jonggrang_config.tool;
       if (data.jonggrang_config?.autonomy) cfg.autonomy = data.jonggrang_config.autonomy;
+      if (data.code_editor) codeEditor.value = data.code_editor;
       attachedSecrets.value = Array.isArray(data.secrets) ? [...data.secrets] : [];
       if (data.sandbox) {
         sbx.enabled = !!data.sandbox.enabled;
@@ -288,7 +302,7 @@ async function saveConfig() {
     const res = await fetch(`/api/projects/${projectId.value}/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jonggrang_config: { tool: cfg.tool, autonomy: cfg.autonomy } }),
+      body: JSON.stringify({ jonggrang_config: { tool: cfg.tool, autonomy: cfg.autonomy }, code_editor: codeEditor.value }),
     });
     if (!res.ok) throw new Error('Save failed');
     cfgSaved.value = true;

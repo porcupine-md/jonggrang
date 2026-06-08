@@ -88,7 +88,7 @@ const cleanupLegacy = require('./apis/legacy')(app, io, legacyCtx);
 webState.cleanupStaleImports();
 webState.initVolumes();
 
-const projectsCtx = { JONGGRANG_HOME, webState, orchestration };
+const projectsCtx = { JONGGRANG_HOME, webState, orchestration, server };
 const cleanupProjects = require('./apis/projects')(app, io, projectsCtx);
 
 // ── STATIC FRONTEND ───────────────────────────────────────────

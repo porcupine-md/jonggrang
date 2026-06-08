@@ -55,13 +55,18 @@ module.exports = function(deps) {
     try { jonggrang_config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch (err) {
       if (err.code !== 'ENOENT') console.error('Failed to read project config:', err);
     }
-    res.json({ jonggrang_config, secrets: project.secrets || [], sandbox: project.sandbox || {} });
+    res.json({
+      jonggrang_config, secrets: project.secrets || [], sandbox: project.sandbox || {},
+      code_editor: project.code_editor || 'off',
+    });
   });
+
+  const CODE_EDITOR_MODES = ['off', 'lite', 'full'];
 
   router.put('/:id/settings', (req, res) => {
     const project = projectOr404(req, res);
     if (!project) return;
-    const { secrets, jonggrang_config, sandbox } = req.body || {};
+    const { secrets, jonggrang_config, sandbox, code_editor } = req.body || {};
     if (Array.isArray(secrets)) {
       try { webState.updateProject(req.params.id, { secrets }); } catch (err) {
         return res.status(500).json({ error: err.message });
@@ -69,6 +74,14 @@ module.exports = function(deps) {
     }
     if (sandbox && typeof sandbox === 'object') {
       try { webState.updateProject(req.params.id, { sandbox }); } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
+    if (code_editor !== undefined) {
+      if (!CODE_EDITOR_MODES.includes(code_editor)) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `code_editor must be one of: ${CODE_EDITOR_MODES.join(', ')}` } });
+      }
+      try { webState.updateProject(req.params.id, { code_editor }); } catch (err) {
         return res.status(500).json({ error: err.message });
       }
     }

@@ -20,6 +20,18 @@
       </div>
     </div>
 
+    <div class="form-row">
+      <div class="form-group">
+        <label>Code editor</label>
+        <Select v-model="form.code_editor" :options="[
+          { label: 'Off', value: 'off' },
+          { label: 'Lite (file explorer + editor)', value: 'lite' },
+          { label: 'Full (VS Code server)', value: 'full' },
+        ]" optionLabel="label" optionValue="value" fluid />
+      </div>
+      <div class="form-group" />
+    </div>
+
     <div class="sandbox-config" :class="{ 'sandbox-config--disabled': !form.sandbox_enabled }">
       <label class="sandbox-toggle-row">
         <input type="checkbox" v-model="form.sandbox_enabled" />
@@ -107,6 +119,7 @@ const form = ref({
   stack: null,
   tool: 'jonggrang',
   autonomy: 'autonomous',
+  code_editor: 'lite',
   sandbox_enabled: true,
   sandbox_image: '',
   sandbox_shell: '',
@@ -149,7 +162,7 @@ async function doInit() {
   initLog.value = [];
   initing.value = true;
   try {
-    const payload = { ...form.value };
+    const payload = { ...form.value, code_editor: form.value.code_editor };
     if (form.value.sandbox_enabled) {
       payload.sandbox = { enabled: true, image: form.value.sandbox_image || null, shell: form.value.sandbox_shell || null };
     }

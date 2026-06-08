@@ -13,6 +13,7 @@ const routes = [
       { path: 'changelog', component: () => import('../views/ChangelogView.vue') },
       { path: 'agent',    component: () => import('../views/AgentView.vue') },
       { path: 'terminal', component: () => import('../views/TerminalView.vue') },
+      { path: 'files',    component: () => import('../views/FilesView.vue') },
       { path: 'settings', component: () => import('../views/ProjectSettingsView.vue') },
       // Work Mode — everything scoped to one plan (featureId)
       { path: 'plans/:featureId', redirect: to => ({ path: `/projects/${to.params.id}/plans/${to.params.featureId}/pipeline` }) },
@@ -21,6 +22,7 @@ const routes = [
       { path: 'plans/:featureId/graph',    component: () => import('../views/TaskGraphView.vue') },
       { path: 'plans/:featureId/logs',     component: () => import('../views/PlanLogsView.vue') },
       { path: 'plans/:featureId/changes',  component: () => import('../views/ChangesView.vue') },
+      { path: 'plans/:featureId/files',    component: () => import('../views/FilesView.vue') },
       { path: 'plans/:featureId/agent',    component: () => import('../views/AgentView.vue') },
       { path: 'plans/:featureId/terminal', component: () => import('../views/TerminalView.vue') },
       // Legacy project-level routes — now plan-scoped, send back to the plan list

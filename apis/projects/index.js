@@ -3,7 +3,7 @@
 const sandbox = require('../../lib/sandbox');
 
 module.exports = function register(app, io, ctx) {
-    const { JONGGRANG_HOME, webState, orchestration } = ctx;
+    const { JONGGRANG_HOME, webState, orchestration, server } = ctx;
 
     const fs = require('fs');
     const path = require('path');
@@ -235,6 +235,16 @@ module.exports = function register(app, io, ctx) {
     app.use('/api/projects', require('./orchestration-run')(deps));
     app.use('/api/projects', require('./base')(deps));
     app.use('/api/projects', require('./pty')(deps));
+    app.use('/api/projects', require('./files')(deps));
+    const codeServerRouter = require('./code-server')(deps);
+    app.use('/api/projects', codeServerRouter);
+    // Route websocket upgrades for the editor through the proxy; let socket.io
+    // keep handling everything else (it ignores requests its handler doesn't own).
+    if (server && deps.codeEditorUpgrade) {
+        server.on('upgrade', (req, socket, head) => {
+            try { deps.codeEditorUpgrade(req, socket, head); } catch {}
+        });
+    }
     app.use('/api/projects', require('./sandbox-routes')(deps));
     app.use('/api', require('../secrets')(deps));
     app.use('/api/projects', require('./settings')(deps));
@@ -255,5 +265,6 @@ module.exports = function register(app, io, ctx) {
         for (const [, w] of projectWatchers) {
             try { w.close(); } catch {}
         }
+        try { codeServerRouter._cleanup?.(); } catch {}
     };
 };
