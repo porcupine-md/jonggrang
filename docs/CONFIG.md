@@ -384,3 +384,11 @@ Persistent orchestration state for a feature run. Located at:
 | `JONGGRANG_HOOKS_DIR` | Path to hooks/ directory | auto-resolved |
 | `JONGGRANG_COMPACTION_THRESHOLD` | Override block threshold (0-1) | 0.85 |
 | `OPENCODE_PROJECT_ROOT` | Project root passed by OpenCode to plugin | set by OpenCode |
+| `GH_TOKEN` | GitHub CLI (`gh`) auth token | from global Git Host Tokens setting |
+| `GITLAB_TOKEN` | GitLab CLI (`glab`) auth token | from global Git Host Tokens setting |
+
+> **Git Host Tokens (web dashboard):** `GH_TOKEN` / `GITLAB_TOKEN` are set globally in
+> Settings → Git Host Tokens and stored in `~/.jonggrang/web/index.json` (`git_tokens`).
+> They are injected as default env into every sandbox container/agent so the `gh` and
+> `glab` CLIs are pre-authenticated. The dashboard never returns the stored values — only
+> whether each is set. A per-project secret with the same name overrides the global token.

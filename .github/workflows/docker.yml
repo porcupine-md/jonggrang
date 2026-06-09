@@ -1,0 +1,124 @@
+name: Build & Push Docker Images
+
+# Builds the Jonggrang images for GitHub Container Registry, selected by event:
+#   PR update     -> jonggrang-agent:dev only
+#   merge to main -> jonggrang-agent:latest + jonggrang-tunnel:latest
+#   tag vX.Y.Z    -> agent + tunnel :X.Y.Z, :X.Y, :latest
+#   manual run    -> all images
+# Auth uses the built-in GITHUB_TOKEN — no extra secrets needed.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: porcupine-md
+
+jobs:
+  # PR commits (and manual runs) build & push the dev image only.
+  dev:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push jonggrang-agent:dev
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Dockerfile.dev
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/jonggrang-agent:dev
+          cache-from: type=gha,scope=agent-dev
+          cache-to: type=gha,mode=max,scope=agent-dev
+
+  # Pushes to main and release tags build & push latest + tunnel (multi-arch).
+  # On a release tag (vX.Y.Z) the images are also tagged X.Y.Z and X.Y.
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent-latest
+            image: jonggrang-agent
+            context: ./docker
+            dockerfile: ./docker/Dockerfile
+          - name: tunnel
+            image: jonggrang-tunnel
+            context: ./docker/tunnel
+            dockerfile: ./docker/tunnel/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release version
+        id: ver
+        run: |
+          # Version tags only on a release tag push (vX.Y.Z).
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            echo "is_release=true"      >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION"     >> "$GITHUB_OUTPUT"
+            echo "minor=${VERSION%.*}"  >> "$GITHUB_OUTPUT"   # 1.2.3 -> 1.2
+            echo "Release build: $VERSION"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "Build: ${{ matrix.image }}:latest"
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # tags: always :latest; plus X.Y.Z and X.Y on a release tag.
+      - name: Build & push ${{ matrix.image }} (${{ matrix.name }})
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:latest
+            ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.version) || '' }}
+            ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.minor) || '' }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

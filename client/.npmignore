@@ -1,0 +1,3 @@
+# Intentionally empty.
+# Overrides client/.gitignore (which ignores `dist`) so that the built
+# client/dist/ — whitelisted in package.json "files" — is published to npm.

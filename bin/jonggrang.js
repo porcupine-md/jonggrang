@@ -64,6 +64,7 @@ let VERBOSE = process.env.JONGGRANG_VERBOSE === 'true';
 let DRY_RUN = process.env.JONGGRANG_DRY_RUN === 'false';
 let DEBUG   = process.env.JONGGRANG_DEBUG === 'true';
 let WEB_PORT = parseInt(process.env.JONGGRANG_WEB_PORT || '7777', 10);
+let WEB_HOST = process.env.JONGGRANG_WEB_HOST || '127.0.0.1';
 let WEB_OPEN = true;
 let WORKTREE_MODE = false;
 let GROUP_TASK_IDS = [];
@@ -368,8 +369,8 @@ function resolveWorkType(description) {
 // ============================================================
 
 async function runPostWorkPhases(description, workType, featureId, manifest, manifestPath) {
-  if (workType === 'SMALL' || workType === 'BUGFIX') {
-    logInfo(`Work type: ${workType} — no quality gates needed`);
+  if (workType === 'BUGFIX') {
+    logInfo(`Work type: BUGFIX — no quality gates needed`);
     // Mark all remaining active phases as skipped so the phase grid shows complete
     if (manifestPath && manifest) {
       try {
@@ -430,6 +431,13 @@ async function runPostWorkPhases(description, workType, featureId, manifest, man
 async function cmdWork(descriptionParts = []) {
   // --resume: skip work loop, go straight to orchestration resume
   if (ORCHESTRATE_RESUME) {
+    if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
+      TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
+    }
+    resolveModelAndEffort();
+    if (MODE === 'autonomous') {
+      MODE = lib.readConfig(CONFIG_FILE, 'mode.autonomy', 'autonomous');
+    }
     const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
     if (!existing) {
       logError('No incomplete orchestration found to resume.');
@@ -492,7 +500,33 @@ async function cmdWork(descriptionParts = []) {
 
   // Create / resume manifest at start of work so phase grid updates in real-time
   let workFeatureId = null, workManifest = null, workManifestPath = null;
-  if (!WORKTREE_MODE) {
+  if (WORKTREE_MODE && GROUP_TASK_IDS.length > 0) {
+    // A worktree run executes exactly one plan (group). Resolve THAT plan's
+    // manifest by its tasks' feature_id — never findIncompleteManifest, which
+    // would pick an arbitrary seeded manifest and run another plan's phases in
+    // this worktree. Tracking the manifest here is what lets the post-work
+    // phases (Simplify → … → Complete) run in worktree mode instead of the
+    // pipeline stalling at Implement.
+    const firstTask = GROUP_TASK_IDS.map(id => lib.getTask(TASKS_FILE, id)).find(Boolean);
+    const fid = firstTask && firstTask.feature_id;
+    if (fid) {
+      const mPath = orchestration.getManifestPath(PROJECT_ROOT, fid);
+      const m = orchestration.readManifest(mPath);
+      if (m) {
+        workFeatureId = fid;
+        workManifestPath = mPath;
+        // Planning phases 1-7 are covered by plan + approve (run before work).
+        [1, 2, 3, 4, 5, 6, 7].forEach(n => {
+          const s = m.phases[n]?.status;
+          if (m.active_phases.includes(n) && s !== 'completed' && s !== 'skipped')
+            orchestration.completePhase(mPath, n, { source: 'plan' });
+        });
+        // Phase 8 = Implement — running for the duration of the work loop.
+        if (m.active_phases.includes(8)) orchestration.startPhase(mPath, 8);
+        workManifest = orchestration.readManifest(mPath);
+      }
+    }
+  } else if (!WORKTREE_MODE) {
     const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
     if (existing) {
       workFeatureId  = existing.featureId;
@@ -575,6 +609,11 @@ async function cmdWork(descriptionParts = []) {
     let taskId;
     if (taskQueue.length > 0) {
       taskId = taskQueue.shift();
+    } else if (GROUP_TASK_IDS.length > 0) {
+      // Group/worktree mode: only ever run the assigned tasks. Do NOT fall back
+      // to getNextTask, which would pick up other plans' tasks from this
+      // worktree's tasks.json copy and break per-plan isolation.
+      taskId = null;
     } else {
       taskId = lib.getNextTask(TASKS_FILE);
     }
@@ -590,9 +629,13 @@ async function cmdWork(descriptionParts = []) {
         workManifest = orchestration.readManifest(workManifestPath);
       }
 
-      // Run post-work quality gates based on work type (MEDIUM/LARGE only)
-      if (!WORKTREE_MODE && !SKIP_GATES) {
-        await runPostWorkPhases(description, workType, workFeatureId, workManifest, workManifestPath);
+      // Run post-work quality gates (Simplify → … → Complete) based on work type.
+      // Runs in both normal and worktree mode. In worktree mode we require a
+      // manifest we resolved by feature_id above, so runPostWorkPhases never
+      // falls back to findIncompleteManifest (which would target another plan).
+      if (!SKIP_GATES && (!WORKTREE_MODE || workManifestPath)) {
+        const gateWorkType = workManifest?.work_type || workType;
+        await runPostWorkPhases(description, gateWorkType, workFeatureId, workManifest, workManifestPath);
       }
 
       console.log('COMPLETE');
@@ -617,6 +660,14 @@ async function cmdWork(descriptionParts = []) {
         updateTaskMode(taskId, 'blocked');
         consecutiveFails = 0;
         lastFailedTask = '';
+      } else if (GROUP_TASK_IDS.length > 0) {
+        // Group/worktree mode never falls back to getNextTask, so a task that
+        // got reverted to pending would be dropped from the queue and the run
+        // would falsely report "All tasks completed". Re-queue it to retry
+        // within this run (bounded by kill_after_fails above) — keep going
+        // until every group task is genuinely completed or blocked.
+        logWarn(`Re-queuing ${taskId} for retry (attempt ${consecutiveFails}/${killAfter}).`);
+        taskQueue.push(taskId);
       }
     }
 
@@ -905,14 +956,38 @@ async function cmdPlan(args, opts = {}) {
   let description = '';
   let autoApprove = false;
   let deepMode = false;
+  let reviseMode = false;
 
   for (const arg of args) {
     if (arg === '--yes' || arg === '-y') autoApprove = true;
     else if (arg === '--deep') deepMode = true;
+    else if (arg === '--revise') reviseMode = true;
     else if (!arg.startsWith('--')) description = arg;
   }
 
   if (!await ensureInit()) return;
+
+  // ── Revise mode: AI rewrites existing plan.md ────────────────
+  if (reviseMode) {
+    if (!lib.fileExists(PLAN_FILE)) {
+      logError('No plan.md found to revise. Generate a plan first.');
+      process.exit(1);
+    }
+    if (!description) {
+      logError('Revision instruction required. Usage: jonggrang plan --revise "instruction"');
+      process.exit(1);
+    }
+    if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
+      TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
+    }
+    logHeader('JONGGRANG Plan — Revise with AI');
+    logInfo(`Instruction: ${description}`);
+    const currentPlan = fs.readFileSync(PLAN_FILE, 'utf8');
+    const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description);
+    await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+    logSuccess('Plan revised. Run "jonggrang approve" to decompose into tasks.');
+    return;
+  }
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
     TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
@@ -1187,7 +1262,15 @@ async function cmdApprove(args, opts = {}) {
   // Generate featureId BEFORE running the agent so we can stamp new tasks
   const featureId = orchestration.generateFeatureId(featureName);
 
-  // Snapshot existing task IDs so we can identify newly created ones
+  // Snapshot existing task IDs (only those committed to a completed feature).
+  // Orphan tasks (feature_id: null) are leftovers from a previous partial approve
+  // that never reached the archive step — purge them now so the agent gets a
+  // clean slate and won't hit "task already exists" errors.
+  const tasksBeforeClean = lib.getTasks(TASKS_FILE);
+  if (tasksBeforeClean?.tasks?.some(t => t.feature_id == null)) {
+    const cleaned = { ...tasksBeforeClean, tasks: tasksBeforeClean.tasks.filter(t => t.feature_id != null) };
+    lib.writeJSON(TASKS_FILE, cleaned);
+  }
   const existingTaskIds = new Set(
     (lib.getTasks(TASKS_FILE)?.tasks || []).map(t => t.id)
   );
@@ -1687,15 +1770,48 @@ async function cmdInit() {
     // git was already initialized by runInit if needed
   }
 
-  // Update .gitignore to exclude ephemeral files
+  // Update .gitignore to exclude ephemeral state and parallel worktrees.
+  // NOTE: .jonggrang/.output/ stays TRACKED on purpose — plans + manifests are
+  // committed and travel with each plan's branch on push.
   const gitignorePath = path.join(PROJECT_ROOT, '.gitignore');
-  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n`;
+  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n.jonggrang/.worktree/\n`;
   try {
-    const existing = lib.fileExists(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
+    let existing = lib.fileExists(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
     if (!existing.includes('.jonggrang/.ephemeral')) {
       fs.appendFileSync(gitignorePath, jonggrangIgnoreBlock);
+    } else if (!existing.includes('.jonggrang/.worktree')) {
+      // Block already present from an older init — append just the worktree line.
+      fs.appendFileSync(gitignorePath, `.jonggrang/.worktree/\n`);
     }
   } catch {}
+
+  // Ensure the repo has at least one commit so parallel worktrees can branch
+  // from HEAD. A fresh clone of an empty remote (or `git init`) has no commit;
+  // repos that already have history are left untouched.
+  try {
+    execSync('git rev-parse HEAD', { cwd: PROJECT_ROOT, stdio: 'pipe' });
+  } catch {
+    try {
+      execSync('git add -A', { cwd: PROJECT_ROOT, stdio: 'pipe' });
+      execSync(`git commit -m "chore: initial jonggrang scaffolding" -m "${lib.COAUTHOR_TRAILER}"`, {
+        cwd: PROJECT_ROOT,
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME:     process.env.GIT_AUTHOR_NAME     || 'jonggrang',
+          GIT_AUTHOR_EMAIL:    process.env.GIT_AUTHOR_EMAIL    || 'jonggrang@local',
+          GIT_COMMITTER_NAME:  process.env.GIT_COMMITTER_NAME  || 'jonggrang',
+          GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || 'jonggrang@local',
+        },
+      });
+      // Normalize the base branch to `main` (git's default is often `master`).
+      // Safe here: we only reach this branch when the repo had no commit.
+      try { execSync('git branch -M main', { cwd: PROJECT_ROOT, stdio: 'pipe' }); } catch {}
+      logSuccess('Created initial commit on main (empty repository)');
+    } catch (err) {
+      logWarn(`Could not create initial commit: ${err.message}`);
+    }
+  }
 
   console.log('');
   logSuccess('Project ready!');
@@ -1871,20 +1987,27 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       }
     }
 
-    // ── Build phase prompt ────────────────────────────────────────
-    let phaseContext;
+    // ── Build phase prompt(s) ─────────────────────────────────────
+    // Most phases run a single agent. The simplify phase may split into
+    // one fresh agent per changed file when the total diff is large
+    // (see orchestration.planSimplify) — each unit is a separate run.
+    let phaseUnits;
     if (phaseNum === orchestration.SIMPLIFY_PHASE) {
-      // Phase 9 (simplification) uses specialized prompt with file scope
-      phaseContext = orchestration.buildSimplifyPrompt(manifest, PROJECT_ROOT);
+      const plan = orchestration.planSimplify(manifest, PROJECT_ROOT);
+      if (plan.mode === 'per-file') {
+        logInfo(`Simplify: total diff ~${plan.totalTokens} tokens > budget — splitting into ${plan.units.length} per-file agents`);
+        phaseUnits = plan.units.map(u => ({ core: u.prompt, label: u.file }));
+      } else {
+        phaseUnits = [{ core: plan.prompt, label: null }];
+      }
     } else if (phaseNum === orchestration.DESIGN_SYSTEM_PHASE) {
-      phaseContext = orchestration.buildDesignSystemPrompt(manifest, PROJECT_ROOT);
+      phaseUnits = [{ core: orchestration.buildDesignSystemPrompt(manifest, PROJECT_ROOT), label: null }];
     } else if (phaseNum === orchestration.DESIGN_VERIFY_UI_PHASE) {
-      phaseContext = orchestration.buildDesignVerifyUiPrompt(manifest, PROJECT_ROOT);
+      phaseUnits = [{ core: orchestration.buildDesignVerifyUiPrompt(manifest, PROJECT_ROOT), label: null }];
     } else {
-      // All other phases use generic phase context
-      phaseContext = orchestration.buildPhaseContext(manifest, phaseNum);
+      phaseUnits = [{ core: orchestration.buildPhaseContext(manifest, phaseNum), label: null }];
     }
-    
+
     const agentsContent = lib.fileExists(paths.agentsFile)
       ? fs.readFileSync(paths.agentsFile, 'utf8') : '';
     const progressContent = lib.fileExists(paths.progressFile)
@@ -1893,22 +2016,27 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
     fs.mkdirSync(outputDir, { recursive: true });
 
-    const prompt = [
-      phaseContext,
+    const buildPrompt = (core) => [
+      core,
       agentsContent ? `\n## Project Conventions (AGENTS.md)\n${agentsContent}` : '',
       progressContent ? `\n## Recent Learnings (progress.txt)\n${progressContent}` : '',
       `\n## Output Directory\nWrite all output files to: ${outputDir}/`,
     ].filter(Boolean).join('\n');
 
     if (DRY_RUN) {
-      logInfo(`[DRY RUN] Phase ${phaseNum} prompt (${prompt.length} chars)`);
+      logInfo(`[DRY RUN] Phase ${phaseNum}: ${phaseUnits.length} agent run(s)`);
       orchestration.completePhase(manifestPath, phaseNum, { dry_run: true });
       manifest = orchestration.readManifest(manifestPath);
       continue;
     }
 
-    // ── Run agent ─────────────────────────────────────────────────
-    const exitCode = await lib.runAgent(prompt, activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+    // ── Run agent(s) ──────────────────────────────────────────────
+    let exitCode = 0;
+    for (const unit of phaseUnits) {
+      if (unit.label) logInfo(`  → simplify: ${unit.label}`);
+      exitCode = await lib.runAgent(buildPrompt(unit.core), activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      if (exitCode !== 0) break;
+    }
 
     if (exitCode !== 0) {
       logWarn(`Phase ${phaseNum} agent exited with code ${exitCode}`);
@@ -1967,6 +2095,73 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
 // ============================================================
 // WEB DASHBOARD
 // ============================================================
+
+function cmdWebTunnel(args) {
+  const { spawnSync } = require('child_process');
+
+  // SSH flags that consume the next argument
+  const SSH_VALUE_FLAGS = new Set([
+    '-b', '-D', '-E', '-e', '-F', '-I', '-i', '-J',
+    '-l', '-m', '-o', '-p', '-Q', '-R', '-S', '-w', '-W',
+  ]);
+
+  let destination = null;
+  let connectSpecs = null;
+  const sshPassthrough = [];
+
+  let idx = 0;
+  while (idx < args.length) {
+    const arg = args[idx];
+    if (arg === '-c') {
+      // -c is our flag: comma-separated host:port specs
+      connectSpecs = args[++idx];
+    } else if (!arg.startsWith('-') && destination === null) {
+      destination = arg;
+    } else {
+      sshPassthrough.push(arg);
+      if (SSH_VALUE_FLAGS.has(arg) && idx + 1 < args.length) {
+        sshPassthrough.push(args[++idx]);
+      }
+    }
+    idx++;
+  }
+
+  if (!destination) {
+    logError('Usage: jonggrang web tunnel [user@]host -c host:port,... [ssh-opts]');
+    logError('  -c   comma-separated list of host:port to forward (local port = remote port)');
+    logError('  All other ssh flags (e.g. -i, -p) are passed through unchanged.');
+    process.exit(1);
+  }
+
+  // always forward jonggrang web dashboard port
+  const forwardFlags = ['-L', '7777:host.docker.internal:7777'];
+  if (connectSpecs) {
+    for (const spec of connectSpecs.split(',')) {
+      const s = spec.trim();
+      const lastColon = s.lastIndexOf(':');
+      if (lastColon === -1) {
+        logError(`Invalid tunnel spec "${s}" — expected host:port`);
+        process.exit(1);
+      }
+      const host = s.slice(0, lastColon);
+      const port = s.slice(lastColon + 1);
+      if (!port || isNaN(Number(port))) {
+        logError(`Invalid port in tunnel spec "${s}"`);
+        process.exit(1);
+      }
+      forwardFlags.push('-L', `${port}:${host}:${port}`);
+    }
+  }
+
+  // default to tunnel container port unless -p already provided
+  if (!sshPassthrough.includes('-p')) sshPassthrough.unshift('-p', '2222');
+
+  const sshArgs = ['-N', ...forwardFlags, ...sshPassthrough, destination];
+  logInfo(`ssh ${sshArgs.join(' ')}`);
+
+  const result = spawnSync('ssh', sshArgs, { stdio: 'inherit' });
+  process.exit(result.status ?? 0);
+}
 
 function cmdWeb() {
   const WEB_DIR = path.resolve(__dirname, '..');
@@ -2040,22 +2235,25 @@ function cmdWeb() {
       JONGGRANG_HOME: JONGGRANG_HOME,
       JONGGRANG_PROJECT_ROOT: PROJECT_ROOT,
       PORT: String(WEB_PORT),
+      HOST: WEB_HOST,
     },
     stdio: 'inherit',
   });
 
   // Open browser after short delay
+  const dashboardUrl = `http://${WEB_HOST}:${WEB_PORT}`;
   if (WEB_OPEN) {
     setTimeout(() => {
-      const url = `http://localhost:${WEB_PORT}`;
-      logSuccess(`Dashboard ready at ${url}`);
-      try {
-        const openCmd = process.platform === 'darwin' ? 'open'
-          : process.platform === 'win32' ? 'start'
-          : 'xdg-open';
-        spawn(openCmd, [url], { stdio: 'ignore', detached: true }).unref();
-      } catch { /* ignore if browser fails to open */ }
+      logSuccess(`Dashboard ready at ${dashboardUrl}`);
+      const openCmd = process.platform === 'darwin' ? 'open'
+        : process.platform === 'win32' ? 'start'
+        : 'xdg-open';
+      const browser = spawn(openCmd, [dashboardUrl], { stdio: 'ignore', detached: true });
+      browser.on('error', () => { /* xdg-open not available, ignore */ });
+      browser.unref();
     }, 1000);
+  } else {
+    logSuccess(`Dashboard ready at ${dashboardUrl}`);
   }
 
   // Forward signals to child
@@ -3225,6 +3423,11 @@ async function main() {
     return;
   }
 
+  if (command === 'web' && rest[0] === 'tunnel') {
+    cmdWebTunnel(rest.slice(1));
+    return;
+  }
+
   const planArgs = [];
 
   // Parse global options
@@ -3252,7 +3455,9 @@ async function main() {
       case '--testing':       INIT_TESTING = rest[++i]; break;
       case '--force':         INIT_FORCE = true; break;
       case '--port':          WEB_PORT = parseInt(rest[++i], 10); break;
-      case '--no-open':       WEB_OPEN = false; break;
+      case '--host':          WEB_HOST = rest[++i]; break;
+      case '--no-open':
+      case '--no-browser':    WEB_OPEN = false; break;
       case '--resume':        ORCHESTRATE_RESUME = true; break;
       case '--role':          ORCHESTRATE_ROLE = rest[++i]; break;
       case '--skip-gates':    SKIP_GATES = true; break;
@@ -3330,7 +3535,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+main().then(() => {
+  // runAgent (Pi backend) disposes each session, but the SDK can leave residual
+  // async handles that keep the event loop alive. Exit once here, after the whole
+  // command finished — NOT inside runAgent (that killed the work loop after one
+  // task). setImmediate lets buffered stdout flush to a piped parent first.
+  setImmediate(() => process.exit(process.exitCode || 0));
+}).catch((err) => {
   logError(err.message);
   process.exit(1);
 });

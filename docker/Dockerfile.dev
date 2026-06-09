@@ -1,0 +1,99 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+
+# ── System packages ───────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    openssh-client \
+    curl \
+    wget \
+    ca-certificates \
+    bash \
+    procps \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    unzip \
+    xz-utils \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Node.js (latest LTS via NodeSource) ──────────────────────────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Go (latest stable) ───────────────────────────────────────────────────────
+ARG GO_VERSION=1.24.3
+RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/amd64/;s/arm64/arm64/') \
+    && curl -fsSL "https://dl.google.com/go/go${GO_VERSION}.linux-${ARCH}.tar.gz" \
+    | tar -C /usr/local -xz
+
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOPATH="/root/go"
+ENV PATH="${GOPATH}/bin:${PATH}"
+
+# ── Rust (stable via rustup) ─────────────────────────────────────────────────
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# ── AI tools (jonggrang installed from local source, not npm) ────────────────
+RUN npm install -g --no-fund --no-audit \
+    @anthropic-ai/claude-code \
+    opencode-ai \
+    @openai/codex
+
+# ── openvscode-server (powers the "Full" code-editor mode in the dashboard) ───
+# Installed to /opt/openvscode-server, symlinked onto PATH. Latest stable tag is
+# resolved at build time. Override with --build-arg OPENVSCODE_TAG=openvscode-server-vX.Y.Z.
+ARG OPENVSCODE_TAG=
+RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/;s/arm64/arm64/') \
+    && VER=${OPENVSCODE_TAG:-$(curl -fsSL https://api.github.com/repos/gitpod-io/openvscode-server/releases/latest | jq -r .tag_name)} \
+    && mkdir -p /opt/openvscode-server \
+    && curl -fsSL "https://github.com/gitpod-io/openvscode-server/releases/download/${VER}/${VER}-linux-${ARCH}.tar.gz" \
+    | tar -xz -C /opt/openvscode-server --strip-components=1 \
+    && ln -sf /opt/openvscode-server/bin/openvscode-server /usr/local/bin/openvscode-server
+
+# ── GitHub CLI (gh) — auth via GH_TOKEN env ───────────────────────────────────
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── GitLab CLI (glab) — auth via GITLAB_TOKEN env ─────────────────────────────
+RUN ARCH=$(dpkg --print-architecture) \
+    && TAG=$(curl -fsSL "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases" | jq -r '.[0].tag_name') \
+    && VER=${TAG#v} \
+    && curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/${TAG}/downloads/glab_${VER}_linux_${ARCH}.tar.gz" -o /tmp/glab.tar.gz \
+    && tar -xzf /tmp/glab.tar.gz -C /tmp \
+    && install -m 755 /tmp/bin/glab /usr/local/bin/glab \
+    && rm -rf /tmp/glab.tar.gz /tmp/bin
+
+# ── jonggrang: install deps, then install CLI from local source ───────────────
+# Build context must be the repo root (see build.dev.sh).
+WORKDIR /tmp/jonggrang-src
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-fund --no-audit
+
+COPY bin/       ./bin/
+COPY lib/       ./lib/
+COPY templates/ ./templates/
+COPY hooks/     ./hooks/
+COPY skills/    ./skills/
+
+# Pack into a tarball so npm installs a real copy, not a symlink to the build dir
+RUN npm pack --no-fund --no-audit && \
+    npm install -g --no-fund --no-audit jonggrang-*.tgz && \
+    rm -rf /tmp/jonggrang-src
+
+# ── Git safe directory (allow mounted workspaces owned by any user) ───────────
+RUN git config --global --add safe.directory '*'
+
+# ── Default workdir ───────────────────────────────────────────────────────────
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]

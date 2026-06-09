@@ -54,6 +54,9 @@ skills/
     │   └── rate-limiting/SKILL.md
     ├── design/
     │   └── design-md/SKILL.md        (+ references/, templates/)
+    ├── vcs/
+    │   ├── gh/SKILL.md                       ← GitHub CLI (auth via GH_TOKEN)
+    │   └── glab/SKILL.md                     ← GitLab CLI (auth via GITLAB_TOKEN)
     └── deploy/
         ├── aws/SKILL.md
         ├── gcp/SKILL.md
