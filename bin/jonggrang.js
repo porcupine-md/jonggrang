@@ -957,15 +957,36 @@ function displayPlanBox(planFile) {
 // Ensure the project is initialized. Offers to run `jonggrang init` if not.
 // Returns true if we can proceed, false if the user declined or init failed.
 async function ensureInit() {
-  if (lib.fileExists(CONFIG_FILE)) return true;
+  const validation = lib.validateProjectState(PROJECT_ROOT);
 
+  // All 3 files valid — ready to go
+  if (validation.allValid) return true;
+
+  // Config is valid but tasks/progress are missing/corrupt — auto-regenerate them
+  if (validation.config.valid) {
+    const existingConfig = lib.readJSON(CONFIG_FILE);
+    const name = existingConfig?.name || path.basename(PROJECT_ROOT);
+
+    if (!validation.tasks.valid) {
+      lib.writeJSON(TASKS_FILE, { feature: '', branch: '', tasks: [] });
+      logWarn(`Regenerated jonggrang-tasks.json (was ${validation.tasks.reason}).`);
+    }
+    if (!validation.progress.valid) {
+      const now = new Date().toISOString().split('T')[0];
+      fs.writeFileSync(PROGRESS_FILE, `# Jonggrang Progress Log — ${name}\n# Created: ${now}\n`);
+      logWarn(`Regenerated progress.txt (was ${validation.progress.reason}).`);
+    }
+    return true;
+  }
+
+  // Config itself is invalid — need full init
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
   if (!isInteractiveTTY) {
     logError('Project not initialized. Run "jonggrang init" first.');
     return false;
   }
 
-  logWarn('Project not initialized (.jonggrang/jonggrang.json not found).');
+  logWarn('Project not initialized (.jonggrang/jonggrang.json not found or invalid).');
   const doInit = await confirm({
     message: 'Initialize project now?',
     initialValue: true,
@@ -1659,19 +1680,46 @@ async function cmdInit() {
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
 
-  if (lib.fileExists(CONFIG_FILE) && !INIT_FORCE) {
-    if (isInteractiveTTY) {
-      const overwrite = await confirm({
-        message: 'jonggrang.json already exists. Overwrite?',
-        initialValue: false,
-      });
-      if (isCancel(overwrite) || !overwrite) {
-        cancel('Init cancelled.');
-        return;
+  // ── Validate existing project state ───────────────────────────
+  const validation = lib.validateProjectState(PROJECT_ROOT);
+
+  if (validation.allValid && !INIT_FORCE) {
+    // All 3 files exist and are valid — skip re-initialization
+    const existingConfig = lib.readJSON(CONFIG_FILE);
+    const existingTasks = lib.getTasks(TASKS_FILE);
+    const taskCount = existingTasks.tasks?.length || 0;
+    const completedCount = existingTasks.tasks?.filter(t => t.status === 'completed').length || 0;
+    logSuccess(`Project "${existingConfig.name}" is already initialized.`);
+    logInfo(`  jonggrang.json       ✓ valid`);
+    logInfo(`  jonggrang-tasks.json ✓ valid (${taskCount} tasks, ${completedCount} completed)`);
+    logInfo(`  progress.txt         ✓ valid`);
+    logInfo('Use --force to re-initialize from scratch.');
+    return;
+  }
+
+  if (!validation.allValid && !INIT_FORCE) {
+    // Some files exist — warn user before overwriting
+    const hasAny = validation.config.valid || validation.tasks.valid || validation.progress.valid;
+    if (hasAny) {
+      const statusLabel = (v) => v.valid ? '✓ valid' : `✗ ${v.reason}`;
+      logWarn('Existing project state detected:');
+      logInfo(`  jonggrang.json       ${statusLabel(validation.config)}`);
+      logInfo(`  jonggrang-tasks.json ${statusLabel(validation.tasks)}`);
+      logInfo(`  progress.txt         ${statusLabel(validation.progress)}`);
+
+      if (isInteractiveTTY) {
+        const overwrite = await confirm({
+          message: 'Re-initialize? Valid files will be preserved where possible.',
+          initialValue: false,
+        });
+        if (isCancel(overwrite) || !overwrite) {
+          cancel('Init cancelled.');
+          return;
+        }
+      } else {
+        logError('Project partially initialized. Use --force to overwrite.');
+        process.exit(1);
       }
-    } else {
-      logError('jonggrang.json already exists. Use --force to overwrite.');
-      process.exit(1);
     }
   }
 
@@ -1760,7 +1808,7 @@ async function cmdInit() {
     autonomy: INIT_AUTONOMY,
     testing: INIT_TESTING,
     ci: INIT_CI,
-  }, JONGGRANG_HOME, PROJECT_ROOT);
+  }, JONGGRANG_HOME, PROJECT_ROOT, { force: !!INIT_FORCE });
 
   logSuccess('Generated .jonggrang/jonggrang.json');
   logSuccess('Generated opencode.json');
