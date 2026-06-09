@@ -77,6 +77,10 @@ RUN ARCH=$(dpkg --print-architecture) \
 # ── Git safe directory (allow mounted workspaces owned by any user) ───────────
 RUN git config --global --add safe.directory '*'
 
+# ── Default git identity (overridable via GIT_AUTHOR_*/GIT_COMMITTER_* env) ───
+RUN git config --global user.name 'jonggrang-dev' \
+    && git config --global user.email 'koko@jonggrang.dev'
+
 # ── Default workdir ───────────────────────────────────────────────────────────
 WORKDIR /workspace
 
