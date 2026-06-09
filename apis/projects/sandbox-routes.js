@@ -76,6 +76,9 @@ module.exports = function(deps) {
                 // Image or key/mount config changed — recreate with current config.
                 await sandbox.remove(project.id);
             }
+            // Recreating gives the container a fresh published editor port and
+            // kills the old openvscode process — drop the stale cached target.
+            deps.dropEditor?.(project.id);
             await sandbox.start(project, sandboxConfig, secretVars, (line) => {
                 io.to(`project:${project.id}`).emit('sandbox.log', { project_id: project.id, line });
             });
@@ -99,6 +102,9 @@ module.exports = function(deps) {
         res.status(202).json({ job_id: project.id, status: 'starting' });
 
         try {
+            // restart kills the in-container openvscode process (it was started
+            // via `docker exec -d`, not part of the container's main process).
+            deps.dropEditor?.(project.id);
             await sandbox.restart(project.id);
             startingSet.delete(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
@@ -120,6 +126,9 @@ module.exports = function(deps) {
         res.status(202).json({ job_id: project.id, status: 'starting' });
 
         try {
+            // Rebuild recreates the container — fresh editor port, dead old
+            // openvscode process. Invalidate the cached editor target.
+            deps.dropEditor?.(project.id);
             await sandbox.remove(project.id);
             const secretVars = webState.getProjectSecretVars(project.id);
             const globalConfig = webState.getSandboxConfig();
@@ -145,6 +154,7 @@ module.exports = function(deps) {
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
 
         try {
+            deps.dropEditor?.(project.id);
             await sandbox.stop(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'stopped' });
             res.json({ ok: true });

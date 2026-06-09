@@ -179,6 +179,13 @@ module.exports = function(deps) {
     }
     deps.codeEditorUpgrade = upgrade;
 
+    // Invalidate a project's cached editor target. The sandbox lifecycle routes
+    // call this whenever the container is restarted/recreated/rebuilt/stopped —
+    // those operations kill the in-container openvscode process and may change
+    // the published host port, so the cached target would otherwise point at a
+    // dead port and the editor would appear "no longer accessible".
+    deps.dropEditor = stopEditor;
+
     router._cleanup = () => { clearInterval(reaper); for (const id of [...editors.keys()]) stopEditor(id); };
     return router;
 };
