@@ -115,6 +115,41 @@ function logHeader(msg) {
   console.log('');
 }
 
+// ASCII banner for `jonggrang web` — "JONGGRANG" (navy) over ".DEV" (gold)
+// figlet-style wordmark with a gold left-bar info panel.
+function printWebBanner(host, port) {
+  const NAVY = '\x1b[38;5;25m';
+  const GOLD = '\x1b[38;5;179m';
+  const url = `http://${host}:${port}`;
+  const dev = process.env.NODE_ENV === 'development';
+  const mode = dev ? 'development · vite middleware (HMR)' : 'production · static client/dist';
+
+  const top = [
+    "     _   ___   _   _   ____   ____  ____      _     _   _   ____ ",
+    "    | | / _ \\ | \\ | | / ___| / ___||  _ \\    / \\   | \\ | | / ___|",
+    " _  | || | | ||  \\| || |  _ | |  _ | |_) |  / _ \\  |  \\| || |  _ ",
+    "| |_| || |_| || |\\  || |_| || |_| ||  _ <  / ___ \\ | |\\  || |_| |",
+    " \\___/  \\___/ |_| \\_| \\____| \\____||_| \\_\\/_/   \\_\\|_| \\_| \\____|",
+  ];
+  const bot = [
+    "                                           ____   _____ __     __",
+    "                                          |  _ \\ | ____|\\ \\   / /",
+    "                                          | | | ||  _|   \\ \\ / / ",
+    "                                        _ | |_| || |___   \\ V /  ",
+    "                                       (_)|____/ |_____|   \\_/   ",
+  ];
+
+  console.log('');
+  for (const line of top) console.log(`${NAVY}${line}${NC}`);
+  for (const line of bot) console.log(`${GOLD}${line}${NC}`);
+  console.log('');
+  console.log(`  ${GOLD}▌${NC} ${BOLD}${CYAN}Web Dashboard${NC}`);
+  console.log(`  ${GOLD}▌${NC} ${GOLD}➜${NC}  ${BOLD}${url}${NC}`);
+  console.log(`  ${GOLD}▌${NC} ${DIM}mode${NC}  ${mode}`);
+  console.log(`  ${GOLD}▌${NC} ${DIM}stop${NC}  Ctrl+C`);
+  console.log('');
+}
+
 // ============================================================
 // CLI HELPERS
 // ============================================================
@@ -2151,9 +2186,7 @@ function cmdWeb() {
     }
   }
 
-  logHeader('JONGGRANG Web Dashboard');
-  logInfo(`Starting dashboard at http://${WEB_HOST}:${WEB_PORT} — press Ctrl+C to stop.`);
-  console.log('');
+  printWebBanner(WEB_HOST, WEB_PORT);
 
   // Run server.js in the foreground, exactly like `node server.js`:
   // stdio is inherited (logs stream to this terminal) and Ctrl+C stops it.
