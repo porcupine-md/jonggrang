@@ -383,6 +383,10 @@ Persistent orchestration state for a feature run. Located at:
 | `JONGGRANG_PROJECT_ROOT` | Explicit project root for hook resolution | `process.cwd()` |
 | `JONGGRANG_HOOKS_DIR` | Path to hooks/ directory | auto-resolved |
 | `JONGGRANG_COMPACTION_THRESHOLD` | Override block threshold (0-1) | 0.85 |
+| `JONGGRANG_WEB_PORT` | `jonggrang web` dashboard port (also `--port`) | `7777` |
+| `JONGGRANG_WEB_HOST` | `jonggrang web` dashboard bind host (also `--host`) | `127.0.0.1` |
+| `PORT` / `HOST` | Port/host read directly by `server.js` | `7777` / `127.0.0.1` |
+| `NODE_ENV` | `development` → Vite middleware (client HMR); otherwise serve static `client/dist` | unset (production) |
 | `OPENCODE_PROJECT_ROOT` | Project root passed by OpenCode to plugin | set by OpenCode |
 | `GH_TOKEN` | GitHub CLI (`gh`) auth token | from global Git Host Tokens setting |
 | `GITLAB_TOKEN` | GitLab CLI (`glab`) auth token | from global Git Host Tokens setting |

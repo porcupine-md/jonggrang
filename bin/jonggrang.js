@@ -65,7 +65,6 @@ let DRY_RUN = process.env.JONGGRANG_DRY_RUN === 'false';
 let DEBUG   = process.env.JONGGRANG_DEBUG === 'true';
 let WEB_PORT = parseInt(process.env.JONGGRANG_WEB_PORT || '7777', 10);
 let WEB_HOST = process.env.JONGGRANG_WEB_HOST || '127.0.0.1';
-let WEB_OPEN = true;
 let WORKTREE_MODE = false;
 let GROUP_TASK_IDS = [];
 let ORCHESTRATE_RESUME = false;
@@ -113,6 +112,41 @@ function logHeader(msg) {
   console.log(`${BOLD}${CYAN}==============================${NC}`);
   console.log(`${BOLD}${CYAN}  ${msg}${NC}`);
   console.log(`${BOLD}${CYAN}==============================${NC}`);
+  console.log('');
+}
+
+// ASCII banner for `jonggrang web` — "JONGGRANG" (navy) over ".DEV" (gold)
+// figlet-style wordmark with a gold left-bar info panel.
+function printWebBanner(host, port) {
+  const NAVY = '\x1b[38;5;25m';
+  const GOLD = '\x1b[38;5;179m';
+  const url = `http://${host}:${port}`;
+  const dev = process.env.NODE_ENV === 'development';
+  const mode = dev ? 'development · vite middleware (HMR)' : 'production · static client/dist';
+
+  const top = [
+    "     _   ___   _   _   ____   ____  ____      _     _   _   ____ ",
+    "    | | / _ \\ | \\ | | / ___| / ___||  _ \\    / \\   | \\ | | / ___|",
+    " _  | || | | ||  \\| || |  _ | |  _ | |_) |  / _ \\  |  \\| || |  _ ",
+    "| |_| || |_| || |\\  || |_| || |_| ||  _ <  / ___ \\ | |\\  || |_| |",
+    " \\___/  \\___/ |_| \\_| \\____| \\____||_| \\_\\/_/   \\_\\|_| \\_| \\____|",
+  ];
+  const bot = [
+    "                                           ____   _____ __     __",
+    "                                          |  _ \\ | ____|\\ \\   / /",
+    "                                          | | | ||  _|   \\ \\ / / ",
+    "                                        _ | |_| || |___   \\ V /  ",
+    "                                       (_)|____/ |_____|   \\_/   ",
+  ];
+
+  console.log('');
+  for (const line of top) console.log(`${NAVY}${line}${NC}`);
+  for (const line of bot) console.log(`${GOLD}${line}${NC}`);
+  console.log('');
+  console.log(`  ${GOLD}▌${NC} ${BOLD}${CYAN}Web Dashboard${NC}`);
+  console.log(`  ${GOLD}▌${NC} ${GOLD}➜${NC}  ${BOLD}${url}${NC}`);
+  console.log(`  ${GOLD}▌${NC} ${DIM}mode${NC}  ${mode}`);
+  console.log(`  ${GOLD}▌${NC} ${DIM}stop${NC}  Ctrl+C`);
   console.log('');
 }
 
@@ -2223,12 +2257,11 @@ function cmdWeb() {
     }
   }
 
-  logHeader('JONGGRANG Web Dashboard');
-  logInfo(`Starting dashboard on port ${WEB_PORT}...`);
-  logInfo(`Project root: ${PROJECT_ROOT}`);
-  console.log('');
+  printWebBanner(WEB_HOST, WEB_PORT);
 
-  const child = spawn('node', [serverFile], {
+  // Run server.js in the foreground, exactly like `node server.js`:
+  // stdio is inherited (logs stream to this terminal) and Ctrl+C stops it.
+  const result = spawnSync('node', [serverFile], {
     cwd: WEB_DIR,
     env: {
       ...process.env,
@@ -2239,34 +2272,7 @@ function cmdWeb() {
     },
     stdio: 'inherit',
   });
-
-  // Open browser after short delay
-  const dashboardUrl = `http://${WEB_HOST}:${WEB_PORT}`;
-  if (WEB_OPEN) {
-    setTimeout(() => {
-      logSuccess(`Dashboard ready at ${dashboardUrl}`);
-      const openCmd = process.platform === 'darwin' ? 'open'
-        : process.platform === 'win32' ? 'start'
-        : 'xdg-open';
-      const browser = spawn(openCmd, [dashboardUrl], { stdio: 'ignore', detached: true });
-      browser.on('error', () => { /* xdg-open not available, ignore */ });
-      browser.unref();
-    }, 1000);
-  } else {
-    logSuccess(`Dashboard ready at ${dashboardUrl}`);
-  }
-
-  // Forward signals to child
-  const cleanup = (signal) => {
-    child.kill(signal);
-    process.exit(0);
-  };
-  process.on('SIGINT', () => cleanup('SIGINT'));
-  process.on('SIGTERM', () => cleanup('SIGTERM'));
-
-  child.on('close', (code) => {
-    process.exit(code || 0);
-  });
+  process.exit(result.status || 0);
 }
 
 // ============================================================
@@ -2364,25 +2370,13 @@ async function cmdMenuClack() {
             continue;
           }
 
-          const autoOpen = await confirm({
-            message: 'Open browser automatically?',
-            initialValue: WEB_OPEN,
-          });
-          if (isCancel(autoOpen)) {
-            logWarn('Dashboard launch cancelled.');
-            continue;
-          }
-
           const prevPort = WEB_PORT;
-          const prevOpen = WEB_OPEN;
           if (portAnswer.trim()) {
             const parsed = parseInt(portAnswer.trim(), 10);
             if (!Number.isNaN(parsed)) WEB_PORT = parsed;
           }
-          WEB_OPEN = !!autoOpen;
           cmdWeb();
           WEB_PORT = prevPort;
-          WEB_OPEN = prevOpen;
           break;
         }
         case 'exit':
@@ -2496,18 +2490,13 @@ async function cmdMenuTUI(runJonggrangTUI) {
             },
           });
           if (isCancel(portAnswer)) { logWarn('Dashboard launch cancelled.'); continue; }
-          const autoOpen = await confirm({ message: 'Open browser automatically?', initialValue: WEB_OPEN });
-          if (isCancel(autoOpen)) { logWarn('Dashboard launch cancelled.'); continue; }
           const prevPort = WEB_PORT;
-          const prevOpen = WEB_OPEN;
           if (portAnswer.trim()) {
             const parsed = parseInt(portAnswer.trim(), 10);
             if (!Number.isNaN(parsed)) WEB_PORT = parsed;
           }
-          WEB_OPEN = !!autoOpen;
           cmdWeb();
           WEB_PORT = prevPort;
-          WEB_OPEN = prevOpen;
           break;
         }
         default:
@@ -3332,7 +3321,7 @@ Commands:
   login                   Add provider credentials (OAuth subscription or API key)
   logout                  Remove provider credentials
   model                   Select AI model for jonggrang engine
-  web                     Start web dashboard
+  web                     Start web dashboard (port 7777, Ctrl+C to stop)
   menu                    Interactive menu launcher
   bot-reviewer <sub>      Automated MR review bot
     bot-reviewer gitlab     Start GitLab MR review bot (polls for new MRs)
@@ -3456,8 +3445,6 @@ async function main() {
       case '--force':         INIT_FORCE = true; break;
       case '--port':          WEB_PORT = parseInt(rest[++i], 10); break;
       case '--host':          WEB_HOST = rest[++i]; break;
-      case '--no-open':
-      case '--no-browser':    WEB_OPEN = false; break;
       case '--resume':        ORCHESTRATE_RESUME = true; break;
       case '--role':          ORCHESTRATE_ROLE = rest[++i]; break;
       case '--skip-gates':    SKIP_GATES = true; break;
