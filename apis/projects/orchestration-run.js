@@ -223,14 +223,6 @@ module.exports = function(deps) {
         return { ...made, baseSha: effectiveBase, created: true };
     }
 
-    // Does the container have an ssh client?
-    function containerHasSsh(container) {
-        return new Promise((resolve) => {
-            execFile('docker', ['exec', container, 'sh', '-c', 'command -v ssh >/dev/null 2>&1 && echo yes || echo no'],
-                { timeout: 10000 }, (err, stdout) => resolve(!err && /yes/.test(String(stdout))));
-        });
-    }
-
     // In-container push using the mounted SSH key (staged to a root-owned 0600 file).
     function containerPush(ctx, branch) {
         return new Promise((resolve, reject) => {
@@ -251,18 +243,15 @@ module.exports = function(deps) {
         });
     }
 
-    // Push a branch. Host → host git. Container → in-container SSH push when the
-    // image has an ssh client + a mounted key; otherwise fall back to host-side
-    // push (the branch ref + objects live in the bind-mounted .git, and the host
-    // has ssh/credentials — verified to work regardless of the image).
+    // Push a branch. Host → host git. Container → in-container SSH push using
+    // the mounted key (the agent image ships an ssh client and stages the key
+    // on start). NO host fallback: in sandbox mode the push stays sandboxed —
+    // a missing key/remote surfaces as an error instead of silently using the
+    // host's credentials.
     function pushBranchCtx(ctx, project) {
         return async (branch) => {
             if (ctx.mode === 'container') {
-                const hasKey = !!sandbox.resolveProjectSshKey(project.id);
-                if (hasKey && await containerHasSsh(ctx.container)) {
-                    return containerPush(ctx, branch);
-                }
-                return lib.pushBranch(project.path, branch); // host fallback
+                return containerPush(ctx, branch);
             }
             return lib.pushBranch(ctx.root, branch);
         };
@@ -787,6 +776,10 @@ module.exports = function(deps) {
         if (!lib.hasRemote(project.path)) {
             return res.status(422).json({ error: { code: 'NO_REMOTE', message: 'No "origin" remote configured' } });
         }
+
+        // Sandbox commit + push run via `docker exec` — make sure the container
+        // is up first (no host fallback). No-op for host projects.
+        if (!await readyCtx(project, ctx, res)) return;
 
         const run = activeRuns.get(project.id);
         const g = groupView(project, req.params.featureId);
