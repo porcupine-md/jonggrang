@@ -446,4 +446,4 @@ jonggrang orchestrate "fix: auth middleware crashes when Authorization header is
 |---------|-------------|
 | `jonggrang version` | Show version |
 | `jonggrang help` | Show all commands |
-| `jonggrang web` | Open dashboard in browser |
+| `jonggrang web` | Run dashboard (port 7777, foreground; Ctrl+C to stop) |
