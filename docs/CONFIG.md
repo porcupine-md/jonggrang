@@ -362,3 +362,66 @@ Persistent orchestration state for a feature run. Located at:
 > They are injected as default env into every sandbox container/agent so the `gh` and
 > `glab` CLIs are pre-authenticated. The dashboard never returns the stored values — only
 > whether each is set. A per-project secret with the same name overrides the global token.
+
+---
+
+## Monorepo / Sparse Checkout
+
+When importing a project from Git via the web dashboard, you can enable **sparse checkout** to clone only selected directories from a monorepo. This saves bandwidth and disk space.
+
+### Import source schema (git + sparse)
+
+When `source.type` is `"git"`, you can optionally include a `sparse` object:
+
+```json
+{
+  "name": "my-monorepo-app",
+  "source": {
+    "type": "git",
+    "url": "https://github.com/org/monorepo.git",
+    "ref": "main",
+    "sparse": {
+      "enabled": true,
+      "directories": ["packages/my-app", "packages/shared"]
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sparse.enabled` | boolean | Enable sparse checkout mode |
+| `sparse.directories` | string[] | List of directories to check out (relative to repo root) |
+
+When `sparse` is omitted or `enabled` is false, a normal full clone is performed.
+
+### API: List remote directories
+
+```
+POST /api/projects/git-tree
+Body: { "url": "https://github.com/org/repo.git", "ref": "main" }
+Response: { "directories": ["packages", "apps", "libs", ...] }
+```
+
+Lists top-level directories from a remote git repo without performing a full checkout. Used by the web dashboard directory picker.
+
+### Monorepo detection
+
+After import, the stack detector checks for workspace configuration files:
+
+| File | Detected as |
+|------|-------------|
+| `pnpm-workspace.yaml` | `pnpm` workspace |
+| `package.json` with `workspaces` field | `npm` or `yarn` workspace |
+| `lerna.json` | `lerna` workspace |
+
+The detection result is included in `detectStack()` output: `{ is_monorepo: true, workspace_type: "pnpm" }`.
+
+### Manual sparse checkout (CLI)
+
+```bash
+git clone --filter=blob:none --sparse https://github.com/org/monorepo.git
+cd monorepo
+git sparse-checkout init --cone
+git sparse-checkout set packages/my-app packages/shared
+```
