@@ -105,6 +105,12 @@ Every output file must include this header:
 }
 ```
 
+## Output File Manifest (phases 8, 12, 14)
+
+After phases 8 (implementation), 12 (code-quality), and 14 (testing) complete, the orchestrator automatically records which files changed via `git diff`. No action required from the agent — file tracking is based on actual git state, not self-reporting.
+
+To inspect what a phase recorded: `jonggrang manifest show [feature-id]`
+
 ## Discovery Protocol
 
 When an agent needs to find a previous phase's output:
