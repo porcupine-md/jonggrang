@@ -4,7 +4,7 @@
     <div class="pickup-body">
       <div class="pickup-source">
         <span class="prov-badge" :class="`prov-badge--${source.provider}`">
-          <i :class="source.provider === 'github' ? 'pi pi-github' : 'pi pi-gitlab'" />
+          <ProviderIcon :provider="source.provider" :size="13" />
           {{ source.repo }}#{{ source.number }}
         </span>
         <div class="pickup-title">{{ source.title }}</div>
@@ -49,6 +49,7 @@ import { useRouter } from 'vue-router';
 import Dialog from 'primevue/dialog';
 import Button from 'primevue/button';
 import Select from 'primevue/select';
+import ProviderIcon from '../ProviderIcon.vue';
 import { useProjectsStore } from '../../stores/projects.js';
 import { useIssuesStore } from '../../stores/issues.js';
 import { usePickupStore } from '../../stores/pickup.js';
@@ -107,6 +108,7 @@ async function confirm() {
 .pickup-body { display: flex; flex-direction: column; gap: 14px; }
 .pickup-source { background: var(--jg-bg); border: 1px solid var(--jg-border); border-radius: var(--radius); padding: 10px 12px; }
 .prov-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--font-mono); color: var(--jg-text-muted); }
+.prov-badge--github { color: #d2a8ff; }
 .prov-badge--gitlab { color: var(--jg-orange, #fc6d26); }
 .pickup-title { font-size: 13px; color: var(--jg-text); margin-top: 6px; line-height: 1.4; }
 .pickup-choice { display: flex; flex-direction: column; gap: 10px; }

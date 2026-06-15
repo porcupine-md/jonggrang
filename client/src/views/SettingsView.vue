@@ -154,7 +154,7 @@
       <p class="hint">Repositories listed under the <strong>Issues</strong> menu. Uses the tokens above. Pick the repos you want to import issues from, then save.</p>
       <div v-for="prov in issueProviders" :key="prov.key" class="issrc-block">
         <div class="issrc-head">
-          <span class="issrc-prov"><i :class="prov.icon" /> {{ prov.label }}</span>
+          <span class="issrc-prov"><ProviderIcon :provider="prov.key" :size="13" /> {{ prov.label }}</span>
           <span v-if="!prov.connected" class="tok-unset">token not set</span>
         </div>
         <template v-if="prov.connected">
@@ -197,6 +197,7 @@ import { ref, reactive, onMounted } from 'vue';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import SelectButton from 'primevue/selectbutton';
+import ProviderIcon from '../components/ProviderIcon.vue';
 import { useWorkspaceStore } from '../stores/workspace.js';
 import { useTheme } from '../composables/useTheme.js';
 

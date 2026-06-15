@@ -358,7 +358,9 @@ Section header inside: `font-size: 11px; font-weight: 600; text-transform: upper
 
 The **Issues** menu (top app nav, beside `projects`) lists GitHub/GitLab issues and picks them up as plans (feature #55).
 
-- **Filter bar**: provider segmented tabs (GitHub/GitLab, only those with a token), a `repo` Select (from configured Issue Sources), a `state` Select (Open/Closed/All), an "Assigned to me" checkbox, and a search box (`var(--jg-card)` + `var(--jg-border)`, mono input).
+- **Default view**: on load it shows the newest issues **fetched from GitHub and GitLab together** (the "All" provider tab), aggregated across every configured repo and sorted newest-first. Each row carries a colored provider badge (**GitHub = purple `#d2a8ff`, GitLab = orange `--jg-orange`**) so the two are distinguishable at a glance. The filter bar then narrows it.
+- **Filter bar**: provider segmented tabs **All / GitHub / GitLab** (All = both; per-provider tabs shown only when that token is set), a `repo` Select (disabled in All mode; "All repos" + each configured Issue Source when a provider is picked), a `state` Select (Open/Closed/All), an "Assigned to me" checkbox, and a search box (`var(--jg-card)` + `var(--jg-border)`, mono input).
+- **Pagination**: a centered Prev / "Page N · M issues" / Next pager below the list (20 per page; aggregate view merges the newest ~50 per repo).
 - **Issue row**: left state dot (`--jg-green` open / `--jg-red` closed), title + `repo#number` ref, a sub-line of label chips (pill: `1px solid var(--jg-border)`, `border-radius: 10px`), assignee, comment count, and a body preview; right side has an external-link icon + small **Pickup** button. Hover `background: var(--jg-hover)`.
 - **Detail drawer**: right-aligned overlay (reuses the Dialog/Drawer pattern in §6.7) — header `repo#number`, state badge, author/date, markdown body, comments, footer "Open original" + "Pickup → Plan".
 - **Pickup modal**: source chip + Existing/New project choice → routes to the target project's **pre-filled New Plan form** (plan-creation UX is unchanged; only the description arrives populated). Source link surfaces on the plan card as a "↗ repo#N" link.

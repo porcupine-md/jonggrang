@@ -5,7 +5,7 @@
         <div class="page-title">Issues</div>
         <div class="page-subtitle">Browse GitHub &amp; GitLab issues and pick them up as plans</div>
       </div>
-      <Button severity="secondary" :disabled="store.loading || !repo" @click="reload">
+      <Button severity="secondary" :disabled="store.loading || !hasSources" @click="reload">
         <i :class="store.loading ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'" /> Refresh
       </Button>
     </div>
@@ -23,19 +23,21 @@
       <div class="filters">
         <div class="prov-tabs">
           <button
-            v-for="p in availableProviders" :key="p.value"
+            v-for="p in providerTabs" :key="p.value"
             class="prov-tab" :class="{ 'prov-tab--active': provider === p.value }"
             @click="provider = p.value"
-          ><i :class="p.icon" /> {{ p.label }}</button>
+          ><ProviderIcon v-if="p.value !== 'all'" :provider="p.value" :size="13" /><i v-else :class="p.icon" /> {{ p.label }}</button>
         </div>
 
         <Select
           v-model="repo"
           :options="repoOptions"
-          placeholder="Select repo"
+          optionLabel="label"
+          optionValue="value"
+          placeholder="All repos"
           filter
           class="filter-select"
-          :disabled="!repoOptions.length"
+          :disabled="provider === 'all'"
         />
 
         <Select v-model="stateFilter" :options="STATES" optionLabel="label" optionValue="value" class="filter-select filter-state" />
@@ -51,7 +53,7 @@
       </div>
 
       <!-- No repos configured for this provider -->
-      <div v-if="!repoOptions.length" class="hint-row">
+      <div v-if="!hasSources" class="hint-row">
         No {{ provider }} repos selected. Add some in
         <RouterLink to="/settings" class="inline-link">Settings → Issue sources</RouterLink>.
       </div>
@@ -65,10 +67,14 @@
       <!-- Empty -->
       <div v-else-if="!store.issues.length" class="hint-row">No issues match the current filters.</div>
 
-      <!-- Issue list -->
-      <div v-else class="issue-list">
-        <div v-for="it in store.issues" :key="it.number" class="issue-row" @click="openDetail(it)">
+      <!-- Issue list + pagination -->
+      <template v-else>
+      <div class="issue-list">
+        <div v-for="it in store.issues" :key="`${it.repo}#${it.number}`" class="issue-row" @click="openDetail(it)">
           <span class="state-dot" :class="`state-dot--${it.state}`" />
+          <span class="prov-tag" :class="`prov-tag--${it.provider}`">
+            <ProviderIcon :provider="it.provider" :size="11" />{{ it.provider === 'gitlab' ? 'GitLab' : 'GitHub' }}
+          </span>
           <div class="issue-main">
             <div class="issue-head">
               <span class="issue-title">{{ it.title }}</span>
@@ -89,6 +95,20 @@
           </div>
         </div>
       </div>
+
+      <!-- Pagination -->
+      <div v-if="store.pagination.page > 1 || store.pagination.has_more" class="pager">
+        <Button size="small" severity="secondary" :disabled="store.pagination.page <= 1 || store.loading" @click="goPage(store.pagination.page - 1)">
+          <i class="pi pi-chevron-left" /> Prev
+        </Button>
+        <span class="pager-info">
+          Page {{ store.pagination.page }}<span v-if="store.pagination.total != null"> · {{ store.pagination.total }} issues</span>
+        </span>
+        <Button size="small" severity="secondary" :disabled="!store.pagination.has_more || store.loading" @click="goPage(store.pagination.page + 1)">
+          Next <i class="pi pi-chevron-right" />
+        </Button>
+      </div>
+      </template>
     </template>
 
     <IssueDetailDrawer v-if="drawerIssue" :basic="drawerIssue" @close="drawerIssue = null" @pickup="openPickup" />
@@ -104,6 +124,7 @@ import Select from 'primevue/select';
 import { useIssuesStore } from '../stores/issues.js';
 import IssueDetailDrawer from '../components/issues/IssueDetailDrawer.vue';
 import PickupModal from '../components/issues/PickupModal.vue';
+import ProviderIcon from '../components/ProviderIcon.vue';
 
 const store = useIssuesStore();
 
@@ -113,13 +134,17 @@ const STATES = [
   { label: 'All', value: 'all' },
 ];
 
-const provider = ref('github');
-const repo = ref(null);
+const ALL_REPOS = '__all__'; // sentinel: aggregate across all configured repos
+
+const provider = ref('all'); // 'all' (both providers) | 'github' | 'gitlab'
+const repo = ref(ALL_REPOS);
 const stateFilter = ref('open');
 const assignedToMe = ref(false);
 const search = ref('');
+const page = ref(1);
 const drawerIssue = ref(null);
 const pickupSource = ref(null);
+let ready = false; // gates watchers until the initial load is set up
 
 const availableProviders = computed(() => {
   const out = [];
@@ -128,18 +153,35 @@ const availableProviders = computed(() => {
   return out;
 });
 const anyConnected = computed(() => availableProviders.value.length > 0);
-const repoOptions = computed(() => store.connections.sources?.[provider.value] || []);
+// Provider tabs: "All" (both providers fetched together) first, then each connected one.
+const providerTabs = computed(() => [{ label: 'All', value: 'all', icon: 'pi pi-list' }, ...availableProviders.value]);
+const hasSources = computed(() => {
+  const s = store.connections.sources || {};
+  if (provider.value === 'all') return (s.github?.length || 0) + (s.gitlab?.length || 0) > 0;
+  return (s[provider.value] || []).length > 0;
+});
+const repoOptions = computed(() => {
+  // A specific repo only makes sense within one provider; in "All" mode the
+  // repo filter is disabled (pick a provider tab to narrow to a repo).
+  if (provider.value === 'all') return [{ label: 'All repos', value: ALL_REPOS }];
+  const repos = store.connections.sources?.[provider.value] || [];
+  return [{ label: 'All repos', value: ALL_REPOS }, ...repos.map(r => ({ label: r, value: r }))];
+});
 
 function reload() {
-  if (!repo.value) { store.issues = []; return; }
+  if (!hasSources.value) { store.issues = []; return; }
   store.fetchIssues({
     provider: provider.value,
-    repo: repo.value,
+    repo: repo.value === ALL_REPOS ? '' : repo.value,
     state: stateFilter.value,
     assignee: assignedToMe.value ? '@me' : '',
     q: search.value.trim(),
+    page: page.value,
   });
 }
+
+function applyFilters() { page.value = 1; reload(); }
+function goPage(p) { if (p < 1) return; page.value = p; reload(); }
 
 function openDetail(it) { drawerIssue.value = { provider: it.provider, repo: it.repo, number: it.number, url: it.url }; }
 function openPickup(it) {
@@ -147,14 +189,16 @@ function openPickup(it) {
   pickupSource.value = { provider: it.provider, repo: it.repo, number: it.number, title: it.title };
 }
 
-watch(provider, () => { repo.value = repoOptions.value[0] || null; });
-watch([repo, stateFilter, assignedToMe], reload);
+watch(provider, () => { if (!ready) return; repo.value = ALL_REPOS; applyFilters(); });
+watch([repo, stateFilter, assignedToMe], () => { if (ready) applyFilters(); });
 
 onMounted(async () => {
   await store.fetchConnections();
-  if (availableProviders.value.length) provider.value = availableProviders.value[0].value;
-  repo.value = repoOptions.value[0] || null;
-  if (repo.value) reload();
+  provider.value = 'all'; // fetch GitHub + GitLab together by default
+  repo.value = ALL_REPOS;
+  page.value = 1;
+  ready = true;
+  reload();
 });
 </script>
 
@@ -192,6 +236,10 @@ onMounted(async () => {
 .issue-head { display: flex; align-items: baseline; gap: 8px; }
 .issue-title { font-size: 13px; color: var(--jg-text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .issue-ref { font-size: 11px; color: var(--jg-text-faint); font-family: var(--font-mono); flex-shrink: 0; }
+.prov-tag { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 4px; border: 1px solid transparent; }
+.prov-tag .pi { font-size: 10px; }
+.prov-tag--github { color: #d2a8ff; border-color: color-mix(in oklch, #d2a8ff 38%, transparent); background: color-mix(in oklch, #d2a8ff 12%, transparent); }
+.prov-tag--gitlab { color: var(--jg-orange, #fc6d26); border-color: color-mix(in oklch, var(--jg-orange, #fc6d26) 40%, transparent); background: color-mix(in oklch, var(--jg-orange, #fc6d26) 12%, transparent); }
 .issue-sub { display: flex; align-items: center; gap: 8px; margin-top: 3px; overflow: hidden; }
 .label-chip { font-size: 9px; padding: 1px 6px; border: 1px solid var(--jg-border); border-radius: 10px; color: var(--jg-text-muted); white-space: nowrap; flex-shrink: 0; }
 .sub-dim { font-size: 10px; color: var(--jg-text-faint); white-space: nowrap; flex-shrink: 0; }
@@ -199,4 +247,7 @@ onMounted(async () => {
 .issue-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .icon-link { color: var(--jg-text-faint); }
 .icon-link:hover { color: var(--jg-cyan); }
+
+.pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
+.pager-info { font-size: 11px; color: var(--jg-text-muted); font-family: var(--font-mono); }
 </style>

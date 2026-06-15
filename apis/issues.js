@@ -9,6 +9,8 @@ const { Router } = require('express');
 const providers = require('../lib/issue-providers');
 
 const CACHE_TTL = 60_000; // 60s — keep the list/detail views responsive.
+const PER_PAGE = 20;      // issues per page in the list view.
+const AGG_PER_REPO = 50;  // newest issues fetched per repo for the aggregate view.
 
 module.exports = function (deps) {
   const { webState } = deps;
@@ -94,29 +96,66 @@ module.exports = function (deps) {
   });
 
   // GET /api/issues?provider=&repo=&state=&label=&assignee=&q=&page=
+  // - provider=github|gitlab + repo: per-page pagination from that repo.
+  // - provider=github|gitlab, no repo: aggregate that provider's configured repos.
+  // - provider=all (or omitted): aggregate across BOTH providers' configured repos.
+  // Aggregated views merge the newest issues, sort newest-first, then paginate.
   router.get('/issues', async (req, res) => {
-    const provider = requireProvider(req, res); if (!provider) return;
-    const token = tokenFor(provider);
-    if (!token) return res.status(400).json({ error: { code: 'NO_TOKEN', message: `No ${provider} token configured.` } });
+    const provider = String(req.query.provider || 'all').trim() || 'all';
+    if (!['all', 'github', 'gitlab'].includes(provider)) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'provider must be all, github or gitlab' } });
+    }
     const repo = String(req.query.repo || '').trim();
-    if (!repo) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'repo required' } });
-
     const state = String(req.query.state || 'open');
     const label = String(req.query.label || '');
-    let assignee = String(req.query.assignee || '');
+    const assigneeMe = String(req.query.assignee || '') === '@me';
+    const assigneeLiteral = assigneeMe ? '' : String(req.query.assignee || '');
     const q = String(req.query.q || '');
-    const page = parseInt(req.query.page, 10) || 1;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
 
     try {
-      const prov = providers.getProvider(provider);
-      // "@me" → the token owner's username (filter "assigned to me").
-      if (assignee === '@me') {
-        const viewer = await cached(`viewer:${provider}`, () => prov.getViewer(token));
-        assignee = viewer.login;
+      // Single repo → real per-page pagination (provider must be explicit).
+      if (repo) {
+        if (provider === 'all') return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'provider required when repo is set' } });
+        const token = tokenFor(provider);
+        if (!token) return res.status(400).json({ error: { code: 'NO_TOKEN', message: `No ${provider} token configured.` } });
+        const prov = providers.getProvider(provider);
+        let assignee = assigneeLiteral;
+        if (assigneeMe) { const v = await cached(`viewer:${provider}`, () => prov.getViewer(token)); assignee = v.login; }
+        const key = `issues:${provider}:${repo}:${state}:${label}:${assignee}:${q}:${page}`;
+        const issues = await cached(key, () => prov.listIssues(token, { repo, state, label, assignee, q, page, perPage: PER_PAGE }));
+        return res.json({ issues, page, per_page: PER_PAGE, has_more: issues.length === PER_PAGE });
       }
-      const key = `issues:${provider}:${repo}:${state}:${label}:${assignee}:${q}:${page}`;
-      const issues = await cached(key, () => prov.listIssues(token, { repo, state, label, assignee, q, page }));
-      res.json({ issues });
+
+      // Aggregate across the selected provider(s) and their configured repos.
+      const wantProviders = provider === 'all' ? ['github', 'gitlab'] : [provider];
+      const sources = webState.getIssueSources();
+      const sig = wantProviders.map(p => `${p}:${(sources[p] || []).join(',')}`).join('|');
+      const aggKey = `agg:${sig}:${state}:${label}:${assigneeMe ? '@me' : assigneeLiteral}:${q}`;
+
+      const merged = await cached(aggKey, async () => {
+        const all = [];
+        for (const pv of wantProviders) {
+          const token = tokenFor(pv);
+          if (!token) continue;
+          const repos = sources[pv] || [];
+          if (!repos.length) continue;
+          const prov = providers.getProvider(pv);
+          let assignee = assigneeLiteral;
+          if (assigneeMe) { try { assignee = (await prov.getViewer(token)).login; } catch { continue; } }
+          for (const r of repos) {
+            try {
+              const items = await prov.listIssues(token, { repo: r, state, label, assignee, q, page: 1, perPage: AGG_PER_REPO });
+              all.push(...items);
+            } catch { /* skip a repo the token can't access */ }
+          }
+        }
+        all.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+        return all;
+      });
+      const start = (page - 1) * PER_PAGE;
+      const slice = merged.slice(start, start + PER_PAGE);
+      res.json({ issues: slice, page, per_page: PER_PAGE, has_more: merged.length > start + PER_PAGE, total: merged.length });
     } catch (err) { sendErr(res, err); }
   });
 

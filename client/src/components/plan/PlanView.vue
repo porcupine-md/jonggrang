@@ -93,7 +93,7 @@
                 :title="`${plan.source_issue.repo}#${plan.source_issue.number}`"
                 @click.stop
               >
-                <i :class="plan.source_issue.provider === 'gitlab' ? 'pi pi-gitlab' : 'pi pi-github'" />#{{ plan.source_issue.number }}
+                <ProviderIcon :provider="plan.source_issue.provider" :size="10" />#{{ plan.source_issue.number }}
               </a>
             </div>
           </div>
@@ -335,6 +335,7 @@ import { useProjectsStore } from '../../stores/projects.js';
 import { useWsStore } from '../../stores/ws.js';
 import { useOrchestrationStore } from '../../stores/orchestration.js';
 import { usePickupStore } from '../../stores/pickup.js';
+import ProviderIcon from '../ProviderIcon.vue';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);

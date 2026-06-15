@@ -4,7 +4,7 @@
       <div class="drawer-header">
         <div class="drawer-head-left">
           <span class="prov-badge" :class="`prov-badge--${basic.provider}`">
-            <i :class="basic.provider === 'github' ? 'pi pi-github' : 'pi pi-gitlab'" />
+            <ProviderIcon :provider="basic.provider" :size="14" />
             {{ basic.repo }}#{{ basic.number }}
           </span>
         </div>
@@ -57,6 +57,7 @@ import { ref, computed, onMounted } from 'vue';
 import Button from 'primevue/button';
 import { marked } from 'marked';
 import { useIssuesStore } from '../../stores/issues.js';
+import ProviderIcon from '../ProviderIcon.vue';
 
 const props = defineProps({ basic: { type: Object, required: true } });
 defineEmits(['close', 'pickup']);
@@ -91,7 +92,7 @@ onMounted(async () => {
 .drawer { width: 560px; max-width: 92vw; height: 100%; background: var(--jg-card); border-left: 1px solid var(--jg-border); display: flex; flex-direction: column; }
 .drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--jg-border); flex-shrink: 0; }
 .prov-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-family: var(--font-mono); color: var(--jg-text-muted); }
-.prov-badge--github { color: var(--jg-text); }
+.prov-badge--github { color: #d2a8ff; }
 .prov-badge--gitlab { color: var(--jg-orange, #fc6d26); }
 .drawer-close { background: none; border: none; color: var(--jg-text-faint); cursor: pointer; padding: 4px; }
 .drawer-close:hover { color: var(--jg-text); }

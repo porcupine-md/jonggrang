@@ -6,6 +6,7 @@ import { ref } from 'vue';
 export const useIssuesStore = defineStore('issues', () => {
   const connections = ref({ has_gh: false, has_gitlab: false, sources: { github: [], gitlab: [] } });
   const issues = ref([]);
+  const pagination = ref({ page: 1, has_more: false, total: null });
   const loading = ref(false);
   const error = ref('');
 
@@ -33,22 +34,26 @@ export const useIssuesStore = defineStore('issues', () => {
     return d.sources;
   }
 
+  // repo omitted/empty → aggregate newest issues across all configured repos.
   async function fetchIssues({ provider, repo, state, label, assignee, q, page } = {}) {
-    if (!provider || !repo) { issues.value = []; return; }
+    if (!provider) { issues.value = []; return; }
     loading.value = true; error.value = '';
     try {
-      const params = new URLSearchParams({ provider, repo });
+      const params = new URLSearchParams({ provider });
+      if (repo) params.set('repo', repo);
       if (state) params.set('state', state);
       if (label) params.set('label', label);
       if (assignee) params.set('assignee', assignee);
       if (q) params.set('q', q);
-      if (page) params.set('page', String(page));
+      params.set('page', String(page || 1));
       const r = await fetch(`/api/issues?${params.toString()}`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error?.message || 'Failed to load issues');
       issues.value = d.issues || [];
+      pagination.value = { page: d.page || 1, has_more: !!d.has_more, total: d.total ?? null };
     } catch (e) {
       error.value = e.message; issues.value = [];
+      pagination.value = { page: 1, has_more: false, total: null };
     } finally {
       loading.value = false;
     }
@@ -75,7 +80,7 @@ export const useIssuesStore = defineStore('issues', () => {
   }
 
   return {
-    connections, issues, loading, error,
+    connections, issues, pagination, loading, error,
     fetchConnections, searchRepos, saveSources, fetchIssues, fetchDetail, pickup,
   };
 });
