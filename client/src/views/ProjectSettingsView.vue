@@ -25,6 +25,14 @@
           </div>
           <div v-if="cfgError" class="error-text">{{ cfgError }}</div>
           <div v-if="cfgSaved" class="saved-text"><i class="pi pi-check" /> Saved</div>
+          <div v-if="rebuildDone" class="saved-text"><i class="pi pi-check" /> Sandbox rebuilt — editor change applied</div>
+          <div v-if="rebuildPrompt" class="rebuild-prompt">
+            <i class="pi pi-exclamation-triangle" />
+            <span>Editor change needs a sandbox rebuild to take effect.</span>
+            <Button size="small" :disabled="rebuilding" @click="rebuildSandbox">
+              <i :class="rebuilding ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'" /> {{ rebuilding ? 'Rebuilding…' : 'Rebuild now' }}
+            </Button>
+          </div>
           <div class="section-footer">
             <Button size="small" :disabled="cfgSaving" @click="saveConfig">
               <i class="pi pi-save" /> {{ cfgSaving ? 'Saving...' : 'Save Config' }}
@@ -207,6 +215,10 @@ const codeEditorOptions = [
 const cfgSaving = ref(false);
 const cfgError = ref('');
 const cfgSaved = ref(false);
+// Editor change → sandbox needs a recreate to publish/unpublish the editor port (issue #56).
+const rebuildPrompt = ref(false);
+const rebuilding = ref(false);
+const rebuildDone = ref(false);
 
 const sbx = reactive({ enabled: false, image: '', shell: '', network: '', volumes: [] });
 const globalSbx = reactive({ image: '', shell: '', network: '', volumes: [] });
@@ -305,12 +317,30 @@ async function saveConfig() {
       body: JSON.stringify({ jonggrang_config: { tool: cfg.tool, autonomy: cfg.autonomy }, code_editor: codeEditor.value }),
     });
     if (!res.ok) throw new Error('Save failed');
+    const data = await res.json().catch(() => ({}));
     cfgSaved.value = true;
+    rebuildPrompt.value = !!data.sandbox_rebuild_required;
     setTimeout(() => { cfgSaved.value = false; }, 2000);
   } catch (e) {
     cfgError.value = e.message;
   } finally {
     cfgSaving.value = false;
+  }
+}
+
+async function rebuildSandbox() {
+  rebuilding.value = true;
+  cfgError.value = '';
+  try {
+    const r = await fetch(`/api/projects/${projectId.value}/sandbox/rebuild`, { method: 'POST' });
+    if (!r.ok && r.status !== 202) throw new Error('Rebuild failed');
+    rebuildPrompt.value = false;
+    rebuildDone.value = true;
+    setTimeout(() => { rebuildDone.value = false; }, 3000);
+  } catch (e) {
+    cfgError.value = e.message;
+  } finally {
+    rebuilding.value = false;
   }
 }
 
@@ -477,6 +507,8 @@ async function saveSecrets() {
 .link { color: var(--jg-cyan); text-decoration: none; font-size: 12px; }
 .link:hover { text-decoration: underline; }
 .saved-text { font-size: 11px; color: var(--jg-green); display: flex; align-items: center; gap: 4px; }
+.rebuild-prompt { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 8px 10px; font-size: 11px; color: var(--jg-orange); background: color-mix(in oklch, var(--jg-orange) 10%, transparent); border: 1px solid color-mix(in oklch, var(--jg-orange) 30%, transparent); border-radius: var(--radius); }
+.rebuild-prompt span { flex: 1; }
 
 /* SSH key */
 .ssh-status { font-size: 12px; color: var(--jg-text-muted); margin-bottom: 4px; }
