@@ -12,6 +12,27 @@ module.exports = function(deps) {
     const { fs, path, webState, orchestration, spawnForProject, wireProjectProcess } = deps;
     const router = Router();
 
+    // Extract a source-issue link from plan content (feature #55). Tries the
+    // machine-readable marker first, then falls back to any GitHub/GitLab issue
+    // URL — robust even if the planner rewrote the body during generation.
+    function parseSourceIssue(content) {
+        if (!content) return null;
+        const m = content.match(/<!--\s*jonggrang-source:\s*(\{.*?\})\s*-->/);
+        if (m) {
+            try {
+                const o = JSON.parse(m[1]);
+                if (o && o.provider && o.repo && o.number) {
+                    return { provider: o.provider, repo: o.repo, number: o.number, url: o.url || null };
+                }
+            } catch {}
+        }
+        const gh = content.match(/https?:\/\/github\.com\/([^/\s)]+\/[^/\s)]+)\/issues\/(\d+)/);
+        if (gh) return { provider: 'github', repo: gh[1], number: parseInt(gh[2], 10), url: gh[0] };
+        const gl = content.match(/https?:\/\/gitlab\.com\/(.+?)\/-\/issues\/(\d+)/);
+        if (gl) return { provider: 'gitlab', repo: gl[1], number: parseInt(gl[2], 10), url: gl[0] };
+        return null;
+    }
+
     function extractPlanTitle(content) {
         const firstLine = content.split('\n').find(l => l.trim());
         if (!firstLine) return 'Untitled Plan';
@@ -38,7 +59,7 @@ module.exports = function(deps) {
             try {
                 const content = fs.readFileSync(draftPath, 'utf-8');
                 const mtime = fs.statSync(draftPath).mtimeMs;
-                plans.push({ id: 'draft', title: extractPlanTitle(content), status: 'draft', mtime, content });
+                plans.push({ id: 'draft', title: extractPlanTitle(content), status: 'draft', mtime, content, source_issue: parseSourceIssue(content) });
             } catch {}
         }
 
@@ -115,6 +136,7 @@ module.exports = function(deps) {
                         status, mtime, work_type, content, branch,
                         run_status: rg?.status || null,
                         pushed: !!rg?.pushed,
+                        source_issue: parseSourceIssue(content),
                     });
                 }
             } catch {}

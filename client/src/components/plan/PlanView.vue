@@ -84,6 +84,17 @@
                 class="plan-badge"
                 :class="runBadgeOf(plan) === 'live' ? 'plan-badge--run-live' : 'plan-badge--run-failed'"
               >{{ runBadgeOf(plan) }}</span>
+              <a
+                v-if="plan.source_issue"
+                class="src-issue-link"
+                :href="plan.source_issue.url"
+                target="_blank"
+                rel="noopener"
+                :title="`${plan.source_issue.repo}#${plan.source_issue.number}`"
+                @click.stop
+              >
+                <i :class="plan.source_issue.provider === 'gitlab' ? 'pi pi-gitlab' : 'pi pi-github'" />#{{ plan.source_issue.number }}
+              </a>
             </div>
           </div>
         </div>
@@ -323,12 +334,26 @@ import { useLogTerminal } from '../../composables/useLogTerminal.js';
 import { useProjectsStore } from '../../stores/projects.js';
 import { useWsStore } from '../../stores/ws.js';
 import { useOrchestrationStore } from '../../stores/orchestration.js';
+import { usePickupStore } from '../../stores/pickup.js';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
 const projects = useProjectsStore();
 const ws = useWsStore();
 const orch = useOrchestrationStore();
+const pickup = usePickupStore();
+
+// Issue pickup (feature #55): if an issue was picked up into this project, open
+// the New-Plan form already filled with the issue title/body + source link.
+function applyPickupPrefill() {
+  const p = pickup.consumePrefill(projectId.value);
+  if (!p) return;
+  description.value = p.description;
+  deep.value = false;
+  genError.value = '';
+  selectedPlan.value = null;
+  showNewPlanForm.value = true;
+}
 
 const project = computed(() => projects.byId[projectId.value]);
 const state = computed(() => project.value?.derived_state?.state || 'idle');
@@ -673,6 +698,7 @@ onMounted(async () => {
   await loadPlans();
   await loadProjectTool();
   loadBase();
+  applyPickupPrefill();
 
   // Live run badges: always re-hydrate from the server so a group that
   // finished while on another view doesn't keep a stale "live" badge.
@@ -791,6 +817,9 @@ watch(projectId, loadPlans);
 .plan-badge { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; padding: 1px 5px; }
 .plan-badge--run-live { background: color-mix(in oklch, var(--jg-green) 20%, transparent); color: var(--jg-green); animation: livePulse 1.2s infinite; }
 .plan-badge--run-failed { background: color-mix(in oklch, var(--jg-red) 15%, transparent); color: var(--jg-red); }
+.src-issue-link { display: inline-flex; align-items: center; gap: 2px; font-size: 9px; color: var(--jg-text-faint); text-decoration: none; }
+.src-issue-link:hover { color: var(--jg-cyan); }
+.src-issue-link .pi { font-size: 9px; }
 @keyframes livePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
 
 /* Push plans → base branch */

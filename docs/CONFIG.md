@@ -362,3 +362,35 @@ Persistent orchestration state for a feature run. Located at:
 > They are injected as default env into every sandbox container/agent so the `gh` and
 > `glab` CLIs are pre-authenticated. The dashboard never returns the stored values — only
 > whether each is set. A per-project secret with the same name overrides the global token.
+
+## Issue import (`~/.jonggrang/web/index.json`)
+
+The **Issues** menu (import GitHub/GitLab issues → plans) reuses the Git Host
+Tokens above (falling back to the `GH_TOKEN` / `GITHUB_TOKEN` / `GITLAB_TOKEN`
+process env) and stores two extra keys in the web index:
+
+```jsonc
+{
+  // selected repos to list issues from (Settings → Issue Sources)
+  "issue_sources": {
+    "github": ["owner/repo", "org/another"],
+    "gitlab": ["group/project"]            // namespace path, url-encoded on use
+  },
+  // mapping of each picked-up issue → the project it seeded (for linking / sync)
+  "issue_pickups": [
+    {
+      "id": "pickup_…", "provider": "github", "repo": "owner/repo", "number": 55,
+      "url": "https://github.com/owner/repo/issues/55", "title": "…",
+      "labels": ["enhancement"], "assignees": ["alice"],
+      "project_id": "proj_…", "feature_id": null,
+      "imported_at": "ISO", "synced_at": null, "remote_state": "open"
+    }
+  ]
+}
+```
+
+Issue fetching uses native `fetch` against the GitHub/GitLab REST APIs (no `gh`/`glab`
+CLI dependency). The created plan references its source issue via a marker comment
+(`<!-- jonggrang-source: {…} -->`) plus a visible `Imported from issue owner/repo#N`
+link in the plan body; the plans list parses either to show a link on the plan card.
+See [`docs/UI.md`](UI.md) for the menu/flow.

@@ -469,6 +469,16 @@ Plan: simple-api      (task-001..005, blocked_by chain) → worktree feat/simple
 Plan: version-endpoint(task-006..009, blocked_by chain) → worktree feat/version-endpoint (parallel with the above)
 ```
 
+### Issues — import GitHub/GitLab issues as plans (feature #55)
+
+The top-level **Issues** menu lists issues from user-selected GitHub & GitLab repos and turns them into plans, without leaving the dashboard.
+
+- **Auth**: reuses the global **Git Host Tokens** (`GH_TOKEN` / `GITLAB_TOKEN`), with `GITHUB_TOKEN`/env fallback. Issue fetching is native `fetch` against the REST APIs (`lib/issue-providers.js`) — no `gh`/`glab` CLI dependency. GitLab uses `Authorization: Bearer`, which accepts both PATs and OAuth tokens.
+- **Repo picker**: Settings → **Issue Sources** searches the repos a token can access and persists the selected list (`issue_sources` in the web index). The Issues page lists issues from those repos with provider/state/label/assignee/search filters (`assigned-to-me` resolves the token owner) and a detail drawer (body + comments + link back). Responses are cached ~60s.
+- **Pickup → Plan**: the **Pickup** action does *not* change plan-creation UX — it **pre-fills the existing "New Plan" form** with the issue title/body + a source-issue reference, then the user runs the normal generate → revise → approve flow. *Existing Project* routes straight to that project's pre-filled plan form; *New Project* launches the import wizard and finalizes the pickup once the project is initialized. The prefill is carried in-memory via a small `pickup` store (no large issue body in the URL).
+- **Linking**: the created plan keeps a source marker (`<!-- jonggrang-source: {…} -->`) plus a visible `Imported from issue owner/repo#N` link; `GET /:id/plans` parses either (marker first, issue-URL fallback) so the plan card shows a "↗ repo#N" link. A `issue_pickups` mapping is persisted for optional one-way sync (`POST /api/issues/sync`).
+- **CLI**: `jonggrang issues list [--provider …] [--repo owner/repo] [--state …]` and `jonggrang issues pickup <github|gitlab> <owner/repo> <number>` (generates a plan from the issue in the current project).
+
 ### File Ownership
 
 **Rule: One file, one owner.** Lock files in `.jonggrang/locks/` prevent race conditions. When an agent writes a file, it registers a lock. Other agents check locks before writing.
