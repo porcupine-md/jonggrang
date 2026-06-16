@@ -21,7 +21,8 @@
           </label>
           <label class="deep-label" style="gap:6px" title="Branch the worktree is cut from (fetched fresh from origin)">
             base:
-            <Select v-model="selectedBase" :options="availableBranches" :filter="availableBranches.length > 8"
+            <Select v-model="selectedBase" :options="availableBranches" filter resetFilterOnHide
+                    filterPlaceholder="search branch…" scrollHeight="240px"
                     placeholder="base branch" class="base-select" />
           </label>
           <div style="flex:1" />
@@ -155,7 +156,8 @@
               </label>
               <label class="deep-label" style="gap:6px" title="Branch the worktree is cut from (fetched fresh from origin)">
                 base:
-                <Select v-model="selectedBase" :options="availableBranches" :filter="availableBranches.length > 8"
+                <Select v-model="selectedBase" :options="availableBranches" filter resetFilterOnHide
+                        filterPlaceholder="search branch…" scrollHeight="240px"
                         placeholder="base branch" class="base-select" />
               </label>
               <div style="flex:1" />
