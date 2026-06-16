@@ -87,6 +87,20 @@ module.exports = function(deps) {
         return execFileSync('git', argv, { cwd, encoding: 'utf8', maxBuffer: GIT_MAXBUF });
     }
 
+    // Copy paths between two container-absolute locations, run as root INSIDE
+    // the container. In sandbox mode every file the run produces lands in a
+    // root-owned bind mount, so the host (a different uid) can't write into it
+    // — seeding/mirroring must happen in-container or it EACCESes. `items` is a
+    // list of {src, dst} container-absolute paths; missing srcs are skipped.
+    function containerCopy(ctx, items) {
+        if (!items.length) return;
+        const script = items.map(({ src, dst }) =>
+            `if [ -e "${src}" ]; then mkdir -p "$(dirname "${dst}")" && cp -a "${src}" "${dst}"; fi`
+        ).join('; ');
+        execFileSync('docker', ['exec', ctx.container, 'sh', '-c', script],
+            { encoding: 'utf8', maxBuffer: GIT_MAXBUF });
+    }
+
     // Container-only: ensure git is usable on the bind-mounted repo
     // and a committer identity exists.
     function prepareContainerGit(ctx) {
@@ -206,8 +220,17 @@ module.exports = function(deps) {
             };
         }
         const made = createWorktreeCtx(ctx, info);
-        // Seed working state via host fs (bind-mounted → visible in container).
-        lib.copyToWorktree(project.path, made.hostWorktreePath, COPY_INTO_WORKTREE);
+        // Seed working state. Sandbox: copy IN the container (root) — the worktree
+        // dir was created by the container and is root-owned, so a host-fs copy
+        // would EACCES. Host: plain fs copy.
+        if (ctx.mode === 'container') {
+            containerCopy(ctx, COPY_INTO_WORKTREE.map((rel) => ({
+                src: `${ctx.root}/${rel}`,
+                dst: `${made.worktreePath}/${rel}`,
+            })));
+        } else {
+            lib.copyToWorktree(project.path, made.hostWorktreePath, COPY_INTO_WORKTREE);
+        }
         // Base commit so the diff (vs baseSha) shows ONLY work done in the worktree.
         let effectiveBase = made.baseSha;
         try {
@@ -221,14 +244,6 @@ module.exports = function(deps) {
         };
         writeWorktreeMeta(project, all);
         return { ...made, baseSha: effectiveBase, created: true };
-    }
-
-    // Does the container have an ssh client?
-    function containerHasSsh(container) {
-        return new Promise((resolve) => {
-            execFile('docker', ['exec', container, 'sh', '-c', 'command -v ssh >/dev/null 2>&1 && echo yes || echo no'],
-                { timeout: 10000 }, (err, stdout) => resolve(!err && /yes/.test(String(stdout))));
-        });
     }
 
     // In-container push using the mounted SSH key (staged to a root-owned 0600 file).
@@ -251,18 +266,15 @@ module.exports = function(deps) {
         });
     }
 
-    // Push a branch. Host → host git. Container → in-container SSH push when the
-    // image has an ssh client + a mounted key; otherwise fall back to host-side
-    // push (the branch ref + objects live in the bind-mounted .git, and the host
-    // has ssh/credentials — verified to work regardless of the image).
+    // Push a branch. Host → host git. Container → in-container SSH push using
+    // the mounted key (the agent image ships an ssh client and stages the key
+    // on start). NO host fallback: in sandbox mode the push stays sandboxed —
+    // a missing key/remote surfaces as an error instead of silently using the
+    // host's credentials.
     function pushBranchCtx(ctx, project) {
         return async (branch) => {
             if (ctx.mode === 'container') {
-                const hasKey = !!sandbox.resolveProjectSshKey(project.id);
-                if (hasKey && await containerHasSsh(ctx.container)) {
-                    return containerPush(ctx, branch);
-                }
-                return lib.pushBranch(project.path, branch); // host fallback
+                return containerPush(ctx, branch);
             }
             return lib.pushBranch(ctx.root, branch);
         };
@@ -447,7 +459,7 @@ module.exports = function(deps) {
     // project so the project's file watcher emits `manifest.updated` and the
     // pipeline view advances live (Implement → … → Complete) instead of
     // stalling at the phase it was seeded with.
-    function syncManifest(project, group) {
+    function syncManifest(project, ctx, group) {
         try {
             const base = group.hostWorktreePath || group.worktreePath;
             if (!base) return;
@@ -459,8 +471,19 @@ module.exports = function(deps) {
             let cur = null;
             try { cur = fs.readFileSync(dst); } catch { /* missing */ }
             if (cur && cur.equals(data)) return; // unchanged → don't churn the watcher
-            fs.mkdirSync(path.dirname(dst), { recursive: true });
-            fs.writeFileSync(dst, data);
+            if (ctx.mode === 'container') {
+                // The main project's feature dir was created by the in-container
+                // decompose (root-owned), so mirror IN the container — a host
+                // write would EACCES. Keeps every sandbox write in the sandbox.
+                const srcC = path.join(group.worktreePath, rel);
+                const dstC = path.join(ctx.root, rel);
+                execFileSync('docker', ['exec', ctx.container, 'sh', '-c',
+                    `mkdir -p "$(dirname "${dstC}")" && cp -a "${srcC}" "${dstC}"`],
+                    { encoding: 'utf8', maxBuffer: GIT_MAXBUF });
+            } else {
+                fs.mkdirSync(path.dirname(dst), { recursive: true });
+                fs.writeFileSync(dst, data);
+            }
         } catch (err) {
             console.error('orchestration syncManifest error:', err.message);
         }
@@ -470,7 +493,7 @@ module.exports = function(deps) {
         const child = group.child;
         group.pid = child.pid;
         // Live-mirror the worktree manifest → main project while the worker runs.
-        group.manifestSync = setInterval(() => syncManifest(project, group), 1500);
+        group.manifestSync = setInterval(() => syncManifest(project, ctx, group), 1500);
         let buf = '';
         const onData = (stream) => (data) => {
             buf += data.toString();
@@ -499,7 +522,7 @@ module.exports = function(deps) {
             group.exitCode = code;
             group.finishedAt = new Date().toISOString();
             if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
-            syncManifest(project, group); // final state (e.g. completed) → main project
+            syncManifest(project, ctx, group); // final state (e.g. completed) → main project
             if (code === 0) {
                 try {
                     group.committed = commitWorktreeCtx(ctx, group.worktreePath, `feat(${group.featureId}): ${group.title}`);
@@ -787,6 +810,10 @@ module.exports = function(deps) {
         if (!lib.hasRemote(project.path)) {
             return res.status(422).json({ error: { code: 'NO_REMOTE', message: 'No "origin" remote configured' } });
         }
+
+        // Sandbox commit + push run via `docker exec` — make sure the container
+        // is up first (no host fallback). No-op for host projects.
+        if (!await readyCtx(project, ctx, res)) return;
 
         const run = activeRuns.get(project.id);
         const g = groupView(project, req.params.featureId);
