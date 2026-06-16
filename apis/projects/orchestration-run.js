@@ -127,17 +127,20 @@ module.exports = function(deps) {
         return { worktreePath: wt, hostWorktreePath: ctx.hostWt(g.featureId), branch, baseSha };
     }
 
-    // Paths kept OUT of feature-branch commits and the run diff: jonggrang's
-    // own runtime state (seeded into every worktree, tracked on main via "Push
-    // plans") and installed dependencies. Feature branches carry CODE only —
-    // otherwise merged PRs drag .jonggrang/jonggrang-tasks.json + node_modules
-    // into main and later collide with local state on rebase.
-    const DIFF_EXCLUDES = [':(exclude).jonggrang', ':(exclude).jonggrang/**', ':(exclude)node_modules', ':(exclude)node_modules/**'];
+    // Paths kept OUT of feature-branch commits and the run diff. jonggrang seeds
+    // its own scaffold + runtime (COPY_INTO_WORKTREE) into every worktree so the
+    // agent has its config + skills; none of it is the user's code. If any of it
+    // lands in a feature commit, merging the PR drags jonggrang's scaffold
+    // (.claude, .codex, .opencode, hooks, AGENTS.md, CLAUDE.md) and runtime state
+    // onto main. Derive the exclude set from the seeded list (single source of
+    // truth) + installed deps, so this can never drift from what we seed.
+    const SEEDED_PATHS = [...new Set(COPY_INTO_WORKTREE.map(p => p.split('/')[0])), 'node_modules'];
+    const DIFF_EXCLUDES = SEEDED_PATHS.flatMap(p => [`:(exclude)${p}`, `:(exclude)${p}/**`]);
 
     function commitWorktreeCtx(ctx, wt, message) {
         gitSync(ctx, wt, ['add', '-A']);
-        // Unstage runtime state + deps so the feature commit is code-only.
-        try { gitSync(ctx, wt, ['reset', '-q', '--', '.jonggrang', 'node_modules']); } catch {}
+        // Unstage seeded scaffold + deps so the feature commit is code-only.
+        try { gitSync(ctx, wt, ['reset', '-q', '--', ...SEEDED_PATHS]); } catch {}
         const staged = gitSync(ctx, wt, ['diff', '--cached', '--name-only']).trim();
         if (!staged) return false;
         gitSync(ctx, wt, ['commit', '-m', message, '-m', lib.COAUTHOR_TRAILER]);
