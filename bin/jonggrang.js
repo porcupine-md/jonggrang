@@ -1016,11 +1016,14 @@ async function cmdPlan(args, opts = {}) {
   let autoApprove = false;
   let deepMode = false;
   let reviseMode = false;
+  let baseBranch = '';
 
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--yes' || arg === '-y') autoApprove = true;
     else if (arg === '--deep') deepMode = true;
     else if (arg === '--revise') reviseMode = true;
+    else if (arg === '--base') baseBranch = args[++i] || '';
     else if (!arg.startsWith('--')) description = arg;
   }
 
@@ -1193,6 +1196,11 @@ async function cmdPlan(args, opts = {}) {
     const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
   }
+
+  // The base branch (worktree start-point) is a deterministic user choice, so
+  // write it into the generated plan.md frontmatter (overriding anything the AI
+  // may have put there). Covers both deep + standard generation paths above.
+  if (baseBranch && lib.fileExists(PLAN_FILE)) lib.setPlanBase(PLAN_FILE, baseBranch);
 
   if (autoApprove) {
     logInfo('Auto-approving plan (--yes)...');

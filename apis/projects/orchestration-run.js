@@ -19,6 +19,7 @@ const path = require('path');
 
 const lib = require('../../lib/jonggrang');
 const sandbox = require('../../lib/sandbox');
+const sandboxGit = require('../../lib/sandbox-git');
 
 const LOG_TAIL_MAX = 200;
 const GIT_MAXBUF = 1024 * 1024 * 64;
@@ -117,6 +118,22 @@ module.exports = function(deps) {
         }
     }
 
+    // Resolve the worktree start-point. If the plan picked a base branch, fetch
+    // it from origin and branch off the FRESH remote tip (FETCH_HEAD) so the
+    // worktree always starts from the latest remote (fetch is non-interactive +
+    // uses the sandbox SSH key via sandbox-git). Falls back to the local branch,
+    // then HEAD, if the fetch fails (offline / no such remote branch / no base).
+    function resolveStartRef(ctx, base) {
+        if (!base) return 'HEAD';
+        try {
+            sandboxGit.gitShell(ctx, `fetch origin "${base}"`);
+            return 'FETCH_HEAD';
+        } catch {
+            try { gitSync(ctx, ctx.root, ['rev-parse', '--verify', `refs/heads/${base}`]); return base; }
+            catch { return 'HEAD'; }
+        }
+    }
+
     function createWorktreeCtx(ctx, g) {
         const wt = ctx.wt(g.featureId);
         const branch = g.branch;
@@ -126,8 +143,9 @@ module.exports = function(deps) {
         try { gitSync(ctx, ctx.root, ['worktree', 'remove', `${ctx.root}/.jonggrang/.worktree/${g.featureId}`, '--force']); } catch {}
         try { gitSync(ctx, ctx.root, ['branch', '-D', branch]); } catch {}
         try { fs.mkdirSync(path.dirname(ctx.hostWt(g.featureId)), { recursive: true }); } catch {}
-        const baseSha = gitSync(ctx, ctx.root, ['rev-parse', 'HEAD']).trim();
-        gitSync(ctx, ctx.root, ['worktree', 'add', '-b', branch, wt, 'HEAD']);
+        const startRef = resolveStartRef(ctx, g.base);
+        const baseSha = gitSync(ctx, ctx.root, ['rev-parse', startRef]).trim();
+        gitSync(ctx, ctx.root, ['worktree', 'add', '-b', branch, wt, startRef]);
         return { worktreePath: wt, hostWorktreePath: ctx.hostWt(g.featureId), branch, baseSha };
     }
 
@@ -210,6 +228,7 @@ module.exports = function(deps) {
         return {
             featureId,
             branch: fm.branch || `jonggrang/${featureId}`,
+            base: fm.base || '',
             title: fm.feature || fm.description || featureId,
         };
     }

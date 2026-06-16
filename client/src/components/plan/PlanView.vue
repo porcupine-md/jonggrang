@@ -19,6 +19,11 @@
             <input type="checkbox" v-model="deep" />
             Deep analysis
           </label>
+          <label class="deep-label" style="gap:6px" title="Branch the worktree is cut from (fetched fresh from origin)">
+            base:
+            <Select v-model="selectedBase" :options="availableBranches" :filter="availableBranches.length > 8"
+                    placeholder="base branch" class="base-select" />
+          </label>
           <div style="flex:1" />
           <button class="tool-config-btn" @click="openToolModal">
             <span>{{ TOOLS.find(t => t.value === selectedTool)?.label || 'Configure' }}</span>
@@ -147,6 +152,11 @@
               <label class="deep-label">
                 <input type="checkbox" v-model="deep" />
                 Deep analysis
+              </label>
+              <label class="deep-label" style="gap:6px" title="Branch the worktree is cut from (fetched fresh from origin)">
+                base:
+                <Select v-model="selectedBase" :options="availableBranches" :filter="availableBranches.length > 8"
+                        placeholder="base branch" class="base-select" />
               </label>
               <div style="flex:1" />
               <div style="display:flex;gap:8px">
@@ -368,6 +378,10 @@ const description = ref('');
 const deep = ref(false);
 const showNewPlanForm = ref(false);
 
+// Base branch the worktree is cut from (fetched fresh from origin at run time)
+const selectedBase = ref('');
+const availableBranches = ref([]);
+
 // Tool / model / effort
 const selectedTool = ref(null);
 const selectedModel = ref(null);
@@ -452,6 +466,19 @@ async function loadBase() {
   try {
     const res = await fetch(`/api/projects/${projectId.value}/base`);
     if (res.ok) Object.assign(base, await res.json());
+  } catch {}
+}
+
+// Candidate base branches for the New Plan picker. Defaults the selection to the
+// repo's resolved base (main/master). The worktree fetches this branch fresh
+// from origin at run time, so the picker list only needs branch names.
+async function loadBranches() {
+  try {
+    const res = await fetch(`/api/projects/${projectId.value}/branches`);
+    if (!res.ok) return;
+    const data = await res.json();
+    availableBranches.value = data.branches || [];
+    if (!selectedBase.value) selectedBase.value = data.default || availableBranches.value[0] || '';
   } catch {}
 }
 
@@ -586,6 +613,7 @@ async function generatePlan() {
     if (selectedTool.value)   body.tool   = selectedTool.value;
     if (selectedModel.value)  body.model  = selectedModel.value;
     if (selectedEffort.value) body.effort = selectedEffort.value;
+    if (selectedBase.value)   body.base   = selectedBase.value;
     const res = await fetch(`/api/projects/${projectId.value}/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -699,6 +727,7 @@ onMounted(async () => {
   await loadPlans();
   await loadProjectTool();
   loadBase();
+  loadBranches();
   applyPickupPrefill();
 
   // Live run badges: always re-hydrate from the server so a group that
@@ -974,6 +1003,7 @@ watch(projectId, loadPlans);
 
 /* Shared */
 .deep-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--jg-text-faint); }
+.base-select { min-width: 150px; font-size: 12px; }
 .error-text { font-size: 11px; color: var(--jg-red); margin-top: 8px; }
 
 /* Tool config button */

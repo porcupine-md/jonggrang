@@ -232,7 +232,7 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const { description, deep, tool, model, effort } = req.body || {};
+        const { description, deep, tool, model, effort, base } = req.body || {};
         if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
 
         if (tool && !VALID_PLAN_TOOL.includes(tool)) {
@@ -244,11 +244,15 @@ module.exports = function(deps) {
         if (effort && !VALID_PLAN_EFFORT.includes(effort)) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `effort must be one of: ${VALID_PLAN_EFFORT.join(', ')}` } });
         }
+        if (base && (typeof base !== 'string' || base.length > MAX_STRING_LEN || /[\s;|&$`]/.test(base))) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'base must be a plain branch name' } });
+        }
 
         const args = ['plan', description, ...(deep ? ['--deep'] : [])];
         if (tool)   args.push('--tool', tool);
         if (model)  args.push('--model', model);
         if (effort) args.push('--effort', effort);
+        if (base)   args.push('--base', base);
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan');
         res.status(202).json({ job_id: project.id });
