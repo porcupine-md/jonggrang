@@ -327,8 +327,9 @@ Persistent orchestration state for a feature run. Located at:
 | `status` | string | `running`, `completed`, `failed`, `paused` |
 | `current_phase` | number | Currently executing phase (1-16) |
 | `active_phases` | array | Phases that will run (after skipping) |
-| `phases` | object | Per-phase status, started/completed timestamps, output |
+| `phases` | object | Per-phase status, started/completed timestamps, output, `output_files` |
 | `agents` | object | Per-role metadata (model, timestamps) |
+| `phases[N].output_files` | array | Files produced by phase N. Each entry: `path` (relative), `type` (`code`\|`log`\|`report`\|`output`), `size` (bytes, null if missing), `created_at` (ISO, null if missing). Tracked for phases 8, 12, 14. |
 | `validation` | object | typecheck, lint, tests pass/fail booleans |
 | `context_usage` | object | current_tokens, percentage |
 

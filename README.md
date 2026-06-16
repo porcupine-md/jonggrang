@@ -79,6 +79,7 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 | `jonggrang web` | Visual Kanban dashboard with real-time logs + parallel run (one worktree/branch per plan, review & push per branch) |
 | `jonggrang issues list` | List GitHub/GitLab issues from configured sources (or `--repo owner/repo`) |
 | `jonggrang issues pickup <p> <repo> <n>` | Generate a plan in this project from a GitHub/GitLab issue |
+| `jonggrang manifest` | Inspect output files tracked per phase (`list`, `show [id]`, `add`) |
 
 ```bash
 # Quick flags

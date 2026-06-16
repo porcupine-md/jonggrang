@@ -105,7 +105,7 @@ project-root/
 │   ├── .output/                # TRACKED in git — plans + manifests travel with each branch on push
 │   │   └── features/{id}/
 │   │       ├── plan.md         # Archived plan (after approve); frontmatter holds the branch name
-│   │       ├── MANIFEST.yaml   # Phase state (persistent)
+│   │       ├── MANIFEST.yaml   # Phase state + output_files per phase (persistent)
 │   │       └── [phase outputs]
 │   ├── .ephemeral/             # Cleared on restart (gitignored)
 │   │   ├── feedback-loop-state.json
@@ -206,6 +206,22 @@ State persists in `MANIFEST.yaml`. Interrupt and resume across sessions:
 ```bash
 jonggrang orchestrate --resume
 ```
+
+**Output file tracking** — after phases 8 (implementation), 12 (code-quality), and 14 (testing) complete, the orchestrator runs `git diff` to determine which files changed and writes them to `output_files` in `MANIFEST.yaml`. Tracking is based on actual git state (committed, staged, and unstaged changes since phase start), not agent self-reporting:
+
+```yaml
+phases:
+  8:
+    name: implementation
+    status: completed
+    output_files:
+      - path: src/auth/login.ts
+        type: code
+        size: 1842
+        created_at: "2026-06-12T10:00:00.000Z"
+```
+
+Inspect with: `jonggrang manifest show [feature-id]`
 
 **Phase skipping by work type:**
 
@@ -558,7 +574,7 @@ When an agent is stuck in a loop (blocked exit >3 times), an out-of-band LLM ana
 | `.jonggrang/progress.txt` | Append-only | Agent | Per-task learnings, surprises |
 | `.jonggrang/jonggrang-tasks.json` | Structured | Agent + Human | Task state and history |
 | `.jonggrang/.output/` | Structured JSON | Agent | Phase outputs, architecture plans |
-| `MANIFEST.yaml` | YAML | Orchestrator | Phase state, resume point |
+| `MANIFEST.yaml` | YAML | Orchestrator | Phase state, resume point, `output_files` per phase |
 | Git history | Immutable | Agent | Code changes with context |
 
 ### AGENTS.md
