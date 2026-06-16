@@ -2,6 +2,7 @@
 
 const { Router } = require('express');
 const sandbox = require('../../lib/sandbox');
+const lib = require('../../lib/jonggrang');
 
 module.exports = function(deps) {
     const { io, fs, webState, stopProjectWatcher, startProjectWatcher } = deps;
@@ -35,7 +36,9 @@ module.exports = function(deps) {
             const args = ['clone', '--progress', url, targetPath];
             if (ref) args.push('--branch', ref);
             const child = spawn('git', args, {
-                env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+                // Non-interactive: never block on a credential or SSH host-key
+                // "yes/no" prompt (auto-accepts a new host key, fails fast on no creds).
+                env: { ...process.env, ...lib.gitNonInteractiveEnv() },
                 stdio: ['pipe', 'pipe', 'pipe'],
             });
             let lastStderr = '';
