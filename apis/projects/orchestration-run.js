@@ -92,10 +92,14 @@ module.exports = function(deps) {
     // root-owned bind mount, so the host (a different uid) can't write into it
     // — seeding/mirroring must happen in-container or it EACCESes. `items` is a
     // list of {src, dst} container-absolute paths; missing srcs are skipped.
+    // `rm -rf dst` first: a worktree created from a HEAD that already tracks the
+    // seeded path (e.g. main carries .jonggrang/ via "Push plans") would make
+    // `cp -a src dst` nest the dir inside the existing one (.output/.output),
+    // hiding the feature's manifest. Removing dst first guarantees a clean copy.
     function containerCopy(ctx, items) {
         if (!items.length) return;
         const script = items.map(({ src, dst }) =>
-            `if [ -e "${src}" ]; then mkdir -p "$(dirname "${dst}")" && cp -a "${src}" "${dst}"; fi`
+            `if [ -e "${src}" ]; then mkdir -p "$(dirname "${dst}")" && rm -rf "${dst}" && cp -a "${src}" "${dst}"; fi`
         ).join('; ');
         execFileSync('docker', ['exec', ctx.container, 'sh', '-c', script],
             { encoding: 'utf8', maxBuffer: GIT_MAXBUF });
@@ -462,11 +466,14 @@ module.exports = function(deps) {
     // project so the project's file watcher emits `manifest.updated` and the
     // pipeline view advances live (Implement → … → Complete) instead of
     // stalling at the phase it was seeded with.
-    function syncManifest(project, ctx, group) {
+    // Mirror one worktree file back to the MAIN project copy. `rel` is the path
+    // relative to the project root. The main copy may be root-owned (seeded /
+    // written in-container), so in sandbox mode the copy runs IN the container
+    // to avoid a host EACCES — keeps every sandbox write in the sandbox.
+    function mirrorFromWorktree(project, ctx, group, rel, label) {
         try {
             const base = group.hostWorktreePath || group.worktreePath;
             if (!base) return;
-            const rel = path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml');
             const src = path.join(base, rel);
             const dst = path.join(project.path, rel);
             if (!fs.existsSync(src)) return;
@@ -475,9 +482,6 @@ module.exports = function(deps) {
             try { cur = fs.readFileSync(dst); } catch { /* missing */ }
             if (cur && cur.equals(data)) return; // unchanged → don't churn the watcher
             if (ctx.mode === 'container') {
-                // The main project's feature dir was created by the in-container
-                // decompose (root-owned), so mirror IN the container — a host
-                // write would EACCES. Keeps every sandbox write in the sandbox.
                 const srcC = path.join(group.worktreePath, rel);
                 const dstC = path.join(ctx.root, rel);
                 execFileSync('docker', ['exec', ctx.container, 'sh', '-c',
@@ -488,15 +492,30 @@ module.exports = function(deps) {
                 fs.writeFileSync(dst, data);
             }
         } catch (err) {
-            console.error('orchestration syncManifest error:', err.message);
+            console.error(`orchestration ${label} error:`, err.message);
         }
+    }
+
+    // The worktree worker updates its OWN manifest + progress log; the dashboard
+    // reads the MAIN project's copies and the NEXT plan's worktree is seeded from
+    // them. Mirror both back so the pipeline view advances live AND the progress
+    // log accumulates across plans (tasks.json already syncs via task signals).
+    function syncManifest(project, ctx, group) {
+        mirrorFromWorktree(project, ctx, group,
+            path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml'), 'syncManifest');
+    }
+    function syncProgress(project, ctx, group) {
+        mirrorFromWorktree(project, ctx, group, path.join('.jonggrang', 'progress.txt'), 'syncProgress');
     }
 
     function wireWorker(project, ctx, run, group) {
         const child = group.child;
         group.pid = child.pid;
-        // Live-mirror the worktree manifest → main project while the worker runs.
-        group.manifestSync = setInterval(() => syncManifest(project, ctx, group), 1500);
+        // Live-mirror the worktree manifest + progress log → main project while the worker runs.
+        group.manifestSync = setInterval(() => {
+            syncManifest(project, ctx, group);
+            syncProgress(project, ctx, group);
+        }, 1500);
         let buf = '';
         const onData = (stream) => (data) => {
             buf += data.toString();
@@ -526,6 +545,7 @@ module.exports = function(deps) {
             group.finishedAt = new Date().toISOString();
             if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
             syncManifest(project, ctx, group); // final state (e.g. completed) → main project
+            syncProgress(project, ctx, group); // final progress log → main project
             if (code === 0) {
                 try {
                     group.committed = commitWorktreeCtx(ctx, group.worktreePath, `feat(${group.featureId}): ${group.title}`);
