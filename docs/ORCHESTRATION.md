@@ -398,7 +398,7 @@ Claude: Spawns backend-developer with clear task
 |------|---------|---------|----------|
 | Ephemeral State | `.jonggrang/.ephemeral/feedback-loop-state.json` | Runtime Enforcement (blocking exit, tracking dirty bits) | Cleared on session restart |
 | Ephemeral State | `.jonggrang/.ephemeral/session-roles.json` | Session identity registry (developer/tester self-identification) | Cleared on session restart |
-| Persistent State | `.jonggrang/.output/features/{id}/MANIFEST.yaml` | Workflow Coordination (resuming tasks, tracking phases) | Survives session restarts |
+| Persistent State | `.jonggrang/.output/features/{id}/MANIFEST.yaml` | Workflow Coordination (resuming tasks, tracking phases, `output_files` per phase) | Survives session restarts |
 | Persistent State | `.jonggrang/locks/{agent}.lock` | Distributed file locking (parallel agent race prevention) | Released on agent completion |
 
 ### 5.5 The Escalation Advisor

@@ -358,6 +358,8 @@ Phase 13       → TestLead
 Phase 14-15    → Tester
 ```
 
+**Output file tracking** — after phases 8, 12, and 14 complete, the orchestrator runs `git diff` against the SHA captured before the phase started (covering committed, staged, and unstaged changes) and records the result under `phases[N].output_files` in `MANIFEST.yaml`. Use `jonggrang manifest show` to inspect what each phase produced.
+
 ### Role Boundaries
 
 | Role | Has Task Tool | Has Edit/Write | Completion Signal |
