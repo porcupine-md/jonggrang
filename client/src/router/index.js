@@ -32,6 +32,7 @@ const routes = [
       { path: 'logs',        redirect: to => ({ path: `/projects/${to.params.id}/plan` }) },
     ],
   },
+  { path: '/issues',   component: () => import('../views/IssuesView.vue') },
   { path: '/settings', component: () => import('../views/SettingsView.vue') },
   { path: '/secrets',  component: () => import('../views/SecretsView.vue') },
   // Legacy single-project route — keep old UI accessible

@@ -66,14 +66,15 @@ module.exports = function(deps) {
   router.put('/:id/settings', (req, res) => {
     const project = projectOr404(req, res);
     if (!project) return;
-    const { secrets, jonggrang_config, sandbox, code_editor } = req.body || {};
+    const { secrets, jonggrang_config, sandbox: sandboxPatch, code_editor } = req.body || {};
+    let sandbox_rebuild_required = false;
     if (Array.isArray(secrets)) {
       try { webState.updateProject(req.params.id, { secrets }); } catch (err) {
         return res.status(500).json({ error: err.message });
       }
     }
-    if (sandbox && typeof sandbox === 'object') {
-      try { webState.updateProject(req.params.id, { sandbox }); } catch (err) {
+    if (sandboxPatch && typeof sandboxPatch === 'object') {
+      try { webState.updateProject(req.params.id, { sandbox: sandboxPatch }); } catch (err) {
         return res.status(500).json({ error: err.message });
       }
     }
@@ -81,8 +82,18 @@ module.exports = function(deps) {
       if (!CODE_EDITOR_MODES.includes(code_editor)) {
         return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `code_editor must be one of: ${CODE_EDITOR_MODES.join(', ')}` } });
       }
+      const prevEditor = project.code_editor || 'off';
       try { webState.updateProject(req.params.id, { code_editor }); } catch (err) {
         return res.status(500).json({ error: err.message });
+      }
+      // The editor port is published only at container creation, so toggling
+      // code_editor on a project with a live (drifted) sandbox container needs a
+      // rebuild to take effect (issue #56). Flag it so the UI can prompt.
+      if (prevEditor !== code_editor && project.sandbox?.enabled) {
+        try {
+          const updated = webState.getProject(req.params.id);
+          if (sandbox.editorMappingDrifted(updated)) sandbox_rebuild_required = true;
+        } catch {}
       }
     }
     if (jonggrang_config && typeof jonggrang_config === 'object') {
@@ -100,7 +111,7 @@ module.exports = function(deps) {
         return res.status(500).json({ error: err.message });
       }
     }
-    res.json({ ok: true });
+    res.json({ ok: true, sandbox_rebuild_required });
   });
 
   return router;

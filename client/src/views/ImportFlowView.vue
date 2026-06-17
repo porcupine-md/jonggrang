@@ -10,6 +10,9 @@
     <div class="wizard-card">
       <!-- Step 1: source type -->
       <div v-if="step === 1">
+        <div v-if="pickupHint" class="pickup-hint">
+          <i class="pi pi-arrow-right" /> New project from issue <strong>{{ pickupHint }}</strong> — name &amp; git URL pre-filled.
+        </div>
         <div class="wizard-section-title">How do you want to start?</div>
         <div class="source-options">
           <button
@@ -84,11 +87,15 @@ import InputText from 'primevue/inputtext';
 import Tag from 'primevue/tag';
 import { useProjectsStore } from '../stores/projects.js';
 import { useWsStore } from '../stores/ws.js';
+import { useIssuesStore } from '../stores/issues.js';
+import { usePickupStore } from '../stores/pickup.js';
 import InitWizard from '../components/project/InitWizard.vue';
 
 const router = useRouter();
 const projects = useProjectsStore();
 const ws = useWsStore();
+const issues = useIssuesStore();
+const pickup = usePickupStore();
 
 const step = ref(1);
 const sourceType = ref('git');
@@ -102,6 +109,27 @@ const progressLog = ref([]);
 const detected = ref(null);
 const currentProjectId = ref(null);
 const currentProject = computed(() => currentProjectId.value ? projects.byId[currentProjectId.value] : null);
+const pickupHint = ref(null);
+
+// SSH clone URL for a provider/repo (github.com / gitlab.com; handles nested
+// GitLab group paths).
+function sshUrlFor(provider, repo) {
+  const host = provider === 'gitlab' ? 'gitlab.com' : 'github.com';
+  return `git@${host}:${repo}.git`;
+}
+
+// Arrived from an issue "Pickup → New Project": pre-fill the wizard (name +
+// SSH git URL) from the source repo. We peek (not take) the pending pickup so
+// onInitDone can still finalize it against the created project.
+onMounted(() => {
+  const pend = pickup.pending;
+  if (pend && pend.repo) {
+    sourceType.value = 'git';
+    name.value = pend.repo.split('/').pop();
+    gitUrl.value = sshUrlFor(pend.provider, pend.repo);
+    pickupHint.value = `${pend.provider}:${pend.repo}#${pend.number}`;
+  }
+});
 
 const sourceOptions = [
   { type: 'git',   icon: 'pi-link',   label: 'Git Repository', desc: 'Clone from GitHub, GitLab, etc.' },
@@ -173,7 +201,20 @@ async function doImport() {
   }
 }
 
-function onInitDone() {
+async function onInitDone() {
+  // If we arrived here from an issue "Pickup → New Project", finalize the
+  // pickup against the freshly created project and open its pre-filled plan form.
+  const pend = pickup.takePending();
+  if (pend && currentProjectId.value) {
+    try {
+      const res = await issues.pickup(pend.provider, pend.repo, pend.number, currentProjectId.value);
+      pickup.setPrefill({ projectId: currentProjectId.value, description: res.description, source: res.source });
+      router.push(`/projects/${currentProjectId.value}/plan`);
+      return;
+    } catch {
+      // Pickup failed — fall through to the normal home navigation.
+    }
+  }
   goHome();
 }
 
@@ -186,6 +227,8 @@ function goHome() {
 .back-link { font-size: 11px; color: var(--jg-text-faint); text-decoration: none; display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
 .back-link:hover { color: var(--jg-text-muted); }
 .wizard-card { max-width: 540px; background: var(--jg-card); border: 1px solid var(--jg-border); border-radius: var(--radius); padding: 20px; }
+.pickup-hint { font-size: 12px; color: var(--jg-green); background: color-mix(in oklch, var(--jg-green) 10%, transparent); border: 1px solid color-mix(in oklch, var(--jg-green) 30%, transparent); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 16px; display: flex; align-items: center; gap: 6px; }
+.pickup-hint strong { font-family: var(--font-mono); }
 .wizard-section-title { font-size: 13px; font-weight: 600; color: var(--jg-text); margin-bottom: 16px; }
 
 .source-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 20px; }

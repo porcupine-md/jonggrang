@@ -1016,12 +1016,23 @@ async function cmdPlan(args, opts = {}) {
   let autoApprove = false;
   let deepMode = false;
   let reviseMode = false;
+  let baseBranch = '';
 
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--yes' || arg === '-y') autoApprove = true;
     else if (arg === '--deep') deepMode = true;
     else if (arg === '--revise') reviseMode = true;
+    else if (arg === '--base') baseBranch = args[++i] || '';
     else if (!arg.startsWith('--')) description = arg;
+  }
+
+  // Validate --base up front: it ends up interpolated into `git fetch` at
+  // worktree creation, so reject anything that isn't a plain branch name before
+  // we spend a plan generation on it.
+  if (baseBranch && !lib.isSafeBranchName(baseBranch)) {
+    logError(`Invalid --base "${baseBranch}": must be a plain branch name (letters, digits, . _ / -).`);
+    process.exit(1);
   }
 
   if (!await ensureInit()) return;
@@ -1192,6 +1203,14 @@ async function cmdPlan(args, opts = {}) {
 
     const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+  }
+
+  // The base branch (worktree start-point) is a deterministic user choice, so
+  // write it into the generated plan.md frontmatter (overriding anything the AI
+  // may have put there). Covers both deep + standard generation paths above.
+  // Warn if it didn't take — otherwise the worktree silently cuts from HEAD.
+  if (baseBranch && lib.fileExists(PLAN_FILE) && !lib.setPlanBase(PLAN_FILE, baseBranch)) {
+    logWarn(`Could not write base "${baseBranch}" to the plan frontmatter — the worktree will start from HEAD unless you set it manually.`);
   }
 
   if (autoApprove) {
@@ -3632,6 +3651,9 @@ Commands:
   bot-reviewer <sub>      Automated MR review bot
     bot-reviewer gitlab     Start GitLab MR review bot (polls for new MRs)
     bot-reviewer settings   Configure token, repos, and Anthropic API key
+  issues <subcommand>     Import GitHub/GitLab issues (feature #55)
+    issues list             List issues from configured sources or --repo
+    issues pickup <p> <r> <n>  Generate a plan from an issue in this project
   version                 Show version
 
   # Backward compat (routes to work):
@@ -3698,6 +3720,91 @@ Examples:
 }
 
 // ============================================================
+// ISSUES — import GitHub/GitLab issues (feature #55)
+// ============================================================
+
+async function cmdIssues(args) {
+  const issueProviders = require('../lib/issue-providers');
+  const webState = require('../lib/web-state');
+  const sub = args[0];
+
+  function tokenFor(provider) {
+    let t = {};
+    try { t = webState.getGitTokens(); } catch {}
+    if (provider === 'github') return t.GH_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || null;
+    if (provider === 'gitlab') return t.GITLAB_TOKEN || process.env.GITLAB_TOKEN || null;
+    return null;
+  }
+
+  function flag(name, def) {
+    const idx = args.indexOf(name);
+    return idx >= 0 && args[idx + 1] ? args[idx + 1] : def;
+  }
+
+  if (sub === 'list') {
+    const provider = flag('--provider', null);
+    const repoFlag = flag('--repo', null);
+    const state = flag('--state', 'open');
+    const limit = parseInt(flag('--limit', '30'), 10);
+
+    let targets = [];
+    if (repoFlag && provider) {
+      targets = [{ provider, repo: repoFlag }];
+    } else {
+      let sources = { github: [], gitlab: [] };
+      try { sources = webState.getIssueSources(); } catch {}
+      for (const p of ['github', 'gitlab']) {
+        if (provider && provider !== p) continue;
+        for (const r of sources[p]) targets.push({ provider: p, repo: r });
+      }
+    }
+    if (!targets.length) {
+      logError('No repos. Use --provider <github|gitlab> --repo owner/repo, or configure Issue Sources in the dashboard.');
+      process.exit(1);
+    }
+    for (const t of targets) {
+      const token = tokenFor(t.provider);
+      if (!token) { logError(`No ${t.provider} token (set GH_TOKEN/GITLAB_TOKEN or configure in dashboard).`); continue; }
+      try {
+        const issues = await issueProviders.getProvider(t.provider).listIssues(token, { repo: t.repo, state, perPage: limit });
+        console.log(`\n${t.provider}:${t.repo} (${issues.length})`);
+        for (const it of issues) console.log(`  #${it.number}  [${it.state}]  ${it.title}`);
+      } catch (e) { logError(`${t.provider}:${t.repo} — ${e.message}`); }
+    }
+    return;
+  }
+
+  if (sub === 'pickup') {
+    const provider = args[1];
+    const repo = args[2];
+    const number = parseInt(args[3], 10);
+    if (!provider || !repo || !number) {
+      logError('Usage: jonggrang issues pickup <github|gitlab> <owner/repo> <number> [--deep] [--yes]');
+      process.exit(1);
+    }
+    const token = tokenFor(provider);
+    if (!token) { logError(`No ${provider} token configured.`); process.exit(1); }
+    const issue = await issueProviders.getProvider(provider).getIssue(token, { repo, number });
+    const marker = `<!-- jonggrang-source: ${JSON.stringify({ provider, repo, number: issue.number, url: issue.url })} -->`;
+    const description = [
+      marker,
+      `# ${issue.title}`,
+      '',
+      `> Imported from issue ${repo}#${issue.number} (${issue.url})`,
+      '',
+      issue.body || '(no description)',
+    ].join('\n');
+    logInfo(`Picking up ${provider}:${repo}#${number} → plan`);
+    await cmdPlan([description, ...args.slice(4)]);
+    return;
+  }
+
+  console.log('Usage:');
+  console.log('  jonggrang issues list [--provider github|gitlab] [--repo owner/repo] [--state open|closed|all] [--limit N]');
+  console.log('  jonggrang issues pickup <github|gitlab> <owner/repo> <number> [--deep] [--yes]');
+}
+
+// ============================================================
 // MAIN
 // ============================================================
 
@@ -3732,6 +3839,11 @@ async function main() {
 
   if (command === 'web' && rest[0] === 'tunnel') {
     cmdWebTunnel(rest.slice(1));
+    return;
+  }
+
+  if (command === 'issues') {
+    await cmdIssues(rest);
     return;
   }
 

@@ -77,6 +77,8 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 | `jonggrang review` | Comprehensive code review → markdown report |
 | `jonggrang agent` | Full TUI chat session with `/plan`, `/work`, `/review` commands |
 | `jonggrang web` | Visual Kanban dashboard with real-time logs + parallel run (one worktree/branch per plan, review & push per branch) |
+| `jonggrang issues list` | List GitHub/GitLab issues from configured sources (or `--repo owner/repo`) |
+| `jonggrang issues pickup <p> <repo> <n>` | Generate a plan in this project from a GitHub/GitLab issue |
 | `jonggrang manifest` | Inspect output files tracked per phase (`list`, `show [id]`, `add`) |
 | `jonggrang codemap` | Show/refresh deterministic codebase map (LLM-free, cached at `.jonggrang/codemap/codemap.json`) |
 
@@ -85,6 +87,7 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 jonggrang plan "feature" --yes       # Skip review, auto-approve
 jonggrang work "feature" --yes       # Full pipeline in one command
 jonggrang plan "feature" --deep      # 3-phase deep analysis (risks, alternatives)
+jonggrang plan "feature" --base develop  # Cut the worktree from a chosen branch (fetched fresh from origin)
 jonggrang work --mode autonomous     # Override autonomy mode
 jonggrang work --task task-003       # Execute specific task only
 ```
