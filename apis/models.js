@@ -84,3 +84,7 @@ module.exports = function(deps) {
 
   return router;
 };
+
+// Per-tool reasoning-effort levels — the single source of truth shared with the
+// plan/work request validators so the API never rejects an effort the UI offers.
+module.exports.STATIC_EFFORTS = STATIC_EFFORTS;
