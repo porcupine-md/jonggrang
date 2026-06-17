@@ -211,10 +211,8 @@ export default function (pi: ExtensionAPI) {
     codemapInjected = true;
     const banner = codemapStale
       ? `\n\n> ⚠️ Codemap may be outdated. Run \`jonggrang codemap --refresh\` to update.`
-      : "";
     const section = `\n\n## Codebase Map (LLM-free, cached)\n\n${codemapMarkdown}${banner}`;
-    return { systemPrompt: event.systemPrompt + section };
-  });
+    return { systemPrompt: section + event.systemPrompt };
 
   // ── LAYER 2: tool_call → fileProtection + secretCommandBlock + agentFirst + compactionGate + taskRoleClaim ─
   // event.toolName is the Pi API property (lowercase: "read", "edit", "write", "bash", "grep", "find", "ls")
