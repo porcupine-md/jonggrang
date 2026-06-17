@@ -9,6 +9,7 @@ const { Router } = require('express');
 const providers = require('../lib/issue-providers');
 
 const CACHE_TTL = 60_000; // 60s — keep the list/detail views responsive.
+const CACHE_MAX = 200;    // bound the cache: search-as-you-type makes one key per keystroke.
 const PER_PAGE = 20;      // issues per page in the list view.
 const AGG_PER_REPO = 50;  // newest issues fetched per repo for the aggregate view.
 
@@ -24,10 +25,20 @@ module.exports = function (deps) {
     return null;
   }
 
+  // Bounded LRU: the search box drives one cache key per keystroke, so without a
+  // cap this Map grows without limit on a long-running server. Re-insert on hit
+  // to mark recency; evict the oldest key once over CACHE_MAX.
   function cached(key, fn) {
     const hit = cache.get(key);
-    if (hit && Date.now() - hit.t < CACHE_TTL) return Promise.resolve(hit.v);
-    return Promise.resolve(fn()).then((v) => { cache.set(key, { t: Date.now(), v }); return v; });
+    if (hit && Date.now() - hit.t < CACHE_TTL) {
+      cache.delete(key); cache.set(key, hit);
+      return Promise.resolve(hit.v);
+    }
+    return Promise.resolve(fn()).then((v) => {
+      cache.set(key, { t: Date.now(), v });
+      if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+      return v;
+    });
   }
 
   function sendErr(res, err) {
