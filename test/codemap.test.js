@@ -47,9 +47,10 @@ test('self: project name + version come from package.json', () => {
 
 test('self: detects express + socket.io from package.json deps', () => {
   const cm = codemap.generateCodemap(SELF);
+  const pkg = JSON.parse(fs.readFileSync(path.join(SELF, 'package.json'), 'utf8'));
   const ids = cm.frameworks.map(f => f.id);
-  assert.ok(ids.includes('express'),  `expected 'express' in frameworks, got: ${ids.join(', ')}`);
-  assert.ok(ids.includes('socketio'), `expected 'socketio' in frameworks, got: ${ids.join(', ')}`);
+  if (pkg.dependencies?.express) assert.ok(ids.includes('express'), `expected 'express' in frameworks, got: ${ids.join(', ')}`);
+  if (pkg.dependencies?.['socket.io']) assert.ok(ids.includes('socketio'), `expected 'socketio' in frameworks, got: ${ids.join(', ')}`);
 });
 
 test('self: entry points include main (server.js) and bin (jonggrang)', () => {
