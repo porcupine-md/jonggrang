@@ -414,6 +414,60 @@ test('cache: modifying a file flips the result to stale: true', () => {
 });
 
 // ============================================================
+// Cache file format: minified (single line, no indent)
+// Human-readable output goes through the CLI `--json` flag instead.
+// ============================================================
+
+test('cache-file: written as a single line (minified JSON)', () => {
+  const proj = makeProject((root) => {
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'demo', version: '0.0.1' }));
+  });
+  const cm = codemap.generateCodemap(proj);
+  codemap.writeCache(proj, cm);
+  const cachePath = codemap.getCachePath(proj);
+  const raw = fs.readFileSync(cachePath, 'utf8');
+  // No newlines allowed in the cache file
+  assert.ok(!raw.includes('\n'),
+    `expected cache file to be minified (no newlines), got ${raw.split('\n').length} lines`);
+  // No 2-space indent prefixes (which would indicate pretty-printing)
+  assert.ok(!/\n  /.test(raw) && !/^  /m.test(raw),
+    `expected no leading 2-space indent, found one`);
+  fs.rmSync(proj, { recursive: true, force: true });
+});
+
+test('cache-file: is still valid JSON that readCache can parse', () => {
+  const proj = makeProject((root) => {
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'demo', version: '0.0.1' }));
+  });
+  const cm = codemap.generateCodemap(proj);
+  codemap.writeCache(proj, cm);
+  const cachePath = codemap.getCachePath(proj);
+  const raw = fs.readFileSync(cachePath, 'utf8');
+  // Verify it parses as JSON (would throw otherwise)
+  const parsed = JSON.parse(raw);
+  assert.ok(parsed, `expected cache file to parse as JSON`);
+  assert.strictEqual(parsed.contentHash, cm.contentHash);
+  assert.strictEqual(parsed.data.project.name, 'demo');
+  fs.rmSync(proj, { recursive: true, force: true });
+});
+
+test('cache-file: minified is meaningfully smaller than pretty for the self-host repo', () => {
+  // Generate a real codemap against the repo
+  const cm = codemap.generateCodemap(SELF);
+  const payload = {
+    contentHash: cm.contentHash,
+    generatedAt: cm.generatedAt,
+    data: cm,
+  };
+  const minified = JSON.stringify(payload);
+  const pretty   = JSON.stringify(payload, null, 2);
+  // Minified should be at least 20% smaller (typical is ~50% smaller).
+  const ratio = minified.length / pretty.length;
+  assert.ok(ratio < 0.8,
+    `expected minified to be <80% of pretty size, got ratio ${ratio.toFixed(2)} (min=${minified.length}b, pretty=${pretty.length}b)`);
+});
+
+// ============================================================
 // Summary
 // ============================================================
 
