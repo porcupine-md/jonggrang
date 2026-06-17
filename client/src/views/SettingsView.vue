@@ -148,6 +148,40 @@
       </div>
     </div>
 
+    <!-- Issue sources (GitHub/GitLab issue import) -->
+    <div class="settings-card">
+      <div class="card-title"><i class="pi pi-bookmark" /> Issue Sources</div>
+      <p class="hint">Repositories listed under the <strong>Issues</strong> menu. Uses the tokens above. Pick the repos you want to import issues from, then save.</p>
+      <div v-for="prov in issueProviders" :key="prov.key" class="issrc-block">
+        <div class="issrc-head">
+          <span class="issrc-prov"><ProviderIcon :provider="prov.key" :size="13" /> {{ prov.label }}</span>
+          <span v-if="!prov.connected" class="tok-unset">token not set</span>
+        </div>
+        <template v-if="prov.connected">
+          <div class="issrc-chips">
+            <span v-for="r in issueSources[prov.key]" :key="r" class="issrc-chip">
+              {{ r }} <button class="issrc-chip-x" @click="removeSource(prov.key, r)"><i class="pi pi-times" /></button>
+            </span>
+            <span v-if="!issueSources[prov.key].length" class="issrc-none">none selected</span>
+          </div>
+          <div class="issrc-search">
+            <input v-model="prov.query" :placeholder="`Search ${prov.label} repos or type owner/repo`" @keydown.enter="searchRepos(prov)" />
+            <Button size="small" severity="secondary" :disabled="prov.searching" @click="searchRepos(prov)" :icon="prov.searching ? 'pi pi-spin pi-spinner' : 'pi pi-search'" label="Search" />
+            <Button size="small" severity="secondary" :disabled="!prov.query.includes('/')" @click="addTyped(prov)" label="Add" />
+          </div>
+          <div v-if="prov.results.length" class="issrc-results">
+            <button v-for="r in prov.results" :key="r.full_name" class="issrc-result" @click="addSource(prov.key, r.full_name)">
+              <i class="pi pi-plus" /> {{ r.full_name }} <span v-if="r.private" class="issrc-priv">private</span>
+            </button>
+          </div>
+          <div v-if="prov.error" class="error-text">{{ prov.error }}</div>
+        </template>
+      </div>
+      <div v-if="issrcError" class="error-text"><i class="pi pi-times-circle" /> {{ issrcError }}</div>
+      <div v-if="issrcOk" class="ok-text"><i class="pi pi-check-circle" /> Saved!</div>
+      <Button :disabled="issrcSaving" @click="saveIssueSources" :icon="issrcSaving ? 'pi pi-spin pi-spinner' : 'pi pi-check'" :label="issrcSaving ? 'Saving…' : 'Save sources'" />
+    </div>
+
     <!-- About -->
     <div class="settings-card">
       <div class="card-title"><i class="pi pi-info-circle" /> About</div>
@@ -163,6 +197,7 @@ import { ref, reactive, onMounted } from 'vue';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import SelectButton from 'primevue/selectbutton';
+import ProviderIcon from '../components/ProviderIcon.vue';
 import { useWorkspaceStore } from '../stores/workspace.js';
 import { useTheme } from '../composables/useTheme.js';
 
@@ -206,6 +241,67 @@ const gitTokSaving = ref(false);
 const gitTokError = ref('');
 const gitTokOk = ref(false);
 
+// Issue sources (feature #55) — repos to list under the Issues menu.
+const issueSources = reactive({ github: [], gitlab: [] });
+const issueProviders = reactive([
+  { key: 'github', label: 'GitHub', icon: 'pi pi-github', connected: false, query: '', results: [], searching: false, error: '' },
+  { key: 'gitlab', label: 'GitLab', icon: 'pi pi-gitlab', connected: false, query: '', results: [], searching: false, error: '' },
+]);
+const issrcSaving = ref(false);
+const issrcOk = ref(false);
+const issrcError = ref('');
+
+async function loadIssueConnections() {
+  try {
+    const r = await fetch('/api/issues/connections');
+    if (!r.ok) return;
+    const d = await r.json();
+    issueProviders[0].connected = !!d.has_gh;
+    issueProviders[1].connected = !!d.has_gitlab;
+    issueSources.github = d.sources?.github || [];
+    issueSources.gitlab = d.sources?.gitlab || [];
+  } catch {}
+}
+
+async function searchRepos(prov) {
+  prov.error = ''; prov.searching = true;
+  try {
+    const r = await fetch(`/api/issues/repos?provider=${prov.key}&q=${encodeURIComponent(prov.query.trim())}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || 'Search failed');
+    prov.results = d.repos || [];
+    if (!prov.results.length) prov.error = 'No matching repos.';
+  } catch (e) { prov.error = e.message; prov.results = []; } finally { prov.searching = false; }
+}
+
+function addSource(key, full) {
+  if (full && !issueSources[key].includes(full)) issueSources[key].push(full);
+  const prov = issueProviders.find(p => p.key === key);
+  if (prov) { prov.results = []; prov.error = ''; }
+}
+
+function addTyped(prov) {
+  const v = prov.query.trim();
+  if (v.includes('/')) { addSource(prov.key, v); prov.query = ''; }
+}
+
+function removeSource(key, full) {
+  issueSources[key] = issueSources[key].filter(r => r !== full);
+}
+
+async function saveIssueSources() {
+  issrcSaving.value = true; issrcError.value = ''; issrcOk.value = false;
+  try {
+    const r = await fetch('/api/issues/sources', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ github: issueSources.github, gitlab: issueSources.gitlab }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || 'Save failed');
+    issrcOk.value = true; setTimeout(() => { issrcOk.value = false; }, 2000);
+  } catch (e) { issrcError.value = e.message; } finally { issrcSaving.value = false; }
+}
+
 onMounted(async () => {
   await workspace.fetch();
   workspacePath.value = workspace.path;
@@ -224,6 +320,7 @@ onMounted(async () => {
     const r = await fetch('/api/settings/git-tokens');
     if (r.ok) Object.assign(gitTok, await r.json());
   } catch {}
+  await loadIssueConnections();
 });
 
 async function saveGitTokens() {
@@ -240,6 +337,7 @@ async function saveGitTokens() {
     if (!r.ok) throw new Error(d.error || 'Save failed');
     Object.assign(gitTok, d);
     ghTokenInput.value = ''; glabTokenInput.value = '';
+    loadIssueConnections();
     gitTokOk.value = true; setTimeout(() => { gitTokOk.value = false; }, 3000);
   } catch (e) {
     gitTokError.value = e.message;
@@ -436,6 +534,24 @@ async function saveWorkspace() {
 .tok-input:focus { outline: none; border-color: var(--jg-green); }
 .tok-set { color: var(--jg-green); font-size: 10px; margin-left: 6px; }
 .tok-unset { color: var(--jg-text-faint); font-size: 10px; margin-left: 6px; }
+
+/* Issue sources */
+.issrc-block { margin: 10px 0 14px; }
+.issrc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.issrc-prov { font-size: 11px; font-weight: 600; color: var(--jg-text-muted); display: flex; align-items: center; gap: 5px; }
+.issrc-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.issrc-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-family: monospace; color: var(--jg-text); background: var(--jg-hover); border: 1px solid var(--jg-border); border-radius: 12px; padding: 2px 4px 2px 9px; }
+.issrc-chip-x { background: none; border: none; color: var(--jg-text-faint); cursor: pointer; padding: 0 2px; display: flex; }
+.issrc-chip-x:hover { color: var(--jg-red); }
+.issrc-none { font-size: 11px; color: var(--jg-text-faint); }
+.issrc-search { display: flex; gap: 6px; align-items: center; }
+.issrc-search input { flex: 1; background: var(--jg-bg); border: 1px solid var(--jg-border); border-radius: var(--radius); color: var(--jg-text); font-family: monospace; font-size: 11px; padding: 6px 8px; outline: none; }
+.issrc-search input:focus { border-color: var(--jg-green); }
+.issrc-results { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; max-height: 180px; overflow-y: auto; border: 1px solid var(--jg-border); border-radius: var(--radius); }
+.issrc-result { display: flex; align-items: center; gap: 6px; background: none; border: none; border-bottom: 1px solid var(--jg-border); color: var(--jg-text-muted); font-family: monospace; font-size: 11px; padding: 6px 8px; cursor: pointer; text-align: left; }
+.issrc-result:last-child { border-bottom: none; }
+.issrc-result:hover { background: var(--jg-hover); color: var(--jg-green); }
+.issrc-priv { font-size: 9px; color: var(--jg-text-faint); border: 1px solid var(--jg-border); border-radius: 8px; padding: 0 5px; margin-left: auto; }
 .about-row {
   display: flex; justify-content: space-between;
   font-size: 12px; color: var(--jg-text-muted);

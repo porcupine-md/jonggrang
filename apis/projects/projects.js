@@ -236,11 +236,20 @@ module.exports = function(deps) {
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
         stopProjectWatcher(project.id);
-        webState.deleteProject(project.id);
 
-        if (req.query.delete_files === 'true') {
-            try { fs.rmSync(project.path, { recursive: true, force: true }); } catch {}
+        // Purge on-disk state. The central worktree dir is always removed
+        // (jonggrang-internal); the project repo only when delete_files. For a
+        // sandbox project these files are root-owned (written by the in-container
+        // root user) so plain host fs.rmSync EACCESes — purgeProjectFiles clears
+        // them via a throwaway container, then removes the empty dirs.
+        try {
+            sandbox.purgeProjectFiles(project, { deleteRepo: req.query.delete_files === 'true' });
+        } catch (err) {
+            console.error('purgeProjectFiles error during project deletion:', err);
         }
+        try { sandbox.removeProjectSshKey(project.id); } catch {}
+
+        webState.deleteProject(project.id);
         res.status(204).send();
     });
 

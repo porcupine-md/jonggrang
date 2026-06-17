@@ -106,6 +106,19 @@ module.exports = function (deps) {
         }
     });
 
+    // Candidate base branches for a new plan/worktree (local + origin remote
+    // refs, deduped) plus the resolved default. Read-only host call — works with
+    // the container stopped; worktree creation later fetches the chosen base.
+    router.get('/:id/branches', (req, res) => {
+        const project = projectOr404(req, res);
+        if (!project) return;
+        try {
+            res.json(lib.listBranches(project.path));
+        } catch (err) {
+            res.status(500).json({ error: { code: 'BRANCHES_ERROR', message: err.message } });
+        }
+    });
+
     // Pull the remote base branch into local — fetch + rebase only. Does NOT
     // commit local state (the user commits themselves). Uncommitted local
     // changes are preserved via --autostash.

@@ -252,6 +252,7 @@ module.exports = function register(app, io, ctx) {
     }
     app.use('/api/projects', require('./sandbox-routes')(deps));
     app.use('/api', require('../secrets')(deps));
+    app.use('/api', require('../issues')(deps));
     app.use('/api/projects', require('./settings')(deps));
 
     // Idle sandbox auto-stop disabled — containers stopped manually only
