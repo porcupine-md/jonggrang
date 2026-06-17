@@ -24,6 +24,12 @@
             <input type="checkbox" v-model="deep" />
             Deep analysis
           </label>
+          <label class="deep-label" style="gap:6px" title="Branch the worktree is cut from (fetched fresh from origin)">
+            base:
+            <Select v-model="selectedBase" :options="availableBranches" filter resetFilterOnHide
+                    filterPlaceholder="search branch…" scrollHeight="240px"
+                    placeholder="base branch" class="base-select" />
+          </label>
           <div style="flex:1" />
           <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD file (.md, .pdf)">
             <i class="pi pi-upload" /> BRD/PRD
@@ -93,6 +99,17 @@
                 class="plan-badge"
                 :class="runBadgeOf(plan) === 'live' ? 'plan-badge--run-live' : 'plan-badge--run-failed'"
               >{{ runBadgeOf(plan) }}</span>
+              <a
+                v-if="plan.source_issue"
+                class="src-issue-link"
+                :href="plan.source_issue.url"
+                target="_blank"
+                rel="noopener"
+                :title="`${plan.source_issue.repo}#${plan.source_issue.number}`"
+                @click.stop
+              >
+                <ProviderIcon :provider="plan.source_issue.provider" :size="10" />#{{ plan.source_issue.number }}
+              </a>
             </div>
           </div>
         </div>
@@ -150,6 +167,12 @@
               <label class="deep-label">
                 <input type="checkbox" v-model="deep" />
                 Deep analysis
+              </label>
+              <label class="deep-label" style="gap:6px" title="Branch the worktree is cut from (fetched fresh from origin)">
+                base:
+                <Select v-model="selectedBase" :options="availableBranches" filter resetFilterOnHide
+                        filterPlaceholder="search branch…" scrollHeight="240px"
+                        placeholder="base branch" class="base-select" />
               </label>
               <div style="flex:1" />
               <div style="display:flex;gap:8px">
@@ -340,12 +363,27 @@ import { useLogTerminal } from '../../composables/useLogTerminal.js';
 import { useProjectsStore } from '../../stores/projects.js';
 import { useWsStore } from '../../stores/ws.js';
 import { useOrchestrationStore } from '../../stores/orchestration.js';
+import { usePickupStore } from '../../stores/pickup.js';
+import ProviderIcon from '../ProviderIcon.vue';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
 const projects = useProjectsStore();
 const ws = useWsStore();
 const orch = useOrchestrationStore();
+const pickup = usePickupStore();
+
+// Issue pickup (feature #55): if an issue was picked up into this project, open
+// the New-Plan form already filled with the issue title/body + source link.
+function applyPickupPrefill() {
+  const p = pickup.consumePrefill(projectId.value);
+  if (!p) return;
+  description.value = p.description;
+  deep.value = false;
+  genError.value = '';
+  selectedPlan.value = null;
+  showNewPlanForm.value = true;
+}
 
 const project = computed(() => projects.byId[projectId.value]);
 const state = computed(() => project.value?.derived_state?.state || 'idle');
@@ -360,6 +398,10 @@ const deep = ref(false);
 const showNewPlanForm = ref(false);
 const uploadedFile = ref(null);
 const fileInputRef = ref(null);
+
+// Base branch the worktree is cut from (fetched fresh from origin at run time)
+const selectedBase = ref('');
+const availableBranches = ref([]);
 
 // Tool / model / effort
 const selectedTool = ref(null);
@@ -445,6 +487,19 @@ async function loadBase() {
   try {
     const res = await fetch(`/api/projects/${projectId.value}/base`);
     if (res.ok) Object.assign(base, await res.json());
+  } catch {}
+}
+
+// Candidate base branches for the New Plan picker. Defaults the selection to the
+// repo's resolved base (main/master). The worktree fetches this branch fresh
+// from origin at run time, so the picker list only needs branch names.
+async function loadBranches() {
+  try {
+    const res = await fetch(`/api/projects/${projectId.value}/branches`);
+    if (!res.ok) return;
+    const data = await res.json();
+    availableBranches.value = data.branches || [];
+    if (!selectedBase.value) selectedBase.value = data.default || availableBranches.value[0] || '';
   } catch {}
 }
 
@@ -593,6 +648,7 @@ async function generatePlan() {
     if (selectedTool.value)   body.tool   = selectedTool.value;
     if (selectedModel.value)  body.model  = selectedModel.value;
     if (selectedEffort.value) body.effort = selectedEffort.value;
+    if (selectedBase.value)   body.base   = selectedBase.value;
 
     if (uploadedFile.value) {
       // Read file as base64 in chunks to avoid blowing the call stack on
@@ -607,6 +663,7 @@ async function generatePlan() {
       body.fileContent = btoa(binary);
       body.fileName = uploadedFile.value.name;
     }
+
 
     const res = await fetch(`/api/projects/${projectId.value}/plan`, {
       method: 'POST',
@@ -721,6 +778,8 @@ onMounted(async () => {
   await loadPlans();
   await loadProjectTool();
   loadBase();
+  loadBranches();
+  applyPickupPrefill();
 
   // Live run badges: always re-hydrate from the server so a group that
   // finished while on another view doesn't keep a stale "live" badge.
@@ -840,6 +899,9 @@ watch(projectId, loadPlans);
 .plan-badge { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; padding: 1px 5px; }
 .plan-badge--run-live { background: color-mix(in oklch, var(--jg-green) 20%, transparent); color: var(--jg-green); animation: livePulse 1.2s infinite; }
 .plan-badge--run-failed { background: color-mix(in oklch, var(--jg-red) 15%, transparent); color: var(--jg-red); }
+.src-issue-link { display: inline-flex; align-items: center; gap: 2px; font-size: 9px; color: var(--jg-text-faint); text-decoration: none; }
+.src-issue-link:hover { color: var(--jg-cyan); }
+.src-issue-link .pi { font-size: 9px; }
 @keyframes livePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
 
 /* Push plans → base branch */
@@ -1010,6 +1072,7 @@ watch(projectId, loadPlans);
 
 /* Shared */
 .deep-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--jg-text-faint); }
+.base-select { min-width: 150px; font-size: 12px; }
 .error-text { font-size: 11px; color: var(--jg-red); margin-top: 8px; }
 
 /* Tool config button */

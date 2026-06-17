@@ -19,6 +19,7 @@ const path = require('path');
 
 const lib = require('../../lib/jonggrang');
 const sandbox = require('../../lib/sandbox');
+const sandboxGit = require('../../lib/sandbox-git');
 
 const LOG_TAIL_MAX = 200;
 const GIT_MAXBUF = 1024 * 1024 * 64;
@@ -92,10 +93,14 @@ module.exports = function(deps) {
     // root-owned bind mount, so the host (a different uid) can't write into it
     // — seeding/mirroring must happen in-container or it EACCESes. `items` is a
     // list of {src, dst} container-absolute paths; missing srcs are skipped.
+    // `rm -rf dst` first: a worktree created from a HEAD that already tracks the
+    // seeded path (e.g. main carries .jonggrang/ via "Push plans") would make
+    // `cp -a src dst` nest the dir inside the existing one (.output/.output),
+    // hiding the feature's manifest. Removing dst first guarantees a clean copy.
     function containerCopy(ctx, items) {
         if (!items.length) return;
         const script = items.map(({ src, dst }) =>
-            `if [ -e "${src}" ]; then mkdir -p "$(dirname "${dst}")" && cp -a "${src}" "${dst}"; fi`
+            `if [ -e "${src}" ]; then mkdir -p "$(dirname "${dst}")" && rm -rf "${dst}" && cp -a "${src}" "${dst}"; fi`
         ).join('; ');
         execFileSync('docker', ['exec', ctx.container, 'sh', '-c', script],
             { encoding: 'utf8', maxBuffer: GIT_MAXBUF });
@@ -113,6 +118,35 @@ module.exports = function(deps) {
         }
     }
 
+    // Resolve the worktree start-point. If the plan picked a base branch, fetch
+    // it from origin and branch off the FRESH remote tip (FETCH_HEAD) so the
+    // worktree always starts from the latest remote (fetch is non-interactive +
+    // uses the sandbox SSH key via sandbox-git). Falls back to the local branch,
+    // then HEAD, if the fetch fails (offline / no such remote branch / no base).
+    function resolveStartRef(ctx, base) {
+        if (!base) return 'HEAD';
+        // This is the single choke point every base value flows through (CLI
+        // --base, web API, AI-written frontmatter, committed plan.md). `base` is
+        // interpolated into a shell command below, so reject anything that isn't
+        // a plain branch name before it reaches the shell.
+        if (!lib.isSafeBranchName(base)) {
+            console.warn(`orchestration: ignoring unsafe base "${base}" — starting worktree from HEAD`);
+            return 'HEAD';
+        }
+        try {
+            sandboxGit.gitShell(ctx, `fetch origin "${base}"`);
+            return 'FETCH_HEAD';
+        } catch (fetchErr) {
+            try { gitSync(ctx, ctx.root, ['rev-parse', '--verify', `refs/heads/${base}`]); return base; }
+            catch {
+                // The plan explicitly asked for this base but it's neither on
+                // origin nor local — surface it instead of silently using HEAD.
+                console.warn(`orchestration: base "${base}" not found on origin or locally (${fetchErr.message}) — starting worktree from HEAD`);
+                return 'HEAD';
+            }
+        }
+    }
+
     function createWorktreeCtx(ctx, g) {
         const wt = ctx.wt(g.featureId);
         const branch = g.branch;
@@ -122,22 +156,26 @@ module.exports = function(deps) {
         try { gitSync(ctx, ctx.root, ['worktree', 'remove', `${ctx.root}/.jonggrang/.worktree/${g.featureId}`, '--force']); } catch {}
         try { gitSync(ctx, ctx.root, ['branch', '-D', branch]); } catch {}
         try { fs.mkdirSync(path.dirname(ctx.hostWt(g.featureId)), { recursive: true }); } catch {}
-        const baseSha = gitSync(ctx, ctx.root, ['rev-parse', 'HEAD']).trim();
-        gitSync(ctx, ctx.root, ['worktree', 'add', '-b', branch, wt, 'HEAD']);
+        const startRef = resolveStartRef(ctx, g.base);
+        const baseSha = gitSync(ctx, ctx.root, ['rev-parse', startRef]).trim();
+        gitSync(ctx, ctx.root, ['worktree', 'add', '-b', branch, wt, startRef]);
         return { worktreePath: wt, hostWorktreePath: ctx.hostWt(g.featureId), branch, baseSha };
     }
 
-    // Paths kept OUT of feature-branch commits and the run diff: jonggrang's
-    // own runtime state (seeded into every worktree, tracked on main via "Push
-    // plans") and installed dependencies. Feature branches carry CODE only —
-    // otherwise merged PRs drag .jonggrang/jonggrang-tasks.json + node_modules
-    // into main and later collide with local state on rebase.
-    const DIFF_EXCLUDES = [':(exclude).jonggrang', ':(exclude).jonggrang/**', ':(exclude)node_modules', ':(exclude)node_modules/**'];
+    // Paths kept OUT of feature-branch commits and the run diff. jonggrang seeds
+    // its own scaffold + runtime (COPY_INTO_WORKTREE) into every worktree so the
+    // agent has its config + skills; none of it is the user's code. If any of it
+    // lands in a feature commit, merging the PR drags jonggrang's scaffold
+    // (.claude, .codex, .opencode, hooks, AGENTS.md, CLAUDE.md) and runtime state
+    // onto main. Derive the exclude set from the seeded list (single source of
+    // truth) + installed deps, so this can never drift from what we seed.
+    const SEEDED_PATHS = [...new Set(COPY_INTO_WORKTREE.map(p => p.split('/')[0])), 'node_modules'];
+    const DIFF_EXCLUDES = SEEDED_PATHS.flatMap(p => [`:(exclude)${p}`, `:(exclude)${p}/**`]);
 
     function commitWorktreeCtx(ctx, wt, message) {
         gitSync(ctx, wt, ['add', '-A']);
-        // Unstage runtime state + deps so the feature commit is code-only.
-        try { gitSync(ctx, wt, ['reset', '-q', '--', '.jonggrang', 'node_modules']); } catch {}
+        // Unstage seeded scaffold + deps so the feature commit is code-only.
+        try { gitSync(ctx, wt, ['reset', '-q', '--', ...SEEDED_PATHS]); } catch {}
         const staged = gitSync(ctx, wt, ['diff', '--cached', '--name-only']).trim();
         if (!staged) return false;
         gitSync(ctx, wt, ['commit', '-m', message, '-m', lib.COAUTHOR_TRAILER]);
@@ -203,6 +241,7 @@ module.exports = function(deps) {
         return {
             featureId,
             branch: fm.branch || `jonggrang/${featureId}`,
+            base: fm.base || '',
             title: fm.feature || fm.description || featureId,
         };
     }
@@ -459,11 +498,14 @@ module.exports = function(deps) {
     // project so the project's file watcher emits `manifest.updated` and the
     // pipeline view advances live (Implement → … → Complete) instead of
     // stalling at the phase it was seeded with.
-    function syncManifest(project, ctx, group) {
+    // Mirror one worktree file back to the MAIN project copy. `rel` is the path
+    // relative to the project root. The main copy may be root-owned (seeded /
+    // written in-container), so in sandbox mode the copy runs IN the container
+    // to avoid a host EACCES — keeps every sandbox write in the sandbox.
+    function mirrorFromWorktree(project, ctx, group, rel, label) {
         try {
             const base = group.hostWorktreePath || group.worktreePath;
             if (!base) return;
-            const rel = path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml');
             const src = path.join(base, rel);
             const dst = path.join(project.path, rel);
             if (!fs.existsSync(src)) return;
@@ -472,9 +514,6 @@ module.exports = function(deps) {
             try { cur = fs.readFileSync(dst); } catch { /* missing */ }
             if (cur && cur.equals(data)) return; // unchanged → don't churn the watcher
             if (ctx.mode === 'container') {
-                // The main project's feature dir was created by the in-container
-                // decompose (root-owned), so mirror IN the container — a host
-                // write would EACCES. Keeps every sandbox write in the sandbox.
                 const srcC = path.join(group.worktreePath, rel);
                 const dstC = path.join(ctx.root, rel);
                 execFileSync('docker', ['exec', ctx.container, 'sh', '-c',
@@ -485,15 +524,30 @@ module.exports = function(deps) {
                 fs.writeFileSync(dst, data);
             }
         } catch (err) {
-            console.error('orchestration syncManifest error:', err.message);
+            console.error(`orchestration ${label} error:`, err.message);
         }
+    }
+
+    // The worktree worker updates its OWN manifest + progress log; the dashboard
+    // reads the MAIN project's copies and the NEXT plan's worktree is seeded from
+    // them. Mirror both back so the pipeline view advances live AND the progress
+    // log accumulates across plans (tasks.json already syncs via task signals).
+    function syncManifest(project, ctx, group) {
+        mirrorFromWorktree(project, ctx, group,
+            path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml'), 'syncManifest');
+    }
+    function syncProgress(project, ctx, group) {
+        mirrorFromWorktree(project, ctx, group, path.join('.jonggrang', 'progress.txt'), 'syncProgress');
     }
 
     function wireWorker(project, ctx, run, group) {
         const child = group.child;
         group.pid = child.pid;
-        // Live-mirror the worktree manifest → main project while the worker runs.
-        group.manifestSync = setInterval(() => syncManifest(project, ctx, group), 1500);
+        // Live-mirror the worktree manifest + progress log → main project while the worker runs.
+        group.manifestSync = setInterval(() => {
+            syncManifest(project, ctx, group);
+            syncProgress(project, ctx, group);
+        }, 1500);
         let buf = '';
         const onData = (stream) => (data) => {
             buf += data.toString();
@@ -523,6 +577,7 @@ module.exports = function(deps) {
             group.finishedAt = new Date().toISOString();
             if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
             syncManifest(project, ctx, group); // final state (e.g. completed) → main project
+            syncProgress(project, ctx, group); // final progress log → main project
             if (code === 0) {
                 try {
                     group.committed = commitWorktreeCtx(ctx, group.worktreePath, `feat(${group.featureId}): ${group.title}`);
