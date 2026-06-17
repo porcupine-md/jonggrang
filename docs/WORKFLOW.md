@@ -230,6 +230,28 @@ Last test output:
   ...
 ```
 
+#### Project Context: Codemap (LLM-free)
+
+Every fresh-context agent — work-loop tasks, plan/approve, deep-plan discovery, orchestration phase agents, and the Pi TUI session — receives a **deterministic codebase map** (codemap) at the top of its prompt under `## Project Context (codemap)`. The codemap is:
+
+- **LLM-free** — built by reading the filesystem (no model call, no extra latency, no extra cost).
+- **Cached** — stored at `.jonggrang/codemap/codemap.json` and invalidated by a SHA-256 content hash over `package.json`, lockfiles, `tsconfig.json`, and the top-level directory layout.
+- **Truncated** — capped at ~3000 chars per prompt to keep the context budget honest.
+- **Stale-aware** — if the project changed since the cache was written, a warning banner is prepended and the agent can `jonggrang codemap --refresh` to update.
+
+What the codemap surfaces: project name + version, packages, detected frameworks (React, Next, Express, …), entry points, npm/Make scripts, test framework, conventions (TypeScript, ESLint, Prettier, Docker, CI), key files (AGENTS.md, CLAUDE.md, README, …), and a depth-limited directory tree.
+
+The CLI:
+
+```bash
+jonggrang codemap                 # print markdown (cache-aware)
+jonggrang codemap --refresh       # force regen
+jonggrang codemap --stats         # one-line summary
+jonggrang codemap --json | jq .   # machine-readable
+```
+
+This mirrors **pi-compass** (the Pi extension of the same name): deterministic, hash-validated, and integrated into all the same surface area.
+
 #### Step 9: Loop Decision
 
 ```

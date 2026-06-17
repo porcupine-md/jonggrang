@@ -27,3 +27,4 @@ dist-ssr
 .claude
 .jonggrang/.ephemeral/
 .jonggrang/.output/
+.jonggrang/codemap/
