@@ -40,8 +40,9 @@ const SELF = process.cwd();
 
 test('self: project name + version come from package.json', () => {
   const cm = codemap.generateCodemap(SELF);
-  assert.strictEqual(cm.project.name, 'jonggrang');
-  assert.strictEqual(cm.project.version, '0.9.4');
+  const pkg = JSON.parse(fs.readFileSync(path.join(SELF, 'package.json'), 'utf8'));
+  assert.strictEqual(cm.project.name, pkg.name);
+  assert.strictEqual(cm.project.version, pkg.version);
 });
 
 test('self: detects express + socket.io from package.json deps', () => {
