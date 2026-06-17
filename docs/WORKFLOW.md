@@ -15,6 +15,8 @@ Phase 1 — jonggrang plan "description"
     │
     ├─ AI writes .jonggrang/plan.md  (high-level, human-editable)
     │   frontmatter: feature, branch, work_type, description, created_at
+    │   optional `base:` (set via `--base` / the web base picker) — the branch the
+    │   worktree is cut from; fetched fresh from origin at run time. Default: main/master.
     │
     ├─ Interactive prompt:
     │   > Approve (immediately run Phase 2)
@@ -370,6 +372,8 @@ Phase 10-12,16 → Reviewer
 Phase 13       → TestLead
 Phase 14-15    → Tester
 ```
+
+**Output file tracking** — after phases 8, 12, and 14 complete, the orchestrator runs `git diff` against the SHA captured before the phase started (covering committed, staged, and unstaged changes) and records the result under `phases[N].output_files` in `MANIFEST.yaml`. Use `jonggrang manifest show` to inspect what each phase produced.
 
 ### Role Boundaries
 

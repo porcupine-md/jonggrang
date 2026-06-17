@@ -107,6 +107,10 @@ function logInfo(msg) { console.log(`${BLUE}[jonggrang]${NC} ${msg}`); }
 function logSuccess(msg) { console.log(`${GREEN}[jonggrang]${NC} ${msg}`); }
 function logWarn(msg) { console.log(`${YELLOW}[jonggrang]${NC} ${msg}`); }
 function logError(msg) { console.error(`${RED}[jonggrang]${NC} ${msg}`); }
+
+function gitRevParse(cwd) {
+  try { return execSync('git rev-parse HEAD', { cwd, encoding: 'utf8' }).trim(); } catch { return null; }
+}
 function logHeader(msg) {
   console.log('');
   console.log(`${BOLD}${CYAN}==============================${NC}`);
@@ -957,15 +961,36 @@ function displayPlanBox(planFile) {
 // Ensure the project is initialized. Offers to run `jonggrang init` if not.
 // Returns true if we can proceed, false if the user declined or init failed.
 async function ensureInit() {
-  if (lib.fileExists(CONFIG_FILE)) return true;
+  const validation = lib.validateProjectState(PROJECT_ROOT);
 
+  // All 3 files valid — ready to go
+  if (validation.allValid) return true;
+
+  // Config is valid but tasks/progress are missing/corrupt — auto-regenerate them
+  if (validation.config.valid) {
+    const existingConfig = lib.readJSON(CONFIG_FILE);
+    const name = existingConfig?.name || path.basename(PROJECT_ROOT);
+
+    if (!validation.tasks.valid) {
+      lib.writeJSON(TASKS_FILE, { feature: '', branch: '', tasks: [] });
+      logWarn(`Regenerated jonggrang-tasks.json (was ${validation.tasks.reason}).`);
+    }
+    if (!validation.progress.valid) {
+      const now = new Date().toISOString().split('T')[0];
+      fs.writeFileSync(PROGRESS_FILE, `# Jonggrang Progress Log — ${name}\n# Created: ${now}\n`);
+      logWarn(`Regenerated progress.txt (was ${validation.progress.reason}).`);
+    }
+    return true;
+  }
+
+  // Config itself is invalid — need full init
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
   if (!isInteractiveTTY) {
     logError('Project not initialized. Run "jonggrang init" first.');
     return false;
   }
 
-  logWarn('Project not initialized (.jonggrang/jonggrang.json not found).');
+  logWarn('Project not initialized (.jonggrang/jonggrang.json not found or invalid).');
   const doInit = await confirm({
     message: 'Initialize project now?',
     initialValue: true,
@@ -991,12 +1016,23 @@ async function cmdPlan(args, opts = {}) {
   let autoApprove = false;
   let deepMode = false;
   let reviseMode = false;
+  let baseBranch = '';
 
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--yes' || arg === '-y') autoApprove = true;
     else if (arg === '--deep') deepMode = true;
     else if (arg === '--revise') reviseMode = true;
+    else if (arg === '--base') baseBranch = args[++i] || '';
     else if (!arg.startsWith('--')) description = arg;
+  }
+
+  // Validate --base up front: it ends up interpolated into `git fetch` at
+  // worktree creation, so reject anything that isn't a plain branch name before
+  // we spend a plan generation on it.
+  if (baseBranch && !lib.isSafeBranchName(baseBranch)) {
+    logError(`Invalid --base "${baseBranch}": must be a plain branch name (letters, digits, . _ / -).`);
+    process.exit(1);
   }
 
   if (!await ensureInit()) return;
@@ -1167,6 +1203,14 @@ async function cmdPlan(args, opts = {}) {
 
     const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+  }
+
+  // The base branch (worktree start-point) is a deterministic user choice, so
+  // write it into the generated plan.md frontmatter (overriding anything the AI
+  // may have put there). Covers both deep + standard generation paths above.
+  // Warn if it didn't take — otherwise the worktree silently cuts from HEAD.
+  if (baseBranch && lib.fileExists(PLAN_FILE) && !lib.setPlanBase(PLAN_FILE, baseBranch)) {
+    logWarn(`Could not write base "${baseBranch}" to the plan frontmatter — the worktree will start from HEAD unless you set it manually.`);
   }
 
   if (autoApprove) {
@@ -1659,19 +1703,46 @@ async function cmdInit() {
 
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
 
-  if (lib.fileExists(CONFIG_FILE) && !INIT_FORCE) {
-    if (isInteractiveTTY) {
-      const overwrite = await confirm({
-        message: 'jonggrang.json already exists. Overwrite?',
-        initialValue: false,
-      });
-      if (isCancel(overwrite) || !overwrite) {
-        cancel('Init cancelled.');
-        return;
+  // ── Validate existing project state ───────────────────────────
+  const validation = lib.validateProjectState(PROJECT_ROOT);
+
+  if (validation.allValid && !INIT_FORCE) {
+    // All 3 files exist and are valid — skip re-initialization
+    const existingConfig = lib.readJSON(CONFIG_FILE);
+    const existingTasks = lib.getTasks(TASKS_FILE);
+    const taskCount = existingTasks.tasks?.length || 0;
+    const completedCount = existingTasks.tasks?.filter(t => t.status === 'completed').length || 0;
+    logSuccess(`Project "${existingConfig.name}" is already initialized.`);
+    logInfo(`  jonggrang.json       ✓ valid`);
+    logInfo(`  jonggrang-tasks.json ✓ valid (${taskCount} tasks, ${completedCount} completed)`);
+    logInfo(`  progress.txt         ✓ valid`);
+    logInfo('Use --force to re-initialize from scratch.');
+    return;
+  }
+
+  if (!validation.allValid && !INIT_FORCE) {
+    // Some files exist — warn user before overwriting
+    const hasAny = validation.config.valid || validation.tasks.valid || validation.progress.valid;
+    if (hasAny) {
+      const statusLabel = (v) => v.valid ? '✓ valid' : `✗ ${v.reason}`;
+      logWarn('Existing project state detected:');
+      logInfo(`  jonggrang.json       ${statusLabel(validation.config)}`);
+      logInfo(`  jonggrang-tasks.json ${statusLabel(validation.tasks)}`);
+      logInfo(`  progress.txt         ${statusLabel(validation.progress)}`);
+
+      if (isInteractiveTTY) {
+        const overwrite = await confirm({
+          message: 'Re-initialize? Valid files will be preserved where possible.',
+          initialValue: false,
+        });
+        if (isCancel(overwrite) || !overwrite) {
+          cancel('Init cancelled.');
+          return;
+        }
+      } else {
+        logError('Project partially initialized. Use --force to overwrite.');
+        process.exit(1);
       }
-    } else {
-      logError('jonggrang.json already exists. Use --force to overwrite.');
-      process.exit(1);
     }
   }
 
@@ -1760,7 +1831,7 @@ async function cmdInit() {
     autonomy: INIT_AUTONOMY,
     testing: INIT_TESTING,
     ci: INIT_CI,
-  }, JONGGRANG_HOME, PROJECT_ROOT);
+  }, JONGGRANG_HOME, PROJECT_ROOT, { force: !!INIT_FORCE });
 
   logSuccess('Generated .jonggrang/jonggrang.json');
   logSuccess('Generated opencode.json');
@@ -2065,10 +2136,15 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     }
 
     // ── Run agent(s) ──────────────────────────────────────────────
+    const trackOutputFiles = orchestration.OUTPUT_TRACKING_PHASES.has(phaseNum);
+    const beforeSha = trackOutputFiles ? gitRevParse(PROJECT_ROOT) : null;
+
     let exitCode = 0;
     for (const unit of phaseUnits) {
       if (unit.label) logInfo(`  → simplify: ${unit.label}`);
-      exitCode = await lib.runAgent(buildPrompt(unit.core), activeTool, activeMode, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      const result = await lib.runAgent(buildPrompt(unit.core), activeTool, activeMode, PROJECT_ROOT,
+        { debug: DEBUG, model: MODEL, effort: EFFORT });
+      exitCode = typeof result === 'object' ? (result.code || 0) : (result || 0);
       if (exitCode !== 0) break;
     }
 
@@ -2076,6 +2152,18 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       logWarn(`Phase ${phaseNum} agent exited with code ${exitCode}`);
       orchestration.failPhase(manifestPath, phaseNum, `Agent exit code: ${exitCode}`);
     } else {
+      // Track output files via git diff (ground truth — not agent self-reporting)
+      if (trackOutputFiles && beforeSha) {
+        try {
+          const files = orchestration.getChangedFiles(PROJECT_ROOT, beforeSha);
+          if (files.length > 0) {
+            orchestration.addOutputFiles(manifestPath, phaseNum, files);
+            logInfo(`  tracked ${files.length} output file(s)`);
+          }
+        } catch (e) {
+          logWarn(`output file tracking: ${e.message}`);
+        }
+      }
       orchestration.completePhase(manifestPath, phaseNum);
       logSuccess(`Phase ${phaseNum} complete`);
     }
@@ -2304,6 +2392,7 @@ async function cmdMenuClack() {
         { value: 'approve',   label: `Approve plan             — Phase 2: decompose to tasks${hasPendingPlan ? ' ◀ pending plan!' : ''}` },
         { value: 'work',      label: 'Start work loop          — execute tasks' },
         { value: 'status',    label: 'Show status board' },
+        { value: 'manifest',  label: 'Inspect output manifest   — list files tracked per phase' },
         { value: 'review',    label: 'Run code review' },
         { value: 'web',       label: 'Launch web dashboard' },
         { value: 'exit',      label: 'Exit menu' },
@@ -2351,6 +2440,9 @@ async function cmdMenuClack() {
           break;
         case 'status':
           cmdStatus();
+          break;
+        case 'manifest':
+          cmdManifest([]);
           break;
         case 'review':
           checkDeps();
@@ -3295,6 +3387,215 @@ Examples:
 }
 
 // ============================================================
+// MANIFEST COMMAND
+// ============================================================
+
+function cmdManifest(args) {
+  const subcommand = args[0];
+  const subArgs = args.slice(1);
+
+  if (!subcommand || subcommand === 'help' || subcommand === '--help') {
+    cmdManifestHelp();
+    return;
+  }
+
+  // Parse flags common across subcommands
+  const flags = {};
+  const positional = [];
+  let j = 0;
+  while (j < subArgs.length) {
+    if (subArgs[j] === '--feature')        { flags.feature = subArgs[++j]; }
+    else if (subArgs[j] === '--phase')     { flags.phase = parseInt(subArgs[++j], 10); }
+    else if (subArgs[j] === '--files')     { flags.files = subArgs[++j]; }
+    else if (subArgs[j] === '--absolute')  { flags.absolute = true; }
+    else if (subArgs[j] === '--json')      { flags.json = true; }
+    else { positional.push(subArgs[j]); }
+    j++;
+  }
+
+  const isTTY = process.stdout.isTTY;
+  const pretty = !flags.json && isTTY;
+
+  try {
+    switch (subcommand) {
+      case 'list': manifestList(flags, positional, pretty); break;
+      case 'show': manifestShow(flags, positional, pretty); break;
+      case 'add':  manifestAdd(flags, positional, pretty); break;
+      default:
+        // Treat bare feature ID as "show <id>"
+        manifestShow(flags, [subcommand, ...positional], pretty);
+    }
+  } catch (err) {
+    if (pretty) {
+      logError(err.message);
+    } else {
+      console.log(JSON.stringify({ error: err.message }));
+    }
+    process.exit(1);
+  }
+}
+
+function manifestAdd(flags, _positional, pretty) {
+  const featureId = flags.feature;
+  if (!featureId) throw new Error('--feature <id> required');
+  const phaseNum = flags.phase;
+  if (!phaseNum || isNaN(phaseNum)) throw new Error('--phase <num> required (e.g. --phase 8)');
+
+  let files;
+  try {
+    files = JSON.parse(flags.files || '[]');
+  } catch (err) {
+    throw new Error(`--files must be valid JSON: ${err.message}`);
+  }
+  if (!Array.isArray(files)) throw new Error('--files must be a JSON array');
+
+  const manifestPath = orchestration.getManifestPath(PROJECT_ROOT, featureId);
+  if (!require('fs').existsSync(manifestPath)) {
+    throw new Error(`Feature not found: ${featureId}\nExpected manifest at: ${manifestPath}`);
+  }
+  const stored = orchestration.addOutputFiles(manifestPath, phaseNum, files);
+
+  if (pretty) {
+    logSuccess(`Added ${stored.length} file(s) to phase ${phaseNum} of feature ${featureId}`);
+    for (const f of stored) {
+      console.log(`  ${f.path} [${f.type || 'output'}${f.size ? `, ${f.size}b` : ''}]`);
+    }
+  } else {
+    console.log(JSON.stringify({ added: stored.length, files: stored }));
+  }
+}
+
+function manifestList(flags, _positional, pretty) {
+  const manifests = orchestration.listManifests(PROJECT_ROOT);
+
+  if (!pretty) {
+    console.log(JSON.stringify(manifests.map(({ featureId, manifest: m }) => {
+      const fileCount = Object.values(m.phases || {}).reduce((n, p) => n + (p.output_files ? p.output_files.length : 0), 0);
+      return { feature_id: featureId, description: m.description, work_type: m.work_type, status: m.status, updated_at: m.updated_at, file_count: fileCount };
+    })));
+    return;
+  }
+
+  console.log(`\n${BOLD}Feature Manifests (${manifests.length})${NC}\n`);
+  if (manifests.length === 0) {
+    console.log('  (no manifests found — run: jonggrang work "description")');
+    return;
+  }
+  const W = { id: 30, status: 12, type: 8, files: 6, updated: 10 };
+  console.log(`${BOLD}${'Feature ID'.padEnd(W.id)} ${'Status'.padEnd(W.status)} ${'Type'.padEnd(W.type)} ${'Files'.padEnd(W.files)} ${'Updated'.padEnd(W.updated)} Description${NC}`);
+  console.log('-'.repeat(W.id + W.status + W.type + W.files + W.updated + 16));
+  for (const { featureId, manifest: m } of manifests) {
+    const color = m.status === 'completed' ? GREEN : m.status === 'failed' ? RED : YELLOW;
+    const updated = (m.updated_at || '').slice(0, 10);
+    const fileCount = Object.values(m.phases || {}).reduce((n, p) => n + (p.output_files ? p.output_files.length : 0), 0);
+    console.log(`${featureId.slice(0, W.id - 1).padEnd(W.id)} ${color}${(m.status || '').padEnd(W.status)}${NC} ${(m.work_type || '').padEnd(W.type)} ${String(fileCount).padEnd(W.files)} ${updated.padEnd(W.updated)} ${m.description || ''}`);
+  }
+  console.log('');
+}
+
+function manifestShow(flags, positional, pretty) {
+  let featureId = flags.feature || positional[0];
+  let manifestPath;
+
+  if (featureId) {
+    manifestPath = orchestration.getManifestPath(PROJECT_ROOT, featureId);
+  } else {
+    const found = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    if (found) {
+      manifestPath = found.manifestPath;
+      featureId = found.featureId;
+    } else {
+      const all = orchestration.listManifests(PROJECT_ROOT);
+      if (all.length === 0) throw new Error('No manifests found. Run: jonggrang work "description"');
+      manifestPath = all[0].manifestPath;
+      featureId = all[0].featureId;
+    }
+  }
+
+  const manifest = orchestration.readManifest(manifestPath);
+  if (!manifest) throw new Error(`Manifest not found for feature: ${featureId}\nExpected: ${manifestPath}`);
+
+  if (!pretty) {
+    // Resolve absolute paths if requested
+    if (flags.absolute) {
+      for (const phaseNum of Object.keys(manifest.phases || {})) {
+        const phase = manifest.phases[phaseNum];
+        if (Array.isArray(phase.output_files)) {
+          phase.output_files = phase.output_files.map(f => ({
+            ...f,
+            path: f.path ? path.resolve(PROJECT_ROOT, f.path) : f.path,
+          }));
+        }
+      }
+    }
+    console.log(JSON.stringify(manifest, null, 2));
+    return;
+  }
+
+  const statusColor = manifest.status === 'completed' ? GREEN :
+    manifest.status === 'failed' ? RED : YELLOW;
+
+  console.log(`\n${BOLD}Feature: ${manifest.description}${NC}`);
+  console.log(`ID:       ${featureId}`);
+  console.log(`Status:   ${statusColor}${manifest.status}${NC}`);
+  console.log(`Type:     ${manifest.work_type}`);
+  console.log(`Updated:  ${manifest.updated_at ? manifest.updated_at.slice(0, 19).replace('T', ' ') : 'unknown'}`);
+  console.log('');
+
+  const phasesWithFiles = Object.entries(manifest.phases || {})
+    .filter(([, p]) => Array.isArray(p.output_files) && p.output_files.length > 0);
+
+  if (phasesWithFiles.length === 0) {
+    console.log(`  ${YELLOW}No output files tracked yet.${NC}`);
+    console.log(`  (tracking applies to phases 8 implementation, 12 code-quality, 14 testing)`);
+  } else {
+    console.log(`${BOLD}Output files by phase:${NC}`);
+    for (const [num, phase] of phasesWithFiles) {
+      const phaseStatus = phase.status === 'completed' ? `${GREEN}✓${NC}` : `${YELLOW}~${NC}`;
+      console.log(`\n  ${phaseStatus} Phase ${num} — ${phase.name}`);
+      for (const f of phase.output_files) {
+        const p = flags.absolute ? path.resolve(PROJECT_ROOT, f.path) : f.path;
+        const size = f.size ? ` (${f.size}b)` : '';
+        console.log(`    ${p}${size}  [${f.type || 'output'}]`);
+      }
+    }
+  }
+  console.log('');
+}
+
+function cmdManifestHelp() {
+  console.log(`jonggrang manifest — inspect output-file tracking for orchestration features
+
+Usage: jonggrang manifest [subcommand] [options]
+
+Subcommands:
+  (none)                 Show active/most-recent manifest
+  list                   List all feature manifests
+  show [feature-id]      Show manifest with output files per phase
+  add                    Record output files into a manifest (used by hooks)
+
+Options (show/list):
+  --feature <id>         Target feature ID
+  --absolute             Resolve file paths to absolute
+  --json                 Machine-readable JSON output
+
+Options (add — for hooks):
+  --feature <id>         Feature ID (required)
+  --phase <num>          Phase number (required, e.g. 8)
+  --files '<json>'       JSON array of file entries (required)
+                         e.g. '[{"path":"src/foo.js","type":"code"}]'
+  --json                 Output JSON result
+
+Examples:
+  jonggrang manifest                          # show active feature
+  jonggrang manifest list                     # all features
+  jonggrang manifest show feat-abc123         # specific feature
+  jonggrang manifest show feat-abc123 --absolute
+  jonggrang manifest add --feature feat-abc123 --phase 8 --files '[{"path":"src/x.js","type":"code"}]'
+`);
+}
+
+// ============================================================
 // HELP
 // ============================================================
 
@@ -3317,6 +3618,7 @@ Commands:
   status                  Show pipeline state + task board
   review                  Run code review
   task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
+  manifest [sub]          Inspect output-file manifests (list, show, add)
   agent                   Start interactive chat with the AI agent (Pi TUI)
   login                   Add provider credentials (OAuth subscription or API key)
   logout                  Remove provider credentials
@@ -3326,6 +3628,9 @@ Commands:
   bot-reviewer <sub>      Automated MR review bot
     bot-reviewer gitlab     Start GitLab MR review bot (polls for new MRs)
     bot-reviewer settings   Configure token, repos, and Anthropic API key
+  issues <subcommand>     Import GitHub/GitLab issues (feature #55)
+    issues list             List issues from configured sources or --repo
+    issues pickup <p> <r> <n>  Generate a plan from an issue in this project
   version                 Show version
 
   # Backward compat (routes to work):
@@ -3390,6 +3695,91 @@ Examples:
 }
 
 // ============================================================
+// ISSUES — import GitHub/GitLab issues (feature #55)
+// ============================================================
+
+async function cmdIssues(args) {
+  const issueProviders = require('../lib/issue-providers');
+  const webState = require('../lib/web-state');
+  const sub = args[0];
+
+  function tokenFor(provider) {
+    let t = {};
+    try { t = webState.getGitTokens(); } catch {}
+    if (provider === 'github') return t.GH_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || null;
+    if (provider === 'gitlab') return t.GITLAB_TOKEN || process.env.GITLAB_TOKEN || null;
+    return null;
+  }
+
+  function flag(name, def) {
+    const idx = args.indexOf(name);
+    return idx >= 0 && args[idx + 1] ? args[idx + 1] : def;
+  }
+
+  if (sub === 'list') {
+    const provider = flag('--provider', null);
+    const repoFlag = flag('--repo', null);
+    const state = flag('--state', 'open');
+    const limit = parseInt(flag('--limit', '30'), 10);
+
+    let targets = [];
+    if (repoFlag && provider) {
+      targets = [{ provider, repo: repoFlag }];
+    } else {
+      let sources = { github: [], gitlab: [] };
+      try { sources = webState.getIssueSources(); } catch {}
+      for (const p of ['github', 'gitlab']) {
+        if (provider && provider !== p) continue;
+        for (const r of sources[p]) targets.push({ provider: p, repo: r });
+      }
+    }
+    if (!targets.length) {
+      logError('No repos. Use --provider <github|gitlab> --repo owner/repo, or configure Issue Sources in the dashboard.');
+      process.exit(1);
+    }
+    for (const t of targets) {
+      const token = tokenFor(t.provider);
+      if (!token) { logError(`No ${t.provider} token (set GH_TOKEN/GITLAB_TOKEN or configure in dashboard).`); continue; }
+      try {
+        const issues = await issueProviders.getProvider(t.provider).listIssues(token, { repo: t.repo, state, perPage: limit });
+        console.log(`\n${t.provider}:${t.repo} (${issues.length})`);
+        for (const it of issues) console.log(`  #${it.number}  [${it.state}]  ${it.title}`);
+      } catch (e) { logError(`${t.provider}:${t.repo} — ${e.message}`); }
+    }
+    return;
+  }
+
+  if (sub === 'pickup') {
+    const provider = args[1];
+    const repo = args[2];
+    const number = parseInt(args[3], 10);
+    if (!provider || !repo || !number) {
+      logError('Usage: jonggrang issues pickup <github|gitlab> <owner/repo> <number> [--deep] [--yes]');
+      process.exit(1);
+    }
+    const token = tokenFor(provider);
+    if (!token) { logError(`No ${provider} token configured.`); process.exit(1); }
+    const issue = await issueProviders.getProvider(provider).getIssue(token, { repo, number });
+    const marker = `<!-- jonggrang-source: ${JSON.stringify({ provider, repo, number: issue.number, url: issue.url })} -->`;
+    const description = [
+      marker,
+      `# ${issue.title}`,
+      '',
+      `> Imported from issue ${repo}#${issue.number} (${issue.url})`,
+      '',
+      issue.body || '(no description)',
+    ].join('\n');
+    logInfo(`Picking up ${provider}:${repo}#${number} → plan`);
+    await cmdPlan([description, ...args.slice(4)]);
+    return;
+  }
+
+  console.log('Usage:');
+  console.log('  jonggrang issues list [--provider github|gitlab] [--repo owner/repo] [--state open|closed|all] [--limit N]');
+  console.log('  jonggrang issues pickup <github|gitlab> <owner/repo> <number> [--deep] [--yes]');
+}
+
+// ============================================================
 // MAIN
 // ============================================================
 
@@ -3412,8 +3802,18 @@ async function main() {
     return;
   }
 
+  if (command === 'manifest') {
+    cmdManifest(rest);
+    return;
+  }
+
   if (command === 'web' && rest[0] === 'tunnel') {
     cmdWebTunnel(rest.slice(1));
+    return;
+  }
+
+  if (command === 'issues') {
+    await cmdIssues(rest);
     return;
   }
 

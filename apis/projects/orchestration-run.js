@@ -19,6 +19,7 @@ const path = require('path');
 
 const lib = require('../../lib/jonggrang');
 const sandbox = require('../../lib/sandbox');
+const sandboxGit = require('../../lib/sandbox-git');
 
 const LOG_TAIL_MAX = 200;
 const GIT_MAXBUF = 1024 * 1024 * 64;
@@ -87,6 +88,24 @@ module.exports = function(deps) {
         return execFileSync('git', argv, { cwd, encoding: 'utf8', maxBuffer: GIT_MAXBUF });
     }
 
+    // Copy paths between two container-absolute locations, run as root INSIDE
+    // the container. In sandbox mode every file the run produces lands in a
+    // root-owned bind mount, so the host (a different uid) can't write into it
+    // — seeding/mirroring must happen in-container or it EACCESes. `items` is a
+    // list of {src, dst} container-absolute paths; missing srcs are skipped.
+    // `rm -rf dst` first: a worktree created from a HEAD that already tracks the
+    // seeded path (e.g. main carries .jonggrang/ via "Push plans") would make
+    // `cp -a src dst` nest the dir inside the existing one (.output/.output),
+    // hiding the feature's manifest. Removing dst first guarantees a clean copy.
+    function containerCopy(ctx, items) {
+        if (!items.length) return;
+        const script = items.map(({ src, dst }) =>
+            `if [ -e "${src}" ]; then mkdir -p "$(dirname "${dst}")" && rm -rf "${dst}" && cp -a "${src}" "${dst}"; fi`
+        ).join('; ');
+        execFileSync('docker', ['exec', ctx.container, 'sh', '-c', script],
+            { encoding: 'utf8', maxBuffer: GIT_MAXBUF });
+    }
+
     // Container-only: ensure git is usable on the bind-mounted repo
     // and a committer identity exists.
     function prepareContainerGit(ctx) {
@@ -99,6 +118,35 @@ module.exports = function(deps) {
         }
     }
 
+    // Resolve the worktree start-point. If the plan picked a base branch, fetch
+    // it from origin and branch off the FRESH remote tip (FETCH_HEAD) so the
+    // worktree always starts from the latest remote (fetch is non-interactive +
+    // uses the sandbox SSH key via sandbox-git). Falls back to the local branch,
+    // then HEAD, if the fetch fails (offline / no such remote branch / no base).
+    function resolveStartRef(ctx, base) {
+        if (!base) return 'HEAD';
+        // This is the single choke point every base value flows through (CLI
+        // --base, web API, AI-written frontmatter, committed plan.md). `base` is
+        // interpolated into a shell command below, so reject anything that isn't
+        // a plain branch name before it reaches the shell.
+        if (!lib.isSafeBranchName(base)) {
+            console.warn(`orchestration: ignoring unsafe base "${base}" — starting worktree from HEAD`);
+            return 'HEAD';
+        }
+        try {
+            sandboxGit.gitShell(ctx, `fetch origin "${base}"`);
+            return 'FETCH_HEAD';
+        } catch (fetchErr) {
+            try { gitSync(ctx, ctx.root, ['rev-parse', '--verify', `refs/heads/${base}`]); return base; }
+            catch {
+                // The plan explicitly asked for this base but it's neither on
+                // origin nor local — surface it instead of silently using HEAD.
+                console.warn(`orchestration: base "${base}" not found on origin or locally (${fetchErr.message}) — starting worktree from HEAD`);
+                return 'HEAD';
+            }
+        }
+    }
+
     function createWorktreeCtx(ctx, g) {
         const wt = ctx.wt(g.featureId);
         const branch = g.branch;
@@ -108,22 +156,26 @@ module.exports = function(deps) {
         try { gitSync(ctx, ctx.root, ['worktree', 'remove', `${ctx.root}/.jonggrang/.worktree/${g.featureId}`, '--force']); } catch {}
         try { gitSync(ctx, ctx.root, ['branch', '-D', branch]); } catch {}
         try { fs.mkdirSync(path.dirname(ctx.hostWt(g.featureId)), { recursive: true }); } catch {}
-        const baseSha = gitSync(ctx, ctx.root, ['rev-parse', 'HEAD']).trim();
-        gitSync(ctx, ctx.root, ['worktree', 'add', '-b', branch, wt, 'HEAD']);
+        const startRef = resolveStartRef(ctx, g.base);
+        const baseSha = gitSync(ctx, ctx.root, ['rev-parse', startRef]).trim();
+        gitSync(ctx, ctx.root, ['worktree', 'add', '-b', branch, wt, startRef]);
         return { worktreePath: wt, hostWorktreePath: ctx.hostWt(g.featureId), branch, baseSha };
     }
 
-    // Paths kept OUT of feature-branch commits and the run diff: jonggrang's
-    // own runtime state (seeded into every worktree, tracked on main via "Push
-    // plans") and installed dependencies. Feature branches carry CODE only —
-    // otherwise merged PRs drag .jonggrang/jonggrang-tasks.json + node_modules
-    // into main and later collide with local state on rebase.
-    const DIFF_EXCLUDES = [':(exclude).jonggrang', ':(exclude).jonggrang/**', ':(exclude)node_modules', ':(exclude)node_modules/**'];
+    // Paths kept OUT of feature-branch commits and the run diff. jonggrang seeds
+    // its own scaffold + runtime (COPY_INTO_WORKTREE) into every worktree so the
+    // agent has its config + skills; none of it is the user's code. If any of it
+    // lands in a feature commit, merging the PR drags jonggrang's scaffold
+    // (.claude, .codex, .opencode, hooks, AGENTS.md, CLAUDE.md) and runtime state
+    // onto main. Derive the exclude set from the seeded list (single source of
+    // truth) + installed deps, so this can never drift from what we seed.
+    const SEEDED_PATHS = [...new Set(COPY_INTO_WORKTREE.map(p => p.split('/')[0])), 'node_modules'];
+    const DIFF_EXCLUDES = SEEDED_PATHS.flatMap(p => [`:(exclude)${p}`, `:(exclude)${p}/**`]);
 
     function commitWorktreeCtx(ctx, wt, message) {
         gitSync(ctx, wt, ['add', '-A']);
-        // Unstage runtime state + deps so the feature commit is code-only.
-        try { gitSync(ctx, wt, ['reset', '-q', '--', '.jonggrang', 'node_modules']); } catch {}
+        // Unstage seeded scaffold + deps so the feature commit is code-only.
+        try { gitSync(ctx, wt, ['reset', '-q', '--', ...SEEDED_PATHS]); } catch {}
         const staged = gitSync(ctx, wt, ['diff', '--cached', '--name-only']).trim();
         if (!staged) return false;
         gitSync(ctx, wt, ['commit', '-m', message, '-m', lib.COAUTHOR_TRAILER]);
@@ -189,6 +241,7 @@ module.exports = function(deps) {
         return {
             featureId,
             branch: fm.branch || `jonggrang/${featureId}`,
+            base: fm.base || '',
             title: fm.feature || fm.description || featureId,
         };
     }
@@ -206,8 +259,17 @@ module.exports = function(deps) {
             };
         }
         const made = createWorktreeCtx(ctx, info);
-        // Seed working state via host fs (bind-mounted → visible in container).
-        lib.copyToWorktree(project.path, made.hostWorktreePath, COPY_INTO_WORKTREE);
+        // Seed working state. Sandbox: copy IN the container (root) — the worktree
+        // dir was created by the container and is root-owned, so a host-fs copy
+        // would EACCES. Host: plain fs copy.
+        if (ctx.mode === 'container') {
+            containerCopy(ctx, COPY_INTO_WORKTREE.map((rel) => ({
+                src: `${ctx.root}/${rel}`,
+                dst: `${made.worktreePath}/${rel}`,
+            })));
+        } else {
+            lib.copyToWorktree(project.path, made.hostWorktreePath, COPY_INTO_WORKTREE);
+        }
         // Base commit so the diff (vs baseSha) shows ONLY work done in the worktree.
         let effectiveBase = made.baseSha;
         try {
@@ -221,14 +283,6 @@ module.exports = function(deps) {
         };
         writeWorktreeMeta(project, all);
         return { ...made, baseSha: effectiveBase, created: true };
-    }
-
-    // Does the container have an ssh client?
-    function containerHasSsh(container) {
-        return new Promise((resolve) => {
-            execFile('docker', ['exec', container, 'sh', '-c', 'command -v ssh >/dev/null 2>&1 && echo yes || echo no'],
-                { timeout: 10000 }, (err, stdout) => resolve(!err && /yes/.test(String(stdout))));
-        });
     }
 
     // In-container push using the mounted SSH key (staged to a root-owned 0600 file).
@@ -251,18 +305,15 @@ module.exports = function(deps) {
         });
     }
 
-    // Push a branch. Host → host git. Container → in-container SSH push when the
-    // image has an ssh client + a mounted key; otherwise fall back to host-side
-    // push (the branch ref + objects live in the bind-mounted .git, and the host
-    // has ssh/credentials — verified to work regardless of the image).
+    // Push a branch. Host → host git. Container → in-container SSH push using
+    // the mounted key (the agent image ships an ssh client and stages the key
+    // on start). NO host fallback: in sandbox mode the push stays sandboxed —
+    // a missing key/remote surfaces as an error instead of silently using the
+    // host's credentials.
     function pushBranchCtx(ctx, project) {
         return async (branch) => {
             if (ctx.mode === 'container') {
-                const hasKey = !!sandbox.resolveProjectSshKey(project.id);
-                if (hasKey && await containerHasSsh(ctx.container)) {
-                    return containerPush(ctx, branch);
-                }
-                return lib.pushBranch(project.path, branch); // host fallback
+                return containerPush(ctx, branch);
             }
             return lib.pushBranch(ctx.root, branch);
         };
@@ -447,11 +498,14 @@ module.exports = function(deps) {
     // project so the project's file watcher emits `manifest.updated` and the
     // pipeline view advances live (Implement → … → Complete) instead of
     // stalling at the phase it was seeded with.
-    function syncManifest(project, group) {
+    // Mirror one worktree file back to the MAIN project copy. `rel` is the path
+    // relative to the project root. The main copy may be root-owned (seeded /
+    // written in-container), so in sandbox mode the copy runs IN the container
+    // to avoid a host EACCES — keeps every sandbox write in the sandbox.
+    function mirrorFromWorktree(project, ctx, group, rel, label) {
         try {
             const base = group.hostWorktreePath || group.worktreePath;
             if (!base) return;
-            const rel = path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml');
             const src = path.join(base, rel);
             const dst = path.join(project.path, rel);
             if (!fs.existsSync(src)) return;
@@ -459,18 +513,41 @@ module.exports = function(deps) {
             let cur = null;
             try { cur = fs.readFileSync(dst); } catch { /* missing */ }
             if (cur && cur.equals(data)) return; // unchanged → don't churn the watcher
-            fs.mkdirSync(path.dirname(dst), { recursive: true });
-            fs.writeFileSync(dst, data);
+            if (ctx.mode === 'container') {
+                const srcC = path.join(group.worktreePath, rel);
+                const dstC = path.join(ctx.root, rel);
+                execFileSync('docker', ['exec', ctx.container, 'sh', '-c',
+                    `mkdir -p "$(dirname "${dstC}")" && cp -a "${srcC}" "${dstC}"`],
+                    { encoding: 'utf8', maxBuffer: GIT_MAXBUF });
+            } else {
+                fs.mkdirSync(path.dirname(dst), { recursive: true });
+                fs.writeFileSync(dst, data);
+            }
         } catch (err) {
-            console.error('orchestration syncManifest error:', err.message);
+            console.error(`orchestration ${label} error:`, err.message);
         }
+    }
+
+    // The worktree worker updates its OWN manifest + progress log; the dashboard
+    // reads the MAIN project's copies and the NEXT plan's worktree is seeded from
+    // them. Mirror both back so the pipeline view advances live AND the progress
+    // log accumulates across plans (tasks.json already syncs via task signals).
+    function syncManifest(project, ctx, group) {
+        mirrorFromWorktree(project, ctx, group,
+            path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml'), 'syncManifest');
+    }
+    function syncProgress(project, ctx, group) {
+        mirrorFromWorktree(project, ctx, group, path.join('.jonggrang', 'progress.txt'), 'syncProgress');
     }
 
     function wireWorker(project, ctx, run, group) {
         const child = group.child;
         group.pid = child.pid;
-        // Live-mirror the worktree manifest → main project while the worker runs.
-        group.manifestSync = setInterval(() => syncManifest(project, group), 1500);
+        // Live-mirror the worktree manifest + progress log → main project while the worker runs.
+        group.manifestSync = setInterval(() => {
+            syncManifest(project, ctx, group);
+            syncProgress(project, ctx, group);
+        }, 1500);
         let buf = '';
         const onData = (stream) => (data) => {
             buf += data.toString();
@@ -499,7 +576,8 @@ module.exports = function(deps) {
             group.exitCode = code;
             group.finishedAt = new Date().toISOString();
             if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
-            syncManifest(project, group); // final state (e.g. completed) → main project
+            syncManifest(project, ctx, group); // final state (e.g. completed) → main project
+            syncProgress(project, ctx, group); // final progress log → main project
             if (code === 0) {
                 try {
                     group.committed = commitWorktreeCtx(ctx, group.worktreePath, `feat(${group.featureId}): ${group.title}`);
@@ -787,6 +865,10 @@ module.exports = function(deps) {
         if (!lib.hasRemote(project.path)) {
             return res.status(422).json({ error: { code: 'NO_REMOTE', message: 'No "origin" remote configured' } });
         }
+
+        // Sandbox commit + push run via `docker exec` — make sure the container
+        // is up first (no host fallback). No-op for host projects.
+        if (!await readyCtx(project, ctx, res)) return;
 
         const run = activeRuns.get(project.id);
         const g = groupView(project, req.params.featureId);

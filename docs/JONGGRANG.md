@@ -106,7 +106,7 @@ project-root/
 │   ├── .output/                # TRACKED in git — plans + manifests travel with each branch on push
 │   │   └── features/{id}/
 │   │       ├── plan.md         # Archived plan (after approve); frontmatter holds the branch name
-│   │       ├── MANIFEST.yaml   # Phase state (persistent)
+│   │       ├── MANIFEST.yaml   # Phase state + output_files per phase (persistent)
 │   │       └── [phase outputs]
 │   ├── .ephemeral/             # Cleared on restart (gitignored)
 │   │   ├── feedback-loop-state.json
@@ -207,6 +207,22 @@ State persists in `MANIFEST.yaml`. Interrupt and resume across sessions:
 ```bash
 jonggrang orchestrate --resume
 ```
+
+**Output file tracking** — after phases 8 (implementation), 12 (code-quality), and 14 (testing) complete, the orchestrator runs `git diff` to determine which files changed and writes them to `output_files` in `MANIFEST.yaml`. Tracking is based on actual git state (committed, staged, and unstaged changes since phase start), not agent self-reporting:
+
+```yaml
+phases:
+  8:
+    name: implementation
+    status: completed
+    output_files:
+      - path: src/auth/login.ts
+        type: code
+        size: 1842
+        created_at: "2026-06-12T10:00:00.000Z"
+```
+
+Inspect with: `jonggrang manifest show [feature-id]`
 
 **Phase skipping by work type:**
 
@@ -470,11 +486,23 @@ The web dashboard runs **each plan as one group** — every task sharing a `feat
 - On completion, the manager **commits** the worktree to its branch. The user reviews the plan's **Changes** tab (file list + diff) and **pushes the branch** to `origin` (pending manual worktree changes are committed first; same branch name, never `main`/`master`, no auto-merge).
 - A run **survives page navigation** (in-memory run + socket replay + a `.ephemeral/orchestration-run.json` snapshot), matching the single-work-process guarantee. The plan list shows a **live badge** per running plan.
 - **Push plans → base branch** (plan list footer) commits the plan/task/manifest state, **rebases onto `origin/<base>` first** (identical untracked init-scaffolding files are cleared, state-file conflicts resolve in favor of local state — the manager is the single writer), then pushes. A moved `main` (e.g. merged PRs) never causes a rejected push; real conflicts return a clear error instead of guessing.
+- **Sandbox projects run every git operation fully in-container.** For a sandbox project all mutating/network git ops — worktree create, feature commit/diff/push, **and** the "Push plans" checkout/fetch/rebase/commit/push on the base branch — execute inside the container via `docker exec`, using the container's git + its mounted SSH key. There is **no host fallback**: a missing key or remote surfaces as an error rather than silently using the host's credentials. The container is auto-started if stopped. Only read-only status (the base-branch info shown in the UI) is read host-side off the bind-mounted `.git` so it works with the container down. Host projects keep running git on the host.
+- **Git never blocks on a prompt** (host *and* sandbox). Every network git op — clone/fetch/rebase/push — runs non-interactively: `GIT_TERMINAL_PROMPT=0` (fail fast instead of asking for a password), `GIT_ASKPASS` neutered, and `GIT_SSH_COMMAND` with `StrictHostKeyChecking=accept-new` + `BatchMode=yes` so the classic SSH *"Are you sure you want to continue connecting (yes/no)?"* host-key check is auto-accepted for a new host (a **changed** key is still rejected — MITM-safe) and never hangs. Centralized in `lib.gitNonInteractiveEnv()`.
 
 ```
 Plan: simple-api      (task-001..005, blocked_by chain) → worktree feat/simple-api      (serial within)
 Plan: version-endpoint(task-006..009, blocked_by chain) → worktree feat/version-endpoint (parallel with the above)
 ```
+
+### Issues — import GitHub/GitLab issues as plans (feature #55)
+
+The top-level **Issues** menu lists issues from user-selected GitHub & GitLab repos and turns them into plans, without leaving the dashboard.
+
+- **Auth**: reuses the global **Git Host Tokens** (`GH_TOKEN` / `GITLAB_TOKEN`), with `GITHUB_TOKEN`/env fallback. Issue fetching is native `fetch` against the REST APIs (`lib/issue-providers.js`) — no `gh`/`glab` CLI dependency. GitLab uses `Authorization: Bearer`, which accepts both PATs and OAuth tokens.
+- **Repo picker**: Settings → **Issue Sources** searches the repos a token can access and persists the selected list (`issue_sources` in the web index). The Issues page opens on a newest-first view that **fetches GitHub and GitLab together** ("All" tab) aggregated across all configured repos (paginated, 20/page), with provider (All/GitHub/GitLab) / repo / state / label / assignee / search filters (`assigned-to-me` resolves each provider's token owner) and a detail drawer (body + comments + link back). `GET /api/issues?provider=all` merges both providers; passing `provider=github|gitlab` narrows it. Responses are cached ~60s.
+- **Pickup → Plan**: the **Pickup** action does *not* change plan-creation UX — it **pre-fills the existing "New Plan" form** with the issue title/body + a source-issue reference, then the user runs the normal generate → revise → approve flow. *Existing Project* routes straight to that project's pre-filled plan form; *New Project* launches the import wizard and finalizes the pickup once the project is initialized. The prefill is carried in-memory via a small `pickup` store (no large issue body in the URL).
+- **Linking**: the created plan keeps a source marker (`<!-- jonggrang-source: {…} -->`) plus a visible `Imported from issue owner/repo#N` link; `GET /:id/plans` parses either (marker first, issue-URL fallback) so the plan card shows a "↗ repo#N" link. A `issue_pickups` mapping is persisted for optional one-way sync (`POST /api/issues/sync`).
+- **CLI**: `jonggrang issues list [--provider …] [--repo owner/repo] [--state …]` and `jonggrang issues pickup <github|gitlab> <owner/repo> <number>` (generates a plan from the issue in the current project).
 
 ### File Ownership
 
@@ -555,7 +583,7 @@ When an agent is stuck in a loop (blocked exit >3 times), an out-of-band LLM ana
 | `.jonggrang/progress.txt` | Append-only | Agent | Per-task learnings, surprises |
 | `.jonggrang/jonggrang-tasks.json` | Structured | Agent + Human | Task state and history |
 | `.jonggrang/.output/` | Structured JSON | Agent | Phase outputs, architecture plans |
-| `MANIFEST.yaml` | YAML | Orchestrator | Phase state, resume point |
+| `MANIFEST.yaml` | YAML | Orchestrator | Phase state, resume point, `output_files` per phase |
 | Git history | Immutable | Agent | Code changes with context |
 
 ### AGENTS.md

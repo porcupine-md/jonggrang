@@ -3,14 +3,39 @@
 const { Router } = require('express');
 
 const lib = require('../../lib/jonggrang');
+const { STATIC_EFFORTS } = require('../models');
 
 const VALID_PLAN_TOOL   = ['claude', 'opencode', 'codex', 'jonggrang'];
-const VALID_PLAN_EFFORT = ['minimal', 'moderate', 'deep'];
+// Effort levels are backend-specific (see apis/models.js STATIC_EFFORTS — the
+// same set the UI's effort dropdown is populated from). Validate per-tool, and
+// fall back to the union of all backends when no tool is given on the request.
+const ALL_EFFORTS = [...new Set(Object.values(STATIC_EFFORTS).flat())];
 const MAX_STRING_LEN    = 100;
 
 module.exports = function(deps) {
     const { fs, path, webState, orchestration, spawnForProject, wireProjectProcess } = deps;
     const router = Router();
+
+    // Extract a source-issue link from plan content (feature #55). Tries the
+    // machine-readable marker first, then falls back to any GitHub/GitLab issue
+    // URL — robust even if the planner rewrote the body during generation.
+    function parseSourceIssue(content) {
+        if (!content) return null;
+        const m = content.match(/<!--\s*jonggrang-source:\s*(\{.*?\})\s*-->/);
+        if (m) {
+            try {
+                const o = JSON.parse(m[1]);
+                if (o && o.provider && o.repo && o.number) {
+                    return { provider: o.provider, repo: o.repo, number: o.number, url: o.url || null };
+                }
+            } catch {}
+        }
+        const gh = content.match(/https?:\/\/github\.com\/([^/\s)]+\/[^/\s)]+)\/issues\/(\d+)/);
+        if (gh) return { provider: 'github', repo: gh[1], number: parseInt(gh[2], 10), url: gh[0] };
+        const gl = content.match(/https?:\/\/gitlab\.com\/(.+?)\/-\/issues\/(\d+)/);
+        if (gl) return { provider: 'gitlab', repo: gl[1], number: parseInt(gl[2], 10), url: gl[0] };
+        return null;
+    }
 
     function extractPlanTitle(content) {
         const firstLine = content.split('\n').find(l => l.trim());
@@ -38,7 +63,7 @@ module.exports = function(deps) {
             try {
                 const content = fs.readFileSync(draftPath, 'utf-8');
                 const mtime = fs.statSync(draftPath).mtimeMs;
-                plans.push({ id: 'draft', title: extractPlanTitle(content), status: 'draft', mtime, content });
+                plans.push({ id: 'draft', title: extractPlanTitle(content), status: 'draft', mtime, content, source_issue: parseSourceIssue(content) });
             } catch {}
         }
 
@@ -115,6 +140,7 @@ module.exports = function(deps) {
                         status, mtime, work_type, content, branch,
                         run_status: rg?.status || null,
                         pushed: !!rg?.pushed,
+                        source_issue: parseSourceIssue(content),
                     });
                 }
             } catch {}
@@ -210,7 +236,7 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const { description, deep, tool, model, effort } = req.body || {};
+        const { description, deep, tool, model, effort, base } = req.body || {};
         if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
 
         if (tool && !VALID_PLAN_TOOL.includes(tool)) {
@@ -219,14 +245,22 @@ module.exports = function(deps) {
         if (model && typeof model === 'string' && model.length > MAX_STRING_LEN) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'model must be under 100 characters' } });
         }
-        if (effort && !VALID_PLAN_EFFORT.includes(effort)) {
-            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `effort must be one of: ${VALID_PLAN_EFFORT.join(', ')}` } });
+        if (effort) {
+            const allowed = tool ? (STATIC_EFFORTS[tool] || []) : ALL_EFFORTS;
+            if (!allowed.includes(effort)) {
+                const expected = allowed.length ? allowed.join(', ') : '(this backend takes no effort level)';
+                return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `effort must be one of: ${expected}` } });
+            }
+        }
+        if (base && !lib.isSafeBranchName(base)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'base must be a plain branch name (letters, digits, . _ / -)' } });
         }
 
         const args = ['plan', description, ...(deep ? ['--deep'] : [])];
         if (tool)   args.push('--tool', tool);
         if (model)  args.push('--model', model);
         if (effort) args.push('--effort', effort);
+        if (base)   args.push('--base', base);
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan');
         res.status(202).json({ job_id: project.id });
