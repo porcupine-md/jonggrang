@@ -3511,7 +3511,6 @@ Examples:
 
 function cmdCodemap(args) {
   const flags = { refresh: false, json: false, stats: false, hash: false, path: false };
-  const positional = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--refresh' || a === '-r') flags.refresh = true;
@@ -3520,7 +3519,6 @@ function cmdCodemap(args) {
     else if (a === '--hash') flags.hash = true;
     else if (a === '--path') flags.path = true;
     else if (a === '--help' || a === '-h' || a === 'help') { cmdCodemapHelp(); return; }
-    else positional.push(a);
   }
 
   const projectRoot = PROJECT_ROOT;
@@ -3537,8 +3535,7 @@ function cmdCodemap(args) {
       return;
     }
 
-    const result = codemap.getOrGenerateCodemap(projectRoot, { force: flags.refresh });
-    const { codemap: cm, fromCache, stale } = result;
+    const { codemap: cm, fromCache, stale } = codemap.getOrGenerateCodemap(projectRoot, { force: flags.refresh });
 
     if (flags.json) {
       console.log(JSON.stringify({ fromCache, stale, cachePath, codemap: cm }, null, 2));
