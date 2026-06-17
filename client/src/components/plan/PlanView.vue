@@ -7,9 +7,14 @@
       <div class="plan-empty-title">No active plan</div>
       <div class="plan-empty-desc">Describe the feature you want to build</div>
       <div class="plan-form">
+        <div v-if="uploadedFile" class="file-badge">
+          <i class="pi pi-file" />
+          <span>{{ uploadedFile.name }}</span>
+          <button class="file-badge-clear" @click="clearFile" title="Remove file"><i class="pi pi-times" /></button>
+        </div>
         <Textarea
           v-model="description"
-          placeholder="e.g. Add user authentication with JWT tokens and refresh token rotation"
+          :placeholder="uploadedFile ? 'Additional context (optional)...' : 'e.g. Add user authentication with JWT tokens and refresh token rotation'"
           rows="3"
           fluid
           @keydown.ctrl.enter="generatePlan"
@@ -20,13 +25,17 @@
             Deep analysis
           </label>
           <div style="flex:1" />
+          <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD file (.md, .pdf)">
+            <i class="pi pi-upload" /> BRD/PRD
+          </button>
+          <input ref="fileInputRef" type="file" accept=".md,.txt,.pdf" style="display:none" @change="onFileChange" />
           <button class="tool-config-btn" @click="openToolModal">
             <span>{{ TOOLS.find(t => t.value === selectedTool)?.label || 'Configure' }}</span>
             <span v-if="selectedModel" class="tool-config-extra">· {{ selectedModel }}</span>
             <span v-if="selectedEffort" class="tool-config-extra">· {{ selectedEffort }}</span>
             <i class="pi pi-cog" />
           </button>
-          <Button :disabled="!description.trim() || generating" @click="generatePlan">
+          <Button :disabled="(!description.trim() && !uploadedFile) || generating" @click="generatePlan">
             <i class="pi pi-sparkles" /> {{ generating ? 'Generating...' : 'Generate Plan' }}
           </Button>
         </div>
@@ -125,9 +134,14 @@
                 <i class="pi pi-cog" />
               </button>
             </div>
+            <div v-if="uploadedFile" class="file-badge">
+              <i class="pi pi-file" />
+              <span>{{ uploadedFile.name }}</span>
+              <button class="file-badge-clear" @click="clearFile" title="Remove file"><i class="pi pi-times" /></button>
+            </div>
             <Textarea
               v-model="description"
-              placeholder="Describe the next feature to build..."
+              :placeholder="uploadedFile ? 'Additional context (optional)...' : 'Describe the next feature to build...'"
               rows="3"
               fluid
               @keydown.ctrl.enter="generatePlan"
@@ -139,8 +153,11 @@
               </label>
               <div style="flex:1" />
               <div style="display:flex;gap:8px">
+                <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD file (.md, .pdf)">
+                  <i class="pi pi-upload" /> BRD/PRD
+                </button>
                 <Button severity="secondary" @click="cancelNewPlan">Cancel</Button>
-                <Button :disabled="!description.trim()" @click="generatePlan">
+                <Button :disabled="!description.trim() && !uploadedFile" @click="generatePlan">
                   <i class="pi pi-sparkles" /> Generate Plan
                 </Button>
               </div>
@@ -341,6 +358,8 @@ const selectedPlan = ref(null);
 const description = ref('');
 const deep = ref(false);
 const showNewPlanForm = ref(false);
+const uploadedFile = ref(null);
+const fileInputRef = ref(null);
 
 // Tool / model / effort
 const selectedTool = ref(null);
@@ -549,8 +568,22 @@ async function loadProjectTool() {
   } catch {}
 }
 
+function triggerFileInput() {
+  fileInputRef.value?.click();
+}
+
+function onFileChange(e) {
+  const file = e.target.files?.[0];
+  if (file) uploadedFile.value = file;
+  e.target.value = '';
+}
+
+function clearFile() {
+  uploadedFile.value = null;
+}
+
 async function generatePlan() {
-  if (!description.value.trim() || generating.value) return;
+  if ((!description.value.trim() && !uploadedFile.value) || generating.value) return;
   genError.value = '';
   genLog.value = '';
   generating.value = true;
@@ -560,6 +593,21 @@ async function generatePlan() {
     if (selectedTool.value)   body.tool   = selectedTool.value;
     if (selectedModel.value)  body.model  = selectedModel.value;
     if (selectedEffort.value) body.effort = selectedEffort.value;
+
+    if (uploadedFile.value) {
+      // Read file as base64 in chunks to avoid blowing the call stack on
+      // large files (spreading into String.fromCharCode can stack-overflow).
+      const arrayBuffer = await uploadedFile.value.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      const CHUNK = 0x8000;
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+      }
+      body.fileContent = btoa(binary);
+      body.fileName = uploadedFile.value.name;
+    }
+
     const res = await fetch(`/api/projects/${projectId.value}/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -723,6 +771,7 @@ onMounted(async () => {
     }
     if (wasGenerating || wasRevising || wasApproving) {
       description.value = '';
+      uploadedFile.value = null;
       loadPlans();
     }
   });
@@ -941,6 +990,23 @@ watch(projectId, loadPlans);
 
 /* Nothing selected */
 .plan-empty-pick { display: flex; align-items: center; justify-content: center; gap: 10px; flex: 1; color: var(--jg-text-faint); font-size: 12px; }
+
+/* File badge */
+.file-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; margin-bottom: 8px;
+  background: color-mix(in oklch, var(--jg-cyan) 10%, transparent);
+  border: 1px solid color-mix(in oklch, var(--jg-cyan) 30%, transparent);
+  font-family: var(--font-mono); font-size: 11px; color: var(--jg-cyan);
+}
+.file-badge .pi-file { font-size: 11px; }
+.file-badge span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.file-badge-clear {
+  background: none; border: none; color: var(--jg-text-faint);
+  cursor: pointer; padding: 0; display: flex; align-items: center;
+}
+.file-badge-clear:hover { color: var(--jg-red); }
+.file-badge-clear .pi { font-size: 10px; }
 
 /* Shared */
 .deep-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--jg-text-faint); }

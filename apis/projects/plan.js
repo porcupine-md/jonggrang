@@ -7,6 +7,7 @@ const lib = require('../../lib/jonggrang');
 const VALID_PLAN_TOOL   = ['claude', 'opencode', 'codex', 'jonggrang'];
 const VALID_PLAN_EFFORT = ['minimal', 'moderate', 'deep'];
 const MAX_STRING_LEN    = 100;
+const ALLOWED_EXTS      = ['.md', '.txt', '.pdf'];
 
 module.exports = function(deps) {
     const { fs, path, webState, orchestration, spawnForProject, wireProjectProcess } = deps;
@@ -210,9 +211,11 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const { description, deep, tool, model, effort } = req.body || {};
-        if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
+        const { description, deep, tool, model, effort, fileContent, fileName } = req.body || {};
 
+        if (!description && !fileContent) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description or file required' } });
+        }
         if (tool && !VALID_PLAN_TOOL.includes(tool)) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `tool must be one of: ${VALID_PLAN_TOOL.join(', ')}` } });
         }
@@ -223,7 +226,33 @@ module.exports = function(deps) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `effort must be one of: ${VALID_PLAN_EFFORT.join(', ')}` } });
         }
 
-        const args = ['plan', description, ...(deep ? ['--deep'] : [])];
+        let tempFilePath = null;
+
+        if (fileContent && fileName) {
+            const ext = path.extname(fileName).toLowerCase();
+            if (!ALLOWED_EXTS.includes(ext)) {
+                return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `unsupported file type: ${ext}. Allowed: ${ALLOWED_EXTS.join(', ')}` } });
+            }
+            // Write base64-encoded file to .jonggrang/.ephemeral/ in the project
+            const ephemeralDir = path.join(project.path, '.jonggrang', '.ephemeral');
+            fs.mkdirSync(ephemeralDir, { recursive: true });
+            const tempName = `brd-input-${Date.now()}${ext}`;
+            tempFilePath = path.join(ephemeralDir, tempName);
+            try {
+                fs.writeFileSync(tempFilePath, Buffer.from(fileContent, 'base64'));
+            } catch (err) {
+                return res.status(500).json({ error: { code: 'FILE_WRITE_ERROR', message: `Failed to save uploaded file: ${err.message}` } });
+            }
+        }
+
+        const args = ['plan'];
+        if (tempFilePath) {
+            args.push('--file', path.relative(project.path, tempFilePath));
+            if (description) args.push(description);
+        } else {
+            args.push(description);
+        }
+        if (deep)   args.push('--deep');
         if (tool)   args.push('--tool', tool);
         if (model)  args.push('--model', model);
         if (effort) args.push('--effort', effort);

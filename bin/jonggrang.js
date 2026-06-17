@@ -1016,11 +1016,16 @@ async function cmdPlan(args, opts = {}) {
   let autoApprove = false;
   let deepMode = false;
   let reviseMode = false;
+  let filePath = null;
 
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--yes' || arg === '-y') autoApprove = true;
     else if (arg === '--deep') deepMode = true;
     else if (arg === '--revise') reviseMode = true;
+    // --file consumes the next positional arg, so we walk args by index.
+    else if (arg === '--file') { filePath = args[++i]; }
+    else if (arg.startsWith('--file=')) { filePath = arg.slice(7); }
     else if (!arg.startsWith('--')) description = arg;
   }
 
@@ -1053,10 +1058,27 @@ async function cmdPlan(args, opts = {}) {
   }
   resolveModelAndEffort();
 
+  // Ingest BRD/PRD document if --file was given
+  let ingestedDoc = null;
+  if (filePath) {
+    const resolvedFile = path.isAbsolute(filePath) ? filePath : path.resolve(PROJECT_ROOT, filePath);
+    try {
+      ingestedDoc = await lib.ingestDocument(resolvedFile);
+      logInfo(`Document loaded: ${ingestedDoc.filename} (${ingestedDoc.format}, ${ingestedDoc.text.length} chars)`);
+    } catch (err) {
+      logError(`Failed to read file: ${err.message}`);
+      process.exit(1);
+    }
+    // Clean up server-written ephemeral temp files after ingestion
+    if (resolvedFile.includes(path.join('.jonggrang', '.ephemeral'))) {
+      try { fs.unlinkSync(resolvedFile); } catch {}
+    }
+  }
+
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
 
-  // Ask about deep mode when user hasn't specified --deep and a description was given
-  if (description && !deepMode && !autoApprove && isInteractiveTTY) {
+  // Ask about deep mode when user hasn't specified --deep and a description or file was given
+  if ((description || ingestedDoc) && !deepMode && !autoApprove && isInteractiveTTY) {
     const useDeep = await confirm({
       message: 'Use deep mode? (3-phase analysis — richer plan for complex features)',
       initialValue: false,
@@ -1064,8 +1086,8 @@ async function cmdPlan(args, opts = {}) {
     if (!isCancel(useDeep)) deepMode = !!useDeep;
   }
 
-  // ── No description → pick from available plans ──────────────
-  if (!description) {
+  // ── No description and no file → pick from available plans ──────────────
+  if (!description && !ingestedDoc) {
     const available = listAvailablePlans(path.dirname(PLAN_FILE));
     if (available.length === 0) {
       logError('No plans found.');
@@ -1136,18 +1158,18 @@ async function cmdPlan(args, opts = {}) {
     feedback.clearFeedbackState(PROJECT_ROOT);
 
     logHeader('JONGGRANG Plan — Deep Mode (3 phases)');
-    logInfo(`Feature: ${description}`);
+    logInfo(`Feature: ${description || (ingestedDoc ? `[from ${ingestedDoc.filename}]` : '')}`);
     logInfo(`Tool:    ${TOOL}`);
 
     // Phase 1: Discovery
     logInfo(`${BOLD}[1/3]${NC} Codebase discovery...`);
-    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE);
+    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, ingestedDoc);
     await lib.runAgent(discoveryPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (!lib.fileExists(discoveryFile)) {
       logError('Discovery agent did not write .jonggrang/.ephemeral/deep-plan-discovery.md');
       logInfo('Falling back to standard plan generation...');
-      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
+      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE, ingestedDoc);
       await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
     } else {
       // Phase 2: Analysis
@@ -1159,14 +1181,14 @@ async function cmdPlan(args, opts = {}) {
       if (!lib.fileExists(analysisFile)) {
         logError('Analysis agent did not write .jonggrang/.ephemeral/deep-plan-analysis.md');
         logInfo('Falling back to standard plan generation using discovery only...');
-        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
+        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE, ingestedDoc);
         await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       } else {
         // Phase 3: Condense
         logInfo(`${BOLD}[3/3]${NC} Condensing into enriched plan.md...`);
         const analysisContent = fs.readFileSync(analysisFile, 'utf8');
         const condensePrompt = lib.buildDeepPlanCondensePrompt(
-          description, discoveryContent, analysisContent, CONFIG_FILE, TASKS_FILE
+          description, discoveryContent, analysisContent, CONFIG_FILE, TASKS_FILE, ingestedDoc
         );
         await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
@@ -1183,14 +1205,14 @@ async function cmdPlan(args, opts = {}) {
   } else {
     // ── Standard mode ─────────────────────────────────────────
     logHeader('JONGGRANG Plan — Phase 1');
-    logInfo(`Feature: ${description}`);
+    logInfo(`Feature: ${description || (ingestedDoc ? `[from ${ingestedDoc.filename}]` : '')}`);
     logInfo(`Tool:    ${TOOL}`);
     logInfo('Generating draft plan...');
 
     // Clear stale feedback-loop state — planning is read-only, must not be blocked.
     feedback.clearFeedbackState(PROJECT_ROOT);
 
-    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE);
+    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE, ingestedDoc);
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
   }
 
