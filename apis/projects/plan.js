@@ -3,9 +3,13 @@
 const { Router } = require('express');
 
 const lib = require('../../lib/jonggrang');
+const { STATIC_EFFORTS } = require('../models');
 
 const VALID_PLAN_TOOL   = ['claude', 'opencode', 'codex', 'jonggrang'];
-const VALID_PLAN_EFFORT = ['minimal', 'moderate', 'deep'];
+// Effort levels are backend-specific (see apis/models.js STATIC_EFFORTS — the
+// same set the UI's effort dropdown is populated from). Validate per-tool, and
+// fall back to the union of all backends when no tool is given on the request.
+const ALL_EFFORTS = [...new Set(Object.values(STATIC_EFFORTS).flat())];
 const MAX_STRING_LEN    = 100;
 
 module.exports = function(deps) {
@@ -241,8 +245,12 @@ module.exports = function(deps) {
         if (model && typeof model === 'string' && model.length > MAX_STRING_LEN) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'model must be under 100 characters' } });
         }
-        if (effort && !VALID_PLAN_EFFORT.includes(effort)) {
-            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `effort must be one of: ${VALID_PLAN_EFFORT.join(', ')}` } });
+        if (effort) {
+            const allowed = tool ? (STATIC_EFFORTS[tool] || []) : ALL_EFFORTS;
+            if (!allowed.includes(effort)) {
+                const expected = allowed.length ? allowed.join(', ') : '(this backend takes no effort level)';
+                return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `effort must be one of: ${expected}` } });
+            }
         }
         if (base && (typeof base !== 'string' || base.length > MAX_STRING_LEN || /[\s;|&$`]/.test(base))) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'base must be a plain branch name' } });
