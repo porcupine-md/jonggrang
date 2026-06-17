@@ -1027,6 +1027,14 @@ async function cmdPlan(args, opts = {}) {
     else if (!arg.startsWith('--')) description = arg;
   }
 
+  // Validate --base up front: it ends up interpolated into `git fetch` at
+  // worktree creation, so reject anything that isn't a plain branch name before
+  // we spend a plan generation on it.
+  if (baseBranch && !lib.isSafeBranchName(baseBranch)) {
+    logError(`Invalid --base "${baseBranch}": must be a plain branch name (letters, digits, . _ / -).`);
+    process.exit(1);
+  }
+
   if (!await ensureInit()) return;
 
   // ── Revise mode: AI rewrites existing plan.md ────────────────
@@ -1200,7 +1208,10 @@ async function cmdPlan(args, opts = {}) {
   // The base branch (worktree start-point) is a deterministic user choice, so
   // write it into the generated plan.md frontmatter (overriding anything the AI
   // may have put there). Covers both deep + standard generation paths above.
-  if (baseBranch && lib.fileExists(PLAN_FILE)) lib.setPlanBase(PLAN_FILE, baseBranch);
+  // Warn if it didn't take — otherwise the worktree silently cuts from HEAD.
+  if (baseBranch && lib.fileExists(PLAN_FILE) && !lib.setPlanBase(PLAN_FILE, baseBranch)) {
+    logWarn(`Could not write base "${baseBranch}" to the plan frontmatter — the worktree will start from HEAD unless you set it manually.`);
+  }
 
   if (autoApprove) {
     logInfo('Auto-approving plan (--yes)...');

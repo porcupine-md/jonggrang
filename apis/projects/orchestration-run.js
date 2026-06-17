@@ -125,12 +125,25 @@ module.exports = function(deps) {
     // then HEAD, if the fetch fails (offline / no such remote branch / no base).
     function resolveStartRef(ctx, base) {
         if (!base) return 'HEAD';
+        // This is the single choke point every base value flows through (CLI
+        // --base, web API, AI-written frontmatter, committed plan.md). `base` is
+        // interpolated into a shell command below, so reject anything that isn't
+        // a plain branch name before it reaches the shell.
+        if (!lib.isSafeBranchName(base)) {
+            console.warn(`orchestration: ignoring unsafe base "${base}" — starting worktree from HEAD`);
+            return 'HEAD';
+        }
         try {
             sandboxGit.gitShell(ctx, `fetch origin "${base}"`);
             return 'FETCH_HEAD';
-        } catch {
+        } catch (fetchErr) {
             try { gitSync(ctx, ctx.root, ['rev-parse', '--verify', `refs/heads/${base}`]); return base; }
-            catch { return 'HEAD'; }
+            catch {
+                // The plan explicitly asked for this base but it's neither on
+                // origin nor local — surface it instead of silently using HEAD.
+                console.warn(`orchestration: base "${base}" not found on origin or locally (${fetchErr.message}) — starting worktree from HEAD`);
+                return 'HEAD';
+            }
         }
     }
 

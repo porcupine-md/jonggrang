@@ -252,8 +252,8 @@ module.exports = function(deps) {
                 return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `effort must be one of: ${expected}` } });
             }
         }
-        if (base && (typeof base !== 'string' || base.length > MAX_STRING_LEN || /[\s;|&$`]/.test(base))) {
-            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'base must be a plain branch name' } });
+        if (base && !lib.isSafeBranchName(base)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'base must be a plain branch name (letters, digits, . _ / -)' } });
         }
 
         const args = ['plan', description, ...(deep ? ['--deep'] : [])];
