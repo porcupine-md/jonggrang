@@ -176,9 +176,9 @@
               </label>
               <div style="flex:1" />
               <div style="display:flex;gap:8px">
-                <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD file (.md, .pdf)">
+                <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD file (.md, .txt, .pdf)">
                   <i class="pi pi-upload" /> BRD/PRD
-                </button>
+                </button
                 <Button severity="secondary" @click="cancelNewPlan">Cancel</Button>
                 <Button :disabled="!description.trim() && !uploadedFile" @click="generatePlan">
                   <i class="pi pi-sparkles" /> Generate Plan
