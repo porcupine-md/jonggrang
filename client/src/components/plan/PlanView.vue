@@ -31,10 +31,10 @@
                     placeholder="base branch" class="base-select" />
           </label>
           <div style="flex:1" />
-          <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD file (.md, .pdf)">
+          <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD source file">
             <i class="pi pi-upload" /> BRD/PRD
           </button>
-          <input ref="fileInputRef" type="file" accept=".md,.txt,.pdf" style="display:none" @change="onFileChange" />
+          <input ref="fileInputRef" type="file" style="display:none" @change="onFileChange" />
           <button class="tool-config-btn" @click="openToolModal">
             <span>{{ TOOLS.find(t => t.value === selectedTool)?.label || 'Configure' }}</span>
             <span v-if="selectedModel" class="tool-config-extra">· {{ selectedModel }}</span>
@@ -176,9 +176,9 @@
               </label>
               <div style="flex:1" />
               <div style="display:flex;gap:8px">
-                <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD file (.md, .txt, .pdf)">
+                <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD source file">
                   <i class="pi pi-upload" /> BRD/PRD
-                </button
+                </button>
                 <Button severity="secondary" @click="cancelNewPlan">Cancel</Button>
                 <Button :disabled="!description.trim() && !uploadedFile" @click="generatePlan">
                   <i class="pi pi-sparkles" /> Generate Plan

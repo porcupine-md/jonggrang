@@ -11,7 +11,6 @@ const VALID_PLAN_TOOL   = ['claude', 'opencode', 'codex', 'jonggrang'];
 // fall back to the union of all backends when no tool is given on the request.
 const ALL_EFFORTS = [...new Set(Object.values(STATIC_EFFORTS).flat())];
 const MAX_STRING_LEN    = 100;
-const ALLOWED_EXTS      = ['.md', '.txt', '.pdf'];
 
 module.exports = function(deps) {
     const { fs, path, webState, orchestration, spawnForProject, wireProjectProcess } = deps;
@@ -263,9 +262,7 @@ module.exports = function(deps) {
 
         if (fileContent && fileName) {
             const ext = path.extname(fileName).toLowerCase();
-            if (!ALLOWED_EXTS.includes(ext)) {
-                return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `unsupported file type: ${ext}. Allowed: ${ALLOWED_EXTS.join(', ')}` } });
-            }
+            // No extension allowlist — the coding agent decides how to read the source file.
             // Write base64-encoded file to .jonggrang/.ephemeral/ in the project
             const ephemeralDir = path.join(project.path, '.jonggrang', '.ephemeral');
             fs.mkdirSync(ephemeralDir, { recursive: true });
@@ -280,7 +277,7 @@ module.exports = function(deps) {
 
         const args = ['plan'];
         if (tempFilePath) {
-            args.push('--file', path.relative(project.path, tempFilePath));
+            args.push('--src', path.relative(project.path, tempFilePath));
             if (description) args.push(description);
         } else {
             args.push(description);
