@@ -58,8 +58,7 @@ Expected output:
 ```
 [jonggrang] Generated .jonggrang/jonggrang.json
 [jonggrang] Generated AGENTS.md
-[jonggrang] Generated .jonggrang/jonggrang-tasks.json
-[jonggrang] Generated .jonggrang/progress.txt
+[jonggrang] Task & progress state: per-feature (created on demand at `jonggrang approve`)
 [jonggrang] Copied skills (core + library)
 [jonggrang] Installed Claude Code hooks → .claude/settings.json
 [jonggrang] Installed OpenCode plugin  → .opencode/plugins/jonggrang.js
@@ -246,7 +245,7 @@ Expected output (first few phases):
 [jonggrang] MANIFEST: .jonggrang/.output/features/feat-20260411-d4e5f6/MANIFEST.yaml
 
 [jonggrang] Phase 1/16: Setup (Lead)
-  ✓ Read AGENTS.md, .jonggrang/progress.txt, git log
+  ✓ Read AGENTS.md, .jonggrang/.output/features/<id>/progress.txt, git log
   ✓ Context loaded
 
 [jonggrang] Phase 2/16: Triage (Lead)
@@ -313,7 +312,7 @@ Continuing:
   ✓ REVIEW_COMPLETE
 
 [jonggrang] Phase 16/16: Complete (Lead)
-  ✓ .jonggrang/progress.txt updated
+  ✓ .jonggrang/.output/features/<id>/progress.txt updated
   ✓ MANIFEST status: completed
 
 [jonggrang] Orchestration complete! Feature: feat-20260411-d4e5f6

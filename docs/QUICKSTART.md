@@ -196,7 +196,7 @@ jonggrang work --task task-003   # Retry specific task
 jonggrang work --max-iterations 3  # Limit retries
 ```
 
-Check `.jonggrang/progress.txt` for what the agent learned from failures.
+Check `.jonggrang/.output/features/<id>/progress.txt` for what the agent learned from failures.
 
 ### Plan looks wrong
 

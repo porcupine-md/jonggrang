@@ -37,7 +37,7 @@ Inspired by the Ralph Loop pattern, Agent Orchestra (Addy Osmani), the collapsed
 
 4. **Verification > Generation** — The bottleneck is no longer writing code, but verifying it. Every layer is designed to catch errors early: reviewer agents, tester agents, quality gate hooks.
 
-5. **Stateless Execution, Persistent Memory** — Each iteration starts with a clean context window. Memory persists via MANIFEST.yaml, git history, `.jonggrang/progress.txt`, and AGENTS.md.
+5. **Stateless Execution, Persistent Memory** — Each iteration starts with a clean context window. Memory persists via MANIFEST.yaml, git history, `.jonggrang/.output/features/{id}/progress.txt`, and AGENTS.md.
 
 6. **Right-sized Tasks** — Every task must fit in a single context window. Atomic, testable, committable.
 
@@ -99,13 +99,13 @@ project-root/
 │       └── tester.md
 ├── .jonggrang/
 │   ├── jonggrang.json          # Project config
-│   ├── jonggrang-tasks.json    # Task board state
 │   ├── plan.md                 # Draft plan (exists between plan → approve)
-│   ├── progress.txt            # Append-only agent learnings
 │   ├── .output/                # TRACKED in git — plans + manifests travel with each branch on push
 │   │   └── features/{id}/
 │   │       ├── plan.md         # Archived plan (after approve); frontmatter holds the branch name
 │   │       ├── MANIFEST.yaml   # Phase state + output_files per phase (persistent)
+│   │       ├── jonggrang-tasks.json  # Task board state (per-feature)
+│   │       ├── progress.txt         # Append-only agent learnings (per-feature)
 │   │       └── [phase outputs]
 │   ├── .ephemeral/             # Cleared on restart (gitignored)
 │   │   ├── feedback-loop-state.json
@@ -137,14 +137,14 @@ Phase 1 → AI writes .jonggrang/plan.md  (high-level, human-editable)
 jonggrang approve   (or auto-triggered by --yes)
     |
     v
-Phase 2 → AI decomposes plan.md → .jonggrang/jonggrang-tasks.json
+Phase 2 → AI decomposes plan.md → .jonggrang/.output/features/{id}/jonggrang-tasks.json
     |      plan.md archived to .jonggrang/.output/features/<id>/plan.md
     v
 jonggrang work
     |
     v
 For each task:
-  1. Load AGENTS.md + .jonggrang/progress.txt + task state
+  1. Load AGENTS.md + .jonggrang/.output/features/{id}/progress.txt + task state
   2. Pick highest-priority unblocked task
   3. Implement via AI agent
   4. Validate (typecheck, lint, tests)
@@ -475,7 +475,7 @@ The web dashboard runs **each plan as one group** — every task sharing a `feat
 - **Branch per plan** is read from that plan's `plan.md` frontmatter (`branch:`), e.g. `feat/version-endpoint`.
 - **Worktrees** live centrally, outside the repo, under `~/.jonggrang/worktree/{project_id}/{feature_id}/` (so the project stays clean and worktrees persist across container rebuilds). For sandbox projects that per-project dir is bind-mounted into the container at `/root/.worktrees`. The worktree is **created on entering Work Mode** (idempotent, registry in `.jonggrang/.ephemeral/worktrees.json`) so Agent/Terminal can work inside it before any run; a later run reuses it.
 - **Agent & Terminal follow scope**: project scope → container / project root; Work Mode → that plan's worktree (PTY session keys `agent:<featureId>` / `terminal:<featureId>` coexist with project-scope sessions).
-- The orchestration **manager (server-side)** is the single writer of the main `jonggrang-tasks.json`: each worktree worker runs `jonggrang work --worktree --group-tasks <ids> --branch <name>` and emits `task_status` JSON signals instead of writing the board, so parallel workers never race. The kanban updates live from the manager's writes.
+- The orchestration **manager (server-side)** is the single writer of the feature's `jonggrang-tasks.json`: each worktree worker runs `jonggrang work --worktree --group-tasks <ids> --branch <name>` and emits `task_status` JSON signals instead of writing the board, so parallel workers never race. The kanban updates live from the manager's writes.
 - On completion, the manager **commits** the worktree to its branch. The user reviews the plan's **Changes** tab (file list + diff) and **pushes the branch** to `origin` (pending manual worktree changes are committed first; same branch name, never `main`/`master`, no auto-merge).
 - A run **survives page navigation** (in-memory run + socket replay + a `.ephemeral/orchestration-run.json` snapshot), matching the single-work-process guarantee. The plan list shows a **live badge** per running plan.
 - **Push plans → base branch** (plan list footer) commits the plan/task/manifest state, **rebases onto `origin/<base>` first** (identical untracked init-scaffolding files are cleared, state-file conflicts resolve in favor of local state — the manager is the single writer), then pushes. A moved `main` (e.g. merged PRs) never causes a rejected push; real conflicts return a clear error instead of guessing.
@@ -573,8 +573,8 @@ When an agent is stuck in a loop (blocked exit >3 times), an out-of-band LLM ana
 | Channel | Type | Who Writes | Purpose |
 |---------|------|-----------|---------|
 | `AGENTS.md` | Curated | Human (reviewed) | Conventions, gotchas, patterns |
-| `.jonggrang/progress.txt` | Append-only | Agent | Per-task learnings, surprises |
-| `.jonggrang/jonggrang-tasks.json` | Structured | Agent + Human | Task state and history |
+| `.jonggrang/.output/features/<id>/progress.txt` | Append-only | Agent | Per-task learnings, surprises (per-feature) |
+| `.jonggrang/.output/features/<id>/jonggrang-tasks.json` | Structured | Agent + Human | Task state and history (per-feature) |
 | `.jonggrang/.output/` | Structured JSON | Agent | Phase outputs, architecture plans |
 | `MANIFEST.yaml` | YAML | Orchestrator | Phase state, resume point, `output_files` per phase |
 | Git history | Immutable | Agent | Code changes with context |
@@ -585,9 +585,9 @@ Human-curated project knowledge. Research shows human-written AGENTS.md improves
 
 **Agent proposes, human curates.**
 
-### .jonggrang/progress.txt
+### .jonggrang/.output/features/<id>/progress.txt
 
-Append-only log written after each task:
+Append-only log written after each task (per-feature):
 
 ```
 ## Session 2026-04-11 — Task: user-registration

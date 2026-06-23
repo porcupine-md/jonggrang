@@ -27,7 +27,7 @@ Phase 1 — jonggrang plan "description"
 Phase 2 — jonggrang approve   (or auto-triggered by --yes)
     │
     ├─ AI reads .jonggrang/plan.md
-    ├─ Decomposes into atomic tasks → .jonggrang/jonggrang-tasks.json
+    ├─ Decomposes into atomic tasks → .jonggrang/.output/features/<id>/jonggrang-tasks.json
     └─ Archives plan → .jonggrang/.output/features/<id>/plan.md
        Deletes .jonggrang/plan.md
 ```
@@ -109,11 +109,11 @@ Each iteration is **stateless** — a fresh context window. This prevents accumu
 Agent reads these files at start of every iteration:
 
 ```
-AGENTS.md                        --> Project conventions, gotchas, patterns
-.jonggrang/progress.txt          --> Learnings from previous iterations
-.jonggrang/jonggrang-tasks.json  --> Current task state
-git log --oneline -20            --> Recent changes for context
-.jonggrang/jonggrang.json        --> Project config
+AGENTS.md                                          --> Project conventions, gotchas, patterns
+.jonggrang/.output/features/<id>/progress.txt      --> Learnings from previous iterations
+.jonggrang/.output/features/<id>/jonggrang-tasks.json  --> Current task state
+git log --oneline -20                              --> Recent changes for context
+.jonggrang/jonggrang.json                          --> Project config
 ```
 
 Total context budget: ~30% of window for context, ~70% for work.
@@ -167,8 +167,8 @@ Skill: scaffold-api
 #### Step 7: Update State
 
 ```
-.jonggrang/jonggrang-tasks.json  --> task.status = "completed"
-.jonggrang/progress.txt          --> append session learnings
+.jonggrang/.output/features/<id>/jonggrang-tasks.json  --> task.status = "completed"
+.jonggrang/.output/features/<id>/progress.txt          --> append session learnings
 AGENTS.md                        --> propose update if new pattern found (human approval required)
 ```
 
@@ -299,7 +299,7 @@ The orchestrate command runs a deterministic 17-phase pipeline. Each phase is ex
 | 14 | Test | Tester | Execute test plan, run all tests | — |
 | 15 | Coverage | Tester | Enforce coverage thresholds | — |
 | 16 | TestQuality | Reviewer | Test quality review → REVIEW_COMPLETE | — |
-| 17 | Complete | Lead | Final summary, update `.jonggrang/progress.txt`, MANIFEST → done | — |
+| 17 | Complete | Lead | Final summary, update `.jonggrang/.output/features/{id}/progress.txt`, MANIFEST → done | — |
 
 ### Phase Skipping by Work Type
 
