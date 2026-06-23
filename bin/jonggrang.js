@@ -1337,20 +1337,27 @@ async function cmdApprove(args, opts = {}) {
   const featureName = fm.feature || 'work-session';
   const workType    = fm.work_type || 'MEDIUM';
 
-  // Generate featureId BEFORE running the agent so we can stamp new tasks
+  // Generate featureId BEFORE running the agent so we can create the feature
+  // directory + MANIFEST first. The decompose agent writes tasks via
+  // `jonggrang task import --feature <id>`, which needs the feature folder to
+  // exist (resolveActiveFeature won't find this feature until its MANIFEST exists).
   const featureId = orchestration.generateFeatureId(featureName);
 
-  // Snapshot existing task IDs (only those committed to a completed feature).
-  // Orphan tasks (feature_id: null) are leftovers from a previous partial approve
-  // that never reached the archive step — purge them now so the agent gets a
-  // clean slate and won't hit "task already exists" errors.
-  const tasksBeforeClean = lib.getTasks(TASKS_FILE);
-  if (tasksBeforeClean?.tasks?.some(t => t.feature_id == null)) {
-    const cleaned = { ...tasksBeforeClean, tasks: tasksBeforeClean.tasks.filter(t => t.feature_id != null) };
-    lib.writeJSON(TASKS_FILE, cleaned);
+  // Create the feature output directory + MANIFEST up front (before decompose).
+  // The plan.md is archived after the agent succeeds; only the folder + MANIFEST
+  // are created now so `task import --feature` has a home to write to.
+  const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
+  fs.mkdirSync(outputDir, { recursive: true });
+  const manifestPath = path.join(outputDir, 'MANIFEST.yaml');
+  if (!fs.existsSync(manifestPath)) {
+    orchestration.createManifest(PROJECT_ROOT, featureId, featureName, workType);
   }
+
+  // Snapshot existing task IDs globally (across all features) so we can detect
+  // which tasks the agent created. With per-feature files there are no orphan
+  // `feature_id: null` tasks to purge — the feature file starts empty.
   const existingTaskIds = new Set(
-    (lib.getTasks(TASKS_FILE)?.tasks || []).map(t => t.id)
+    (lib.getAllTasks(PROJECT_ROOT)?.tasks || []).map(t => t.id)
   );
 
   logHeader('JONGGRANG Approve — Phase 2');
@@ -1359,50 +1366,33 @@ async function cmdApprove(args, opts = {}) {
   logInfo(`Work type:  ${workType}`);
   logInfo('Decomposing plan into tasks...');
 
-  const prompt = lib.buildTasksFromPlanPrompt(planContent, CONFIG_FILE, TASKS_FILE, SKILLS_DIR);
+  const prompt = lib.buildTasksFromPlanPrompt(planContent, CONFIG_FILE, PROJECT_ROOT, featureId, SKILLS_DIR);
   await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
-  // Stamp every newly created task with the authoritative feature_id.
-  // Always overwrite: the decomposition agent may have set feature_id to the bare slug
-  // (e.g. "frontend-backend-integration") from the plan frontmatter, which lacks the
-  // unique suffix (e.g. "-mo35rirj"). That wrong ID breaks plan.md path lookups.
-  const tasksData = lib.getTasks(TASKS_FILE);
-  if (tasksData && tasksData.tasks) {
-    let modified = false;
-    for (const task of tasksData.tasks) {
-      if (!existingTaskIds.has(task.id) && task.feature_id !== featureId) {
-        task.feature_id = featureId;
-        modified = true;
-      }
-    }
-    if (modified) lib.writeJSON(TASKS_FILE, tasksData);
-  }
+  // No feature_id stamping needed — the agent wrote via `task import --feature`,
+  // which stamps feature_id and enforces global ID uniqueness in the lib layer.
 
   // Only archive if the agent actually created new tasks
-  const refreshedTasks = lib.getTasks(TASKS_FILE);
-  const newTasks = (refreshedTasks?.tasks || []).filter(t => !existingTaskIds.has(t.id));
+  const newTasks = (lib.getAllTasks(PROJECT_ROOT)?.tasks || []).filter(t => !existingTaskIds.has(t.id));
   if (newTasks.length === 0) {
     logError('Agent did not create any tasks. plan.md has been preserved — re-run "jonggrang approve" after fixing the issue.');
     process.exit(1);
   }
 
   // Archive the approved plan
-  const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
-  fs.mkdirSync(outputDir, { recursive: true });
   fs.copyFileSync(PLAN_FILE, path.join(outputDir, 'plan.md'));
   fs.unlinkSync(PLAN_FILE);
 
-  // Create a MANIFEST for this feature so cmdWork can resume under the correct feature ID.
-  // Without this, cmdWork creates a generic work-session-xxx MANIFEST disconnected from the plan.
-  const manifestPath = path.join(outputDir, 'MANIFEST.yaml');
-  if (!fs.existsSync(manifestPath)) {
-    const created = orchestration.createManifest(PROJECT_ROOT, featureId, featureName, workType);
-    // Mark all planning phases as done — they were completed by plan+approve
-    const mPath = created.manifestPath;
-    [1, 2, 3, 4, 5, 6, 7].forEach(n => {
-      if (created.manifest.active_phases.includes(n))
-        orchestration.completePhase(mPath, n, { source: 'approve' });
-    });
+  // Mark all planning phases as done — they were completed by plan+approve.
+  // (MANIFEST was created above; here we just complete phases 1-7.)
+  if (fs.existsSync(manifestPath)) {
+    const manifest = orchestration.readManifest(manifestPath);
+    if (manifest) {
+      [1, 2, 3, 4, 5, 6, 7].forEach(n => {
+        if (manifest.active_phases.includes(n))
+          orchestration.completePhase(manifestPath, n, { source: 'approve' });
+      });
+    }
   }
 
   logSuccess('Plan approved.');
