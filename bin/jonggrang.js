@@ -1704,14 +1704,18 @@ async function cmdInit() {
   }
 
   if (!validation.allValid && !INIT_FORCE) {
-    // Config invalid — can't proceed without it.
+    // Config exists but is corrupt — require --force to overwrite. A totally
+    // fresh dir (config missing) proceeds to init below without --force.
     if (validation.config.valid) {
       // Shouldn't reach here (allValid mirrors config.valid now), but guard anyway
       logWarn('Project state issue detected. Use --force to re-initialize.');
-    } else {
-      logError('jonggrang.json is missing or invalid. Use --force to re-initialize.');
+      if (!isInteractiveTTY) process.exit(1);
+    } else if (lib.fileExists(CONFIG_FILE)) {
+      // Config exists but is corrupt/invalid — don't silently overwrite.
+      logError('jonggrang.json is corrupt or invalid. Use --force to re-initialize.');
+      process.exit(1);
     }
-    if (!isInteractiveTTY) process.exit(1);
+    // else: config missing (fresh dir) — fall through to init
   }
 
   // Auto-detect stack, type, testing, ci — no user input needed
