@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# Acceptance test for per-feature task & progress state + per-session plan drafts (#64).
+# Acceptance test for isolated state in Jonggrang (#64).
+#
+# Covers TWO isolation concerns that closed the concurrency gaps:
+#   1. Per-feature task & progress state — jonggrang-tasks.json + progress.txt live
+#      under .jonggrang/.output/features/<feature_id>/ (not the root). Task IDs are
+#      globally unique across features so `task done <id>` auto-resolves.
+#   2. Per-session plan drafts (Option B) — pre-approval plan.md lives under
+#      .jonggrang/.drafts/<session-id>/ (gitignored, persistent), so concurrent
+#      `jonggrang plan` calls don't overwrite each other.
 #
 # Deterministic — no AI agent. Simulates the agent by writing files to the paths
 # the prompts would tell the agent to write, then exercises the REAL CLI code paths
@@ -7,12 +15,20 @@
 # scenario to avoid cross-scenario state bleed (global task IDs make shared state
 # fragile).
 #
+# Scenarios:
+#   S1  Fresh init → no root state files               (both concerns)
+#   S2  Migrate legacy root files → per-feature/per-session  (both)
+#   S3  Per-feature task lifecycle                      (concern 1)
+#   S4  Global task ID uniqueness across features       (concern 1)
+#   S5  Concurrent plan drafts                          (concern 2)
+#   S6  --session flag targets a specific draft         (concern 2)
+#
 # Usage:
-#   bash scripts/acceptance-per-feature.sh
+#   bash scripts/acceptance-isolated-state.sh
 #
 # REPO is derived from this script's location (scripts/ → repo root), so it runs
 # from anywhere. Invoking the installed `jonggrang` binary also works if REPO is
-# overridden via env: REPO=/path/to/jonggrang bash scripts/acceptance-per-feature.sh
+# overridden via env: REPO=/path/to/jonggrang bash scripts/acceptance-isolated-state.sh
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
