@@ -503,10 +503,10 @@ async function cmdWork(descriptionParts = []) {
     const planArgs = [description];
     if (autoApprove) planArgs.push('--yes');
     if (deepMode)    planArgs.push('--deep');
-    await cmdPlan(planArgs, { fromWork: true });
-    // Continue only if tasks were actually created (user approved or --yes)
-    if (lib.fileExists(PLAN_FILE)) {
-      // plan.md still exists → user chose "save draft" or "abort"
+    const plannedSession = await cmdPlan(planArgs, { fromWork: true });
+    // If the session we just planned still has a draft on disk, the user didn't
+    // approve (saved draft or aborted) → nothing to execute.
+    if (plannedSession && lib.fileExists(lib.draftFileFor(PROJECT_ROOT, plannedSession))) {
       logWarn('Plan not approved — nothing to execute. Run "jonggrang approve" then "jonggrang work".');
       return;
     }
@@ -515,9 +515,9 @@ async function cmdWork(descriptionParts = []) {
       return;
     }
     console.log('');
-  } else if (lib.fileExists(PLAN_FILE) && !descriptionParts.includes('--ignore-plan')) {
-    // No description given but there is an unapproved plan — warn and stop
-    logWarn('There is a pending plan at .jonggrang/plan.md that has not been approved yet.');
+  } else if (lib.resolveActiveDraft(PROJECT_ROOT) && !descriptionParts.includes('--ignore-plan')) {
+    // No description given but there is an unapproved draft — warn and stop
+    logWarn('There is a pending plan draft that has not been approved yet.');
     logInfo('Run "jonggrang approve" to decompose it into tasks, then "jonggrang work".');
     logInfo('Or run "jonggrang work --ignore-plan" to skip the plan and run existing tasks.');
     process.exit(1);
@@ -799,11 +799,11 @@ function cmdStatus() {
   console.log('');
 
   if (totalTasks === 0) {
-    const hasPlan = lib.fileExists(PLAN_FILE);
+    const drafts = lib.getAllDrafts(PROJECT_ROOT);
     console.log(`${BOLD}ID          Status       Title${NC}`);
     console.log('--------------------------------------------------------------');
-    if (hasPlan) {
-      console.log(`${NC}  (pending plan.md — run: jonggrang approve  to decompose into tasks)${NC}`);
+    if (drafts.length > 0) {
+      console.log(`${NC}  (${drafts.length} pending draft(s) — run: jonggrang approve  to decompose into tasks)${NC}`);
     } else {
       console.log(`${NC}  (no tasks yet — run: jonggrang plan "feature"  then  jonggrang approve)${NC}`);
     }
@@ -916,19 +916,19 @@ function parsePlanFrontmatter(content) {
   };
 }
 
-/** Collect pending plan.md + all archived feature plan.mds, sorted newest first */
+/** Collect draft sessions + all archived feature plan.mds, sorted newest first */
 function listAvailablePlans(jonggrangDir) {
   const plans = [];
+  const projectRoot = path.dirname(jonggrangDir);
 
-  // Pending plan
-  const pendingPath = path.join(jonggrangDir, 'plan.md');
-  if (lib.fileExists(pendingPath)) {
-    const content = fs.readFileSync(pendingPath, 'utf8');
-    const fm = parsePlanFrontmatter(content);
+  // Draft sessions (pending, pre-approval)
+  const drafts = lib.getAllDrafts(projectRoot);
+  for (const d of drafts) {
     plans.push({
-      value:     pendingPath,
-      label:     `[pending]  ${fm.feature || 'unnamed'}${fm.description ? ' — ' + fm.description : ''}`,
+      value:     d.planPath,
+      label:     `[draft]    ${d.feature || 'unnamed'}${d.description ? ' — ' + d.description : ''}  ${DIM}(${d.sessionId})${NC}`,
       isPending: true,
+      sessionId: d.sessionId,
     });
   }
 
@@ -959,10 +959,11 @@ function listAvailablePlans(jonggrangDir) {
 }
 
 /** Display plan.md content in a bordered box */
-function displayPlanBox(planFile) {
+function displayPlanBox(planFile, sessionId) {
   if (!lib.fileExists(planFile)) return;
   console.log('');
-  console.log(`${BOLD}${CYAN}┌─── .jonggrang/plan.md ─────────────────────────────────────${NC}`);
+  const header = sessionId ? `┌─── draft ${sessionId} ─────────────────────────────────────` : `┌─── plan ──────────────────────────────────────────────────`;
+  console.log(`${BOLD}${CYAN}${header}${NC}`);
   const planText = fs.readFileSync(planFile, 'utf8');
   planText.split('\n').forEach(line => console.log(`${CYAN}│${NC} ${line}`));
   console.log(`${BOLD}${CYAN}└────────────────────────────────────────────────────────────${NC}`);
@@ -1012,6 +1013,7 @@ async function cmdPlan(args, opts = {}) {
   let deepMode = false;
   let reviseMode = false;
   let baseBranch = '';
+  let sessionId = '';
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -1019,6 +1021,7 @@ async function cmdPlan(args, opts = {}) {
     else if (arg === '--deep') deepMode = true;
     else if (arg === '--revise') reviseMode = true;
     else if (arg === '--base') baseBranch = args[++i] || '';
+    else if (arg === '--session') sessionId = args[++i] || '';
     else if (!arg.startsWith('--')) description = arg;
   }
 
@@ -1032,10 +1035,16 @@ async function cmdPlan(args, opts = {}) {
 
   if (!await ensureInit()) return;
 
-  // ── Revise mode: AI rewrites existing plan.md ────────────────
+  // ── Revise mode: AI rewrites an existing draft ──────────────
   if (reviseMode) {
-    if (!lib.fileExists(PLAN_FILE)) {
-      logError('No plan.md found to revise. Generate a plan first.');
+    const sid = sessionId || lib.resolveActiveDraft(PROJECT_ROOT);
+    if (!sid) {
+      logError('No draft plan found to revise. Generate one with: jonggrang plan "<description>"');
+      process.exit(1);
+    }
+    const draftFile = lib.draftFileFor(PROJECT_ROOT, sid);
+    if (!lib.fileExists(draftFile)) {
+      logError(`Draft ${sid} not found.`);
       process.exit(1);
     }
     if (!description) {
@@ -1046,12 +1055,13 @@ async function cmdPlan(args, opts = {}) {
       TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
     }
     logHeader('JONGGRANG Plan — Revise with AI');
+    logInfo(`Session:     ${sid}`);
     logInfo(`Instruction: ${description}`);
-    const currentPlan = fs.readFileSync(PLAN_FILE, 'utf8');
+    const currentPlan = fs.readFileSync(draftFile, 'utf8');
     const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description);
     await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
-    logSuccess('Plan revised. Run "jonggrang approve" to decompose into tasks.');
-    return;
+    logSuccess(`Plan revised (${sid}). Run "jonggrang approve" to decompose into tasks.`);
+    return sid;
   }
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
@@ -1091,50 +1101,44 @@ async function cmdPlan(args, opts = {}) {
     });
     if (isCancel(picked)) { cancel('Aborted.'); return; }
 
-    // If archived → copy back to plan.md so the rest of the flow works normally
-    if (picked !== PLAN_FILE) {
-      if (lib.fileExists(PLAN_FILE)) {
-        const overwrite = await confirm({
-          message: 'A pending plan already exists. Replace it with the selected plan?',
-          initialValue: false,
-        });
-        if (isCancel(overwrite) || !overwrite) { cancel('Cancelled.'); return; }
-      }
-      fs.copyFileSync(picked, PLAN_FILE);
-      logInfo('Plan loaded from archive.');
+    // Resolve to a draft session. If the picked plan is already a draft, use
+    // it directly. If it's an archived feature plan, create a new draft session
+    // and copy the archived plan.md into it (so the user can re-approve/rework).
+    const chosen = available.find(a => a.value === picked);
+    let pickedSessionId = chosen && chosen.sessionId;
+    if (!pickedSessionId) {
+      // Archived plan → new draft session
+      pickedSessionId = lib.generateDraftId((chosen && chosen.featureId) || 'plan');
+      const newDraftDir = lib.draftDirFor(PROJECT_ROOT, pickedSessionId);
+      fs.mkdirSync(newDraftDir, { recursive: true });
+      fs.copyFileSync(picked, lib.draftFileFor(PROJECT_ROOT, pickedSessionId));
+      logInfo(`Loaded archived plan into new draft session ${pickedSessionId}.`);
     }
 
     // Fall through to the interactive options loop below (skip generation)
-    await showPlanOptions(isInteractiveTTY, autoApprove, opts);
-    return;
+    await showPlanOptions(isInteractiveTTY, autoApprove, opts, pickedSessionId);
+    return pickedSessionId;
   }
 
   // ── Description given → generate new plan ───────────────────
+  // Each plan call gets its own draft session (concurrent-safe). No overwrite
+  // prompt — drafts coexist; approve defaults to the most-recent.
+  const sid = sessionId || lib.generateDraftId(description);
+  const draftDir = lib.draftDirFor(PROJECT_ROOT, sid);
+  const draftFile = lib.draftFileFor(PROJECT_ROOT, sid);
+  fs.mkdirSync(draftDir, { recursive: true });
 
-  // If there is already a pending plan, ask what to do
-  if (lib.fileExists(PLAN_FILE)) {
-    if (isInteractiveTTY) {
-      const overwrite = await confirm({
-        message: 'A pending plan.md already exists. Overwrite it with a new plan?',
-        initialValue: false,
-      });
-      if (isCancel(overwrite) || !overwrite) {
-        logInfo('Keeping existing plan. Run "jonggrang approve" to continue with it.');
-        return;
-      }
-    } else {
-      logWarn('Overwriting existing .jonggrang/plan.md...');
-    }
+  const existingDrafts = lib.getAllDrafts(PROJECT_ROOT).filter(d => d.sessionId !== sid);
+  if (existingDrafts.length > 0 && !sessionId) {
+    logInfo(`${existingDrafts.length} pending draft(s) already exist. This creates a new session (${sid}); 'jonggrang approve' defaults to the most recent, or use 'jonggrang approve --session <id>'.`);
   }
 
   if (deepMode) {
     // ── Deep mode: 3 sequential AI phases ──────────────────────
-    const jonggrangDir = path.dirname(PLAN_FILE);
-    const ephemeralDir = path.join(jonggrangDir, '.ephemeral');
-    const discoveryFile = path.join(ephemeralDir, 'deep-plan-discovery.md');
-    const analysisFile = path.join(ephemeralDir, 'deep-plan-analysis.md');
-
-    fs.mkdirSync(ephemeralDir, { recursive: true });
+    // Discovery + analysis intermediates live in the draft session folder;
+    // only plan.md promotes to features/<id>/ at approve.
+    const discoveryFile = path.join(draftDir, 'deep-plan-discovery.md');
+    const analysisFile = path.join(draftDir, 'deep-plan-analysis.md');
 
     // Clear any stale feedback-loop state from previous work sessions.
     // Deep-plan phases are read-only discovery/planning — they must not be blocked
@@ -1144,43 +1148,43 @@ async function cmdPlan(args, opts = {}) {
     logHeader('JONGGRANG Plan — Deep Mode (3 phases)');
     logInfo(`Feature: ${description}`);
     logInfo(`Tool:    ${TOOL}`);
+    logInfo(`Session: ${sid}`);
 
     // Phase 1: Discovery
     logInfo(`${BOLD}[1/3]${NC} Codebase discovery...`);
-    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE);
+    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile);
     await lib.runAgent(discoveryPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (!lib.fileExists(discoveryFile)) {
-      logError('Discovery agent did not write .jonggrang/.ephemeral/deep-plan-discovery.md');
+      logError(`Discovery agent did not write ${discoveryFile}`);
       logInfo('Falling back to standard plan generation...');
-      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT);
+      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile);
       await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
     } else {
       // Phase 2: Analysis
       logInfo(`${BOLD}[2/3]${NC} Complexity analysis & brainstorm...`);
       const discoveryContent = fs.readFileSync(discoveryFile, 'utf8');
-      const analysisPrompt = lib.buildDeepPlanAnalysisPrompt(description, discoveryContent);
+      const analysisPrompt = lib.buildDeepPlanAnalysisPrompt(description, discoveryContent, analysisFile);
       await lib.runAgent(analysisPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
       if (!lib.fileExists(analysisFile)) {
-        logError('Analysis agent did not write .jonggrang/.ephemeral/deep-plan-analysis.md');
+        logError(`Analysis agent did not write ${analysisFile}`);
         logInfo('Falling back to standard plan generation using discovery only...');
-        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT);
+        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile);
         await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       } else {
         // Phase 3: Condense
         logInfo(`${BOLD}[3/3]${NC} Condensing into enriched plan.md...`);
         const analysisContent = fs.readFileSync(analysisFile, 'utf8');
         const condensePrompt = lib.buildDeepPlanCondensePrompt(
-          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT
+          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile
         );
         await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
-        // Clean up ephemeral files
+        // Clean up intermediate files (plan.md stays in the draft folder)
         try {
           fs.unlinkSync(discoveryFile);
           fs.unlinkSync(analysisFile);
-          fs.rmdirSync(ephemeralDir);
         } catch { /* ignore if already gone */ }
 
         logSuccess('Deep plan complete.');
@@ -1191,12 +1195,13 @@ async function cmdPlan(args, opts = {}) {
     logHeader('JONGGRANG Plan — Phase 1');
     logInfo(`Feature: ${description}`);
     logInfo(`Tool:    ${TOOL}`);
+    logInfo(`Session: ${sid}`);
     logInfo('Generating draft plan...');
 
     // Clear stale feedback-loop state — planning is read-only, must not be blocked.
     feedback.clearFeedbackState(PROJECT_ROOT);
 
-    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT);
+    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile);
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
   }
 
@@ -1204,44 +1209,47 @@ async function cmdPlan(args, opts = {}) {
   // write it into the generated plan.md frontmatter (overriding anything the AI
   // may have put there). Covers both deep + standard generation paths above.
   // Warn if it didn't take — otherwise the worktree silently cuts from HEAD.
-  if (baseBranch && lib.fileExists(PLAN_FILE) && !lib.setPlanBase(PLAN_FILE, baseBranch)) {
+  if (baseBranch && lib.fileExists(draftFile) && !lib.setPlanBase(draftFile, baseBranch)) {
     logWarn(`Could not write base "${baseBranch}" to the plan frontmatter — the worktree will start from HEAD unless you set it manually.`);
   }
 
   if (autoApprove) {
     logInfo('Auto-approving plan (--yes)...');
-    await cmdApprove([], { quiet: true });
+    await cmdApprove([], { quiet: true, session: sid });
     if (!opts.fromWork) logSuccess('Tasks ready. Run "jonggrang work" to execute.');
-    return;
+    return sid;
   }
 
-  await showPlanOptions(isInteractiveTTY, false, opts);
+  await showPlanOptions(isInteractiveTTY, false, opts, sid);
+  return sid;
 }
 
 /**
  * Display the current plan.md and loop through options until the user
  * approves, aborts, or saves the plan for later.
  */
-async function showPlanOptions(isInteractiveTTY, autoApprove, opts = {}) {
+async function showPlanOptions(isInteractiveTTY, autoApprove, opts, sessionId) {
+  const draftFile = lib.draftFileFor(PROJECT_ROOT, sessionId);
   const doApprove = async () => {
-    await cmdApprove([], { quiet: true });
+    await cmdApprove([], { quiet: true, session: sessionId });
     if (!opts.fromWork) logSuccess('Tasks ready. Run "jonggrang work" to execute.');
   };
 
-  if (!lib.fileExists(PLAN_FILE)) {
-    logError('No plan.md found. Run "jonggrang plan <description>" first.');
+  if (!lib.fileExists(draftFile)) {
+    logError(`Draft ${sessionId} not found.`);
     return;
   }
 
   if (autoApprove) {
-    displayPlanBox(PLAN_FILE);
+    displayPlanBox(draftFile, sessionId);
     logInfo('Auto-approving plan (--yes)...');
     await doApprove();
     return;
   }
 
   if (!isInteractiveTTY) {
-    logSuccess('Draft plan written to .jonggrang/plan.md');
+    logSuccess(`Draft plan written (session ${sessionId}).`);
+    logInfo(`Path: ${path.relative(PROJECT_ROOT, draftFile)}`);
     logInfo('Review / edit it, then run "jonggrang approve" to decompose into tasks.');
     return;
   }
@@ -1249,7 +1257,7 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts = {}) {
   // Interactive options loop
   let done = false;
   while (!done) {
-    displayPlanBox(PLAN_FILE);
+    displayPlanBox(draftFile, sessionId);
 
     const choice = await select({
       message: 'What would you like to do?',
@@ -1278,31 +1286,31 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts = {}) {
         continue;
       }
       logInfo('Revising plan with AI...');
-      const currentPlan = fs.readFileSync(PLAN_FILE, 'utf8');
+      const currentPlan = fs.readFileSync(draftFile, 'utf8');
       const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, feedback.trim());
       await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       // loop back → display updated plan + options again
 
     } else if (choice === 'edit') {
       const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
-      execSync(`${editor} "${PLAN_FILE}"`, { stdio: 'inherit' });
+      execSync(`${editor} "${draftFile}"`, { stdio: 'inherit' });
       // loop back → display edited plan + options again
 
     } else if (choice === 'delete') {
       const confirm_ = await confirm({ message: 'Delete this plan permanently?', initialValue: false });
       if (!isCancel(confirm_) && confirm_) {
-        fs.unlinkSync(PLAN_FILE);
+        try { fs.rmSync(lib.draftDirFor(PROJECT_ROOT, sessionId), { recursive: true, force: true }); } catch {}
         logWarn('Plan deleted.');
         done = true;
       }
       // if user cancels/says no → loop back
 
     } else if (choice === 'cancel') {
-      logInfo('Exited. Plan saved at .jonggrang/plan.md');
+      logInfo(`Exited. Draft saved (session ${sessionId}).`);
       done = true;
 
     } else { // 'later'
-      logSuccess('Draft plan saved to .jonggrang/plan.md');
+      logSuccess(`Draft plan saved (session ${sessionId}).`);
       logInfo('Edit it freely, then run "jonggrang approve" to decompose into tasks.');
       done = true;
     }
@@ -1312,9 +1320,21 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts = {}) {
 // ── PHASE 2: Approve plan → decompose to tasks + archive ──────
 // opts.quiet = true  → skip "Run jonggrang work" tail (used when called from within cmdWork/cmdPlan)
 async function cmdApprove(args, opts = {}) {
-  if (!lib.fileExists(PLAN_FILE)) {
-    logError('No pending plan found at .jonggrang/plan.md');
+  // Resolve the draft to approve: --session override, else most-recent draft.
+  let sessionId = opts.session || '';
+  // Allow --session as a CLI flag too
+  for (let i = 0; i < (args || []).length; i++) {
+    if (args[i] === '--session') sessionId = args[++i] || '';
+  }
+  if (!sessionId) sessionId = lib.resolveActiveDraft(PROJECT_ROOT);
+  if (!sessionId) {
+    logError('No draft plan found to approve.');
     logInfo('Run "jonggrang plan <description>" first.');
+    process.exit(1);
+  }
+  const draftFile = lib.draftFileFor(PROJECT_ROOT, sessionId);
+  if (!lib.fileExists(draftFile)) {
+    logError(`Draft ${sessionId} not found.`);
     process.exit(1);
   }
 
@@ -1325,7 +1345,10 @@ async function cmdApprove(args, opts = {}) {
   }
   resolveModelAndEffort();
 
-  const planContent = fs.readFileSync(PLAN_FILE, 'utf8');
+  logHeader('JONGGRANG Approve — Phase 2');
+  logInfo(`Draft session: ${sessionId}`);
+
+  const planContent = fs.readFileSync(draftFile, 'utf8');
 
   // Parse YAML frontmatter fields
   const fm = parsePlanFrontmatter(planContent);
@@ -1374,9 +1397,10 @@ async function cmdApprove(args, opts = {}) {
     process.exit(1);
   }
 
-  // Archive the approved plan
-  fs.copyFileSync(PLAN_FILE, path.join(outputDir, 'plan.md'));
-  fs.unlinkSync(PLAN_FILE);
+  // Promote the draft plan into the feature folder (move, not copy). The draft
+  // session folder is discarded after — only plan.md persists in features/<id>/.
+  fs.copyFileSync(draftFile, path.join(outputDir, 'plan.md'));
+  try { fs.rmSync(lib.draftDirFor(PROJECT_ROOT, sessionId), { recursive: true, force: true }); } catch {}
 
   // Mark all planning phases as done — they were completed by plan+approve.
   // (MANIFEST was created above; here we just complete phases 1-7.)
@@ -2288,7 +2312,7 @@ async function cmdMenuClack() {
   let outroShown = false;
 
   while (running) {
-    const hasPendingPlan = lib.fileExists(PLAN_FILE);
+    const hasPendingPlan = !!lib.resolveActiveDraft(PROJECT_ROOT);
     const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
     const choice = await select({
       message: 'What do you want to do?',
@@ -2426,7 +2450,7 @@ async function cmdMenuClack() {
 // Pi TUI menu loop — rich keyboard-navigable interface
 async function cmdMenuTUI(runJonggrangTUI) {
   while (true) {
-    const hasPendingPlan = lib.fileExists(PLAN_FILE);
+    const hasPendingPlan = !!lib.resolveActiveDraft(PROJECT_ROOT);
     const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
 
     const items = [
@@ -2511,7 +2535,7 @@ async function cmdMenuTUI(runJonggrangTUI) {
 // Full-screen TUI menu — persistent session, plan input handled inline
 async function cmdMenuFull(runJonggrangApp) {
   while (true) {
-    const hasPendingPlan = lib.fileExists(PLAN_FILE);
+    const hasPendingPlan = !!lib.resolveActiveDraft(PROJECT_ROOT);
     const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
 
     const items = [
@@ -2527,7 +2551,7 @@ async function cmdMenuFull(runJonggrangApp) {
       { value: 'exit',     label: 'exit',    description: 'Exit Jonggrang' },
     ];
 
-    const result = await runJonggrangApp({ items, planFile: PLAN_FILE, projectRoot: PROJECT_ROOT });
+    const result = await runJonggrangApp({ items, projectRoot: PROJECT_ROOT });
     if (!result || !result.choice || result.choice === 'exit') break;
 
     try {

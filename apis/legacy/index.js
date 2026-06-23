@@ -72,9 +72,12 @@ module.exports = function register(app, io, ctx) {
 
     function emitPlanUpdate() {
         try {
-            if (lib.fileExists(paths.planFile)) {
-                const content = fs.readFileSync(paths.planFile, 'utf8');
-                io.emit('plan_update', { exists: true, content });
+            // Emit the most-recent draft session (pre-approval plans live per-session)
+            const sid = lib.resolveActiveDraft(PROJECT_ROOT);
+            if (sid) {
+                const draftFile = lib.draftFileFor(PROJECT_ROOT, sid);
+                const content = fs.readFileSync(draftFile, 'utf8');
+                io.emit('plan_update', { exists: true, content, sessionId: sid });
             } else {
                 io.emit('plan_update', { exists: false, content: '' });
             }
@@ -112,7 +115,10 @@ module.exports = function register(app, io, ctx) {
         chokidar.watch(featuresDir, { ignoreInitial: true }).on('all', () => { readTasks(); readProgress(); });
     }
     chokidar.watch(paths.configFile, { ignoreInitial: true }).on('all', () => readConfigFile());
-    chokidar.watch(paths.planFile, { ignoreInitial: false }).on('all', emitPlanUpdate);
+    const draftsDir = path.join(PROJECT_ROOT, '.jonggrang', '.drafts');
+    if (fs.existsSync(draftsDir)) {
+        chokidar.watch(draftsDir, { ignoreInitial: false }).on('all', emitPlanUpdate);
+    }
     const jonggrangDir = path.join(PROJECT_ROOT, '.jonggrang');
     fs.mkdirSync(jonggrangDir, { recursive: true });
     chokidar.watch(jonggrangDir, { ignoreInitial: true, depth: 4 })
