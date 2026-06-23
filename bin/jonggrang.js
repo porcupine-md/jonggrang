@@ -104,6 +104,10 @@ const NC = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 
+// ANSI color for a task status string. Used by cmdStatus and the task subcommands.
+const STATUS_COLORS = { completed: GREEN, in_progress: YELLOW, blocked: RED };
+function statusColor(status) { return STATUS_COLORS[status] || NC; }
+
 // ============================================================
 // LOGGING HELPERS
 // ============================================================
@@ -819,13 +823,7 @@ function cmdStatus() {
   }
 
   const printTask = (task) => {
-    let color;
-    switch (task.status) {
-      case 'completed':   color = GREEN; break;
-      case 'in_progress': color = YELLOW; break;
-      case 'blocked':     color = RED; break;
-      default:            color = NC; break;
-    }
+    const color = statusColor(task.status);
     const id = (task.id || '').padEnd(11);
     const status = (task.status || '').padEnd(12);
     console.log(`${color}${id} ${status} ${task.title || ''}${NC}`);
@@ -859,13 +857,7 @@ function cmdStatus() {
       console.log(`${BOLD}  ID          Status       Title${NC}`);
       console.log('  ------------------------------------------------------------');
       for (const task of tasks) {
-        let color;
-        switch (task.status) {
-          case 'completed':   color = GREEN; break;
-          case 'in_progress': color = YELLOW; break;
-          case 'blocked':     color = RED; break;
-          default:            color = NC; break;
-        }
+        const color = statusColor(task.status);
         const id = (task.id || '').padEnd(11);
         const status = (task.status || '').padEnd(12);
         console.log(`${color}  ${id} ${status} ${task.title || ''}${NC}`);
@@ -1378,7 +1370,6 @@ async function cmdApprove(args, opts = {}) {
     (lib.getAllTasks(PROJECT_ROOT)?.tasks || []).map(t => t.id)
   );
 
-  logHeader('JONGGRANG Approve — Phase 2');
   logInfo(`Feature:    ${featureName}`);
   logInfo(`Feature ID: ${featureId}`);
   logInfo(`Work type:  ${workType}`);
@@ -3087,10 +3078,7 @@ function taskList(flags, positional, pretty) {
     console.log(`${BOLD}${'ID'.padEnd(11)} ${'Status'.padEnd(12)} ${'Pri'.padEnd(4)} ${multiFeature ? 'Feature'.padEnd(22) : ''}Title${NC}`);
     console.log('-'.repeat(multiFeature ? 87 : 65));
     for (const task of tasks) {
-      let color = NC;
-      if (task.status === 'completed') color = GREEN;
-      else if (task.status === 'in_progress') color = YELLOW;
-      else if (task.status === 'blocked') color = RED;
+      const color = statusColor(task.status);
       const featureCol = multiFeature ? (task.feature_id || '').slice(0, 21).padEnd(22) : '';
       console.log(`${color}${(task.id || '').padEnd(11)} ${(task.status || '').padEnd(12)} ${String(task.priority || '-').padEnd(4)} ${featureCol}${task.title || ''}${NC}`);
     }

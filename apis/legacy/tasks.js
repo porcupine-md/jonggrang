@@ -13,7 +13,7 @@ module.exports = function(deps) {
 
     router.get('/tasks/:id', (req, res) => {
         const all = lib.getAllTasks(PROJECT_ROOT);
-        const task = all.tasks.find(t => t.id === req.params.id) || null;
+        const task = all.tasks.find(t => t.id === req.params.id);
         if (!task) return res.status(404).json({ error: 'Task not found' });
         res.json(task);
     });

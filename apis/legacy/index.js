@@ -166,14 +166,12 @@ module.exports = function register(app, io, ctx) {
 
     // ── Cleanup ───────────────────────────────────────────────────
 
+    function killSafely(proc) {
+        if (proc && !proc.killed) { try { proc.kill('SIGKILL'); } catch {} }
+    }
+
     return function cleanup() {
-        if (state.jonggrangProcess && !state.jonggrangProcess.killed) {
-            try { state.jonggrangProcess.kill('SIGKILL'); } catch {}
-        }
-        for (const [, group] of groupProcesses) {
-            if (group.process && !group.process.killed) {
-                try { group.process.kill('SIGKILL'); } catch {}
-            }
-        }
+        killSafely(state.jonggrangProcess);
+        for (const [, group] of groupProcesses) killSafely(group.process);
     };
 };
