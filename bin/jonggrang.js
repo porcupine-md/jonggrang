@@ -73,6 +73,11 @@ let SKIP_GATES = false;
 let MODEL = process.env.JONGGRANG_MODEL || '';
 let EFFORT = process.env.JONGGRANG_EFFORT || '';
 
+// Per-feature tasks file for the active work loop. Set when workFeatureId resolves
+// at the start of cmdWork. Used by updateTaskMode/runIteration/progress counts.
+// Null until cmdWork resolves it; task-id commands use their own resolveTasksFile().
+let WORK_TASKS_FILE = null;
+
 // Init options
 let INIT_NAME = '';
 let INIT_TYPE = '';
@@ -272,12 +277,12 @@ function emitSignal(type, data) {
   console.log(JSON.stringify({ type, ...data }));
 }
 
-// In worktree mode emit a JSON signal; otherwise write directly to tasks file
+// In worktree mode emit a JSON signal; otherwise write directly to the active feature's tasks file
 function updateTaskMode(taskId, status) {
   if (WORKTREE_MODE) {
     emitSignal('task_status', { taskId, status });
   } else {
-    lib.updateTaskStatus(TASKS_FILE, taskId, status);
+    lib.updateTaskStatus(WORK_TASKS_FILE, taskId, status);
   }
 }
 
@@ -291,7 +296,7 @@ function askUserFeedback(prompt) {
 }
 
 async function runIteration(iteration, taskId) {
-  const task = lib.getTask(TASKS_FILE, taskId);
+  const task = lib.getTask(WORK_TASKS_FILE, taskId);
   const taskTitle = task ? task.title : taskId;
 
   logHeader(`Iteration ${iteration}: ${taskTitle}`);
@@ -303,7 +308,7 @@ async function runIteration(iteration, taskId) {
 
   if (DRY_RUN) {
     logWarn(`[DRY RUN] Would execute prompt for task: ${taskId}`);
-    console.log(lib.buildWorkPrompt(taskId, TASKS_FILE, MODE));
+    console.log(lib.buildWorkPrompt(taskId, WORK_TASKS_FILE, MODE));
     return true;
   }
 
@@ -313,7 +318,7 @@ async function runIteration(iteration, taskId) {
 
   while (true) {
     // Build prompt — inject test failure feedback on retries
-    const prompt = lib.buildWorkPrompt(taskId, TASKS_FILE, MODE, testFeedback || undefined);
+    const prompt = lib.buildWorkPrompt(taskId, WORK_TASKS_FILE, MODE, testFeedback || undefined);
 
     logInfo(`Spawning fresh ${TOOL} instance...${testAttempt > 0 ? ` (test retry ${testAttempt}/${TEST_RETRY_LIMIT})` : ''}`);
     const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
@@ -325,7 +330,7 @@ async function runIteration(iteration, taskId) {
     }
 
     // ── Check task completion ─────────────────────────────────
-    const data = lib.getTasks(TASKS_FILE);
+    const data = lib.getTasks(WORK_TASKS_FILE);
     const t = data.tasks.find(t => t.id === taskId);
     if (!t || t.status !== 'completed') {
       logWarn('Agent finished but did not mark task complete. Reverting to pending.');
@@ -355,7 +360,7 @@ async function runIteration(iteration, taskId) {
     if (testAttempt < TEST_RETRY_LIMIT) {
       // Auto-retry: inject test output as feedback, reset task to pending
       testFeedback = output;
-      lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+      lib.updateTaskStatus(WORK_TASKS_FILE, taskId, 'pending');
       logInfo('Retrying with test failure output...');
       continue;
     }
@@ -376,7 +381,7 @@ async function runIteration(iteration, taskId) {
     // User gave feedback — inject it and reset counter for another round
     testFeedback = `User feedback: ${userInput}\n\nLast test output:\n${output}`;
     testAttempt = 0;
-    lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+    lib.updateTaskStatus(WORK_TASKS_FILE, taskId, 'pending');
     logInfo('Retrying with user feedback...');
   }
 }
@@ -394,7 +399,7 @@ function resolveWorkType(description) {
   if (description) return orchestration.classifyWorkType(description);
 
   // 3. Infer from total task count (task titles are too noisy for text classification)
-  const data = lib.getTasks(TASKS_FILE);
+  const data = lib.getAllTasks(PROJECT_ROOT);
   if (!data.tasks || data.tasks.length === 0) return 'SMALL';
   const total = data.tasks.length;
   if (total >= 6) return 'LARGE';
@@ -505,7 +510,7 @@ async function cmdWork(descriptionParts = []) {
       logWarn('Plan not approved — nothing to execute. Run "jonggrang approve" then "jonggrang work".');
       return;
     }
-    if (!lib.fileExists(TASKS_FILE) || lib.countPending(TASKS_FILE) === 0) {
+    if (lib.countPending(lib.getAllTasks(PROJECT_ROOT)) === 0) {
       logWarn('No pending tasks to execute.');
       return;
     }
@@ -540,14 +545,16 @@ async function cmdWork(descriptionParts = []) {
   let workFeatureId = null, workManifest = null, workManifestPath = null;
   if (WORKTREE_MODE && GROUP_TASK_IDS.length > 0) {
     // A worktree run executes exactly one plan (group). Resolve THAT plan's
-    // manifest by its tasks' feature_id — never findIncompleteManifest, which
+    // feature from its tasks' feature_id — never findIncompleteManifest, which
     // would pick an arbitrary seeded manifest and run another plan's phases in
     // this worktree. Tracking the manifest here is what lets the post-work
     // phases (Simplify → … → Complete) run in worktree mode instead of the
     // pipeline stalling at Implement.
-    const firstTask = GROUP_TASK_IDS.map(id => lib.getTask(TASKS_FILE, id)).find(Boolean);
-    const fid = firstTask && firstTask.feature_id;
+    const firstGroupId = GROUP_TASK_IDS.find(id => lib.findTaskFeature(PROJECT_ROOT, id));
+    const fid = firstGroupId ? lib.findTaskFeature(PROJECT_ROOT, firstGroupId) : null;
     if (fid) {
+      WORK_TASKS_FILE = lib.tasksFileFor(PROJECT_ROOT, fid);
+      const firstTask = lib.getTask(WORK_TASKS_FILE, firstGroupId);
       const mPath = orchestration.getManifestPath(PROJECT_ROOT, fid);
       const m = orchestration.readManifest(mPath);
       if (m) {
@@ -588,6 +595,8 @@ async function cmdWork(descriptionParts = []) {
           orchestration.completePhase(workManifestPath, n, { source: 'plan' });
       });
     }
+    // Resolve the per-feature tasks file for this work session.
+    WORK_TASKS_FILE = lib.tasksFileFor(PROJECT_ROOT, workFeatureId);
     // Phase 8 = Implement — mark as running for the duration of the work loop
     if (workManifest.active_phases.includes(8))
       orchestration.startPhase(workManifestPath, 8);
@@ -599,7 +608,7 @@ async function cmdWork(descriptionParts = []) {
   logInfo(`Mode: ${MODE}`);
   if (WORKTREE_MODE) logInfo('Worktree mode: ON');
   logInfo(MAX_ITERATIONS === 0 ? 'Max iterations: unlimited' : `Max iterations: ${MAX_ITERATIONS}`);
-  logInfo(`Tasks: ${lib.countPending(TASKS_FILE)} pending / ${lib.countTotal(TASKS_FILE)} total`);
+  logInfo(`Tasks: ${lib.countPending(WORK_TASKS_FILE)} pending / ${lib.countTotal(WORK_TASKS_FILE)} total`);
 
   // Skip branch checkout in worktree mode (worktree already on its own branch)
   if (!WORKTREE_MODE && BRANCH) {
@@ -616,20 +625,20 @@ async function cmdWork(descriptionParts = []) {
   if (GROUP_TASK_IDS.length > 0) {
     // Worktree mode: use the provided group task list
     taskQueue = GROUP_TASK_IDS.filter(id => {
-      const t = lib.getTask(TASKS_FILE, id);
+      const t = lib.getTask(WORK_TASKS_FILE, id);
       return t && t.status !== 'completed';
     });
     logInfo(`Group tasks: ${taskQueue.join(', ')}`);
   } else if (TASK_ID) {
-    taskQueue = lib.getTaskQueue(TASKS_FILE, TASK_ID);
+    taskQueue = lib.getTaskQueue(WORK_TASKS_FILE, TASK_ID);
     if (taskQueue.length > 1) {
       logInfo(`Task ${TASK_ID} has ${taskQueue.length - 1} pending dependencies — will process them first`);
     }
     if (!WORKTREE_MODE) {
       taskQueue.forEach((id, i) => {
-        const t = lib.getTask(TASKS_FILE, id);
+        const t = lib.getTask(WORK_TASKS_FILE, id);
         const label = id === TASK_ID ? '(target)' : `(dep ${i + 1})`;
-        lib.updateTaskStatus(TASKS_FILE, id, 'waiting');
+        lib.updateTaskStatus(WORK_TASKS_FILE, id, 'waiting');
         logInfo(`  ${i + 1}. ${id}: ${t ? t.title : '?'} ${label}`);
       });
     }
@@ -653,12 +662,12 @@ async function cmdWork(descriptionParts = []) {
       // worktree's tasks.json copy and break per-plan isolation.
       taskId = null;
     } else {
-      taskId = lib.getNextTask(TASKS_FILE);
+      taskId = lib.getNextTask(WORK_TASKS_FILE);
     }
 
     if (!taskId) {
       logSuccess('All tasks completed!');
-      logInfo(`Completed: ${lib.countCompleted(TASKS_FILE)} / ${lib.countTotal(TASKS_FILE)}`);
+      logInfo(`Completed: ${lib.countCompleted(WORK_TASKS_FILE)} / ${lib.countTotal(WORK_TASKS_FILE)}`);
       console.log('');
 
       // Complete phase 8 (Implement) now that all tasks are done
@@ -711,17 +720,17 @@ async function cmdWork(descriptionParts = []) {
 
     console.log('');
     if (MAX_ITERATIONS === 0) {
-      logInfo(`Progress: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} tasks | Iteration ${iteration}`);
+      logInfo(`Progress: ${lib.countCompleted(WORK_TASKS_FILE)}/${lib.countTotal(WORK_TASKS_FILE)} tasks | Iteration ${iteration}`);
     } else {
-      logInfo(`Progress: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} tasks | Iteration ${iteration}/${MAX_ITERATIONS}`);
+      logInfo(`Progress: ${lib.countCompleted(WORK_TASKS_FILE)}/${lib.countTotal(WORK_TASKS_FILE)} tasks | Iteration ${iteration}/${MAX_ITERATIONS}`);
     }
     console.log('');
   }
 
-  if (!WORKTREE_MODE) lib.revertWaiting(TASKS_FILE);
+  if (!WORKTREE_MODE) lib.revertWaiting(WORK_TASKS_FILE);
 
   logWarn(`Max iterations (${MAX_ITERATIONS}) reached. Run 'jonggrang work' to continue.`);
-  logInfo(`Completed: ${lib.countCompleted(TASKS_FILE)} / ${lib.countTotal(TASKS_FILE)}`);
+  logInfo(`Completed: ${lib.countCompleted(WORK_TASKS_FILE)} / ${lib.countTotal(WORK_TASKS_FILE)}`);
   console.log('');
   console.log('PAUSED');
 }
