@@ -80,9 +80,12 @@ function extractCommitMessage(command: string, projectRoot: string): string {
     parts.push(v);
   }
   if (parts.length > 0) return parts.join("\n");
-  // -F / --file
-  const f = command.match(/-{1,2}(?:F|file)\s+(?:=\s*)?["']?([^\s"']+)["']?/);
-  if (f && fs.existsSync(f[1])) return fs.readFileSync(f[1], "utf8");
+  // -F / --file (handles `-F path`, `--file path`, `--file=path`, `-F=path`)
+  const f = command.match(/--?(?:F|file)(?:\s+|\s*=\s*)["']?([^\s"']+)["']?/);
+  if (f) {
+    const filePath = path.resolve(projectRoot, f[1]);
+    if (fs.existsSync(filePath)) return fs.readFileSync(filePath, "utf8");
+  }
   // --amend — read the last commit's message
   if (/(?:^|\s)--amend\b/.test(command)) {
     try {
