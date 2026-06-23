@@ -48,6 +48,68 @@ function isSensitiveFile(filePath: string, projectRoot: string): boolean {
   return false;
 }
 
+// ── Commit Convention Check — mirrors commit-convention.sh ─────────────────
+// Soft-guide: when an agent invokes `git commit` with a Co-authored-by
+// trailer, validate the 5 required fields. If any are missing, block
+// the tool call with guidance so the agent can reason and retry.
+const COMMIT_REQUIRED_FIELDS = ["Context:", "What:", "Why:", "Tradeoff:", "Caveats:"];
+
+function extractCommitMessage(command: string, projectRoot: string): string {
+  if (!command) return "";
+  // -m / --message (single or multiple; joined by newline per git convention)
+  const m = command.matchAll(/(?:-m|--message)\s+["']((?:[^"'\\]|\\.)*)["']/g);
+  const parts: string[] = [];
+  for (const x of m) {
+    let v = x[1]
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\(["'\\])/g, "$1");
+    parts.push(v);
+  }
+  if (parts.length > 0) return parts.join("\n");
+  // -F / --file
+  const f = command.match(/-{1,2}(?:F|file)\s+(?:=\s*)?["']?([^\s"']+)["']?/);
+  if (f && fs.existsSync(f[1])) return fs.readFileSync(f[1], "utf8");
+  // --amend — read the last commit's message
+  if (/(?:^|\s)--amend\b/.test(command)) {
+    try {
+      return execSync("git log -1 --pretty=%B", { cwd: projectRoot, encoding: "utf8" });
+    } catch {}
+  }
+  return "";
+}
+
+function isAgentCommitMissingFields(command: string, projectRoot: string): { reason: string } | null {
+  // Match `git commit` at the start of a segment (after chain operators)
+  const segments = command
+    .replace(/\$\(([^)]*)\)/g, "\n$1\n")
+    .replace(/`([^`]*)`/g, "\n$1\n")
+    .replace(/[()]/g, " ")
+    .split(/&&|\|\||;|\||\n/)
+    .map((s: string) => s.trim().replace(/^(bash|sh|zsh|dash)\s+-c\s+['"]?/, "").replace(/^["']/, ""))
+    .filter(Boolean);
+  if (!segments.some((s) => /^git\s+commit\b/.test(s))) return null;
+
+  const message = extractCommitMessage(command, projectRoot);
+  if (!message) return null;
+
+  // Human commit = no Co-authored-by trailer → skip validation
+  if (!/^[\s]*Co-authored-by:/im.test(message)) return null;
+
+  const missing = COMMIT_REQUIRED_FIELDS.filter(
+    (f) => !new RegExp(`^[\\s]*${f.replace(":", "\\:")}`, "im").test(message)
+  );
+  if (missing.length === 0) return null;
+
+  const reason =
+    `COMMIT CONVENTION: agent commit is missing required structured field(s):\n` +
+    missing.map((f) => `  - ${f}`).join("\n") + "\n\n" +
+    `All 5 fields are required for agent commits. Use "none" if a field is genuinely N/A.\n\n` +
+    `Format:\n  <type>: <short summary>\n\n  Context: <narrative — NOT an ID>\n  What:    <change intent in prose>\n  Why:     <rationale>\n  Tradeoff:<what was sacrificed, or 'none'>\n  Caveats: <next-agent note, or 'none'>\n\n  Co-authored-by: jonggrang <koko@jonggrang.dev>\n\n` +
+    `See docs/COMMIT-CONVENTION.md (or CONTRIBUTING.md §3) for the full spec.`;
+  return { reason };
+}
+
 // ── Secret command check — mirrors block-secret-commands.sh ─────────────────
 function isSecretCommand(command: string): boolean {
   if (!command) return false;
@@ -208,6 +270,14 @@ export default function (pi: ExtensionAPI) {
         block: true,
         reason: `SECRET COMMAND BLOCKED: Command may expose secrets.\nUse 'run-with-secrets <profile> <cmd>' to access credentials safely.`,
       };
+    }
+
+    // ── Commit Convention Check (mirrors commit-convention.sh) ─────────────
+    if (toolName === "bash") {
+      const commitCheck = isAgentCommitMissingFields(command, projectRoot);
+      if (commitCheck) {
+        return { block: true, reason: commitCheck.reason };
+      }
     }
 
     // ── Compaction Gate (blocks spawning new agents when context is full) ──
