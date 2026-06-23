@@ -42,7 +42,7 @@ check()    { if [ "$1" = "$2" ]; then echo -e "  ${G}✓${N} $3"; PASS=$((PASS+1
 run_hook() {
   local cmd="$1"
   local input
-  input=$(jq -nc --arg c "$cmd" '{tool_input:{command:$c}}')
+  input=$(jq -nc --arg c "$cmd" --arg cwd "$REPO" '{tool_input:{command:$c},cwd:$cwd}')
   STDOUT=$(printf '%s' "$input" | bash "$HOOK" 2>/dev/null)
   EXIT=$?
 }
@@ -147,6 +147,28 @@ run_hook "cd $REPO && git commit -m \"bad
 
 Co-authored-by: a <b>\""
 check 2 "$EXIT" "chained commit still triggers validation"
+
+# ── T11: `--file=msg.txt` no-space form → pass ──────────────────────
+# Regression: prior regex `--?(?:F|file)\s+(?:=\s*)?...` required whitespace
+# after the flag, so `--file=msg.txt` (no space) was missed → MESSAGE empty
+# → hook silently skipped validation. Now matches all 4 forms.
+# Also exercises relative-path resolution: msg11.txt is relative to $REPO,
+# the hook must resolve via cwd (projectRoot) from the input JSON.
+section "T11: --file=msg.txt (no-space, relative path) → pass"
+MSG11="$REPO/msg11.txt"
+cat > "$MSG11" <<'EOF'
+chore: no-space form
+
+Context: file flag variants
+What:    regression test for --file=path
+Why:     prior regex required whitespace after flag
+Tradeoff:none
+Caveats: none
+
+Co-authored-by: jonggrang <koko@jonggrang.dev>
+EOF
+run_hook "git commit --file=msg11.txt"
+check 0 "$EXIT" "--file=msg.txt (no-space) extracts message via relative path"
 
 # ── Summary ──────────────────────────────────────────────────────────
 echo ""

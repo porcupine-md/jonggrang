@@ -15,6 +15,7 @@ set -euo pipefail
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
+PROJECT_ROOT=$(echo "$INPUT" | jq -r '.cwd // ""')
 
 [ -z "$COMMAND" ] && exit 0
 
@@ -59,10 +60,19 @@ extract_message() {
 
   if [ -n "$msg" ]; then printf '%s' "$msg"; return; fi
 
-  # -F / --file=<path> — read the message from a file.
+  # -F / --file=<path> — read the message from a file. Matches all 4 forms:
+  # `-F path`, `--file path`, `-F=path`, `--file=path`. Relative paths are
+  # resolved against $PROJECT_ROOT (Claude Code's cwd) so this works whether
+  # the agent writes the path relative to the repo or absolute.
   local file
-  file=$(printf '%s' "$cmd" | perl -0777 -ne 'if (/--?(?:F|file)\s+(?:=\s*)?["\x27]?([^\s"\x27]+)["\x27]?/) { print $1; exit; }')
-  if [ -n "$file" ] && [ -f "$file" ]; then cat "$file"; return; fi
+  file=$(printf '%s' "$cmd" | perl -0777 -ne 'if (/--?(?:F|file)(?:\s+|\s*=\s*)["\x27]?([^\s"\x27]+)["\x27]?/) { print $1; exit; }')
+  if [ -n "$file" ]; then
+    local fpath="$file"
+    if [[ "$fpath" != /* ]] && [ -n "$PROJECT_ROOT" ]; then
+      fpath="$PROJECT_ROOT/$fpath"
+    fi
+    if [ -f "$fpath" ]; then cat "$fpath"; return; fi
+  fi
 
   # --amend without an explicit -m override — validate the last commit's message.
   if printf '%s' "$cmd" | grep -qE -- '--amend\b'; then
