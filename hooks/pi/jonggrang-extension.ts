@@ -48,6 +48,19 @@ function isSensitiveFile(filePath: string, projectRoot: string): boolean {
   return false;
 }
 
+// Split a command into individually-checkable segments: lift $()/backtick
+// contents onto their own lines, split on chain operators, strip shell
+// wrappers (`bash -c`, quotes). Mirrors the awk chain-split in commit-convention.sh.
+function splitCommandSegments(command: string): string[] {
+  return command
+    .replace(/\$\(([^)]*)\)/g, "\n$1\n")
+    .replace(/`([^`]*)`/g, "\n$1\n")
+    .replace(/[()]/g, " ")
+    .split(/&&|\|\||;|\||\n/)
+    .map((s: string) => s.trim().replace(/^(bash|sh|zsh|dash)\s+-c\s+['"]?/, "").replace(/^["']/, ""))
+    .filter(Boolean);
+}
+
 // ── Commit Convention Check — mirrors commit-convention.sh ─────────────────
 // Soft-guide: when an agent invokes `git commit` with a Co-authored-by
 // trailer, validate the 5 required fields. If any are missing, block
@@ -81,13 +94,7 @@ function extractCommitMessage(command: string, projectRoot: string): string {
 
 function isAgentCommitMissingFields(command: string, projectRoot: string): { reason: string } | null {
   // Match `git commit` at the start of a segment (after chain operators)
-  const segments = command
-    .replace(/\$\(([^)]*)\)/g, "\n$1\n")
-    .replace(/`([^`]*)`/g, "\n$1\n")
-    .replace(/[()]/g, " ")
-    .split(/&&|\|\||;|\||\n/)
-    .map((s: string) => s.trim().replace(/^(bash|sh|zsh|dash)\s+-c\s+['"]?/, "").replace(/^["']/, ""))
-    .filter(Boolean);
+  const segments = splitCommandSegments(command);
   if (!segments.some((s) => /^git\s+commit\b/.test(s))) return null;
 
   const message = extractCommitMessage(command, projectRoot);
@@ -113,14 +120,7 @@ function isAgentCommitMissingFields(command: string, projectRoot: string): { rea
 // ── Secret command check — mirrors block-secret-commands.sh ─────────────────
 function isSecretCommand(command: string): boolean {
   if (!command) return false;
-  const lifted = command
-    .replace(/\$\(([^)]*)\)/g, "\n$1\n")
-    .replace(/`([^`]*)`/g, "\n$1\n")
-    .replace(/[()]/g, " ");
-  const segments = lifted
-    .split(/&&|\|\||;|\||\n/)
-    .map((s: string) => s.trim().replace(/^(bash|sh|zsh|dash)\s+-c\s+['"]?/, "").replace(/^["']/, ""))
-    .filter(Boolean);
+  const segments = splitCommandSegments(command);
   const READERS = "(?:cat|head|tail|less|more|xxd|od|hexdump|strings|awk|sed|cp|mv|tar|zip|base64|openssl|grep|rg|fgrep|egrep|nl|tac|view|vim|vi|nano|emacs|code|subl)";
   const SECRETPATH = "(credentials|\\.pem(\\s|$)|\\.key(\\s|$)|id_rsa|id_ed25519|id_ecdsa|id_ed25519_sk|id_ecdsa_sk|id_dsa|identity|ssh_host_.*_key|\\.ssh/|\\.aws/credentials|authorized_keys)";
   for (const seg of segments) {

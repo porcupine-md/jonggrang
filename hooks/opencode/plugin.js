@@ -67,20 +67,23 @@ function createPlugin(projectRoot) {
     return false;
   }
 
-  // Blocked bash command patterns — mirrors block-secret-commands.sh
-  // Splits on common chain/subshell delimiters so `; env`, `&& env`, `$(env)` don't bypass.
-  function isSecretCommand(command) {
-    if (!command) return false;
-    // Lift command-substitution and backtick contents into their own segments
-    // so `echo $(env)` and `echo \`env\`` are checked, not just the outer command.
-    const lifted = command
+  // Split a command into individually-checkable segments: lift $()/backtick
+  // contents onto their own lines, split on chain operators, strip shell
+  // wrappers (`bash -c`, quotes). Mirrors the awk chain-split in commit-convention.sh.
+  function splitCommandSegments(command) {
+    return command
       .replace(/\$\(([^)]*)\)/g, '\n$1\n')
       .replace(/`([^`]*)`/g, '\n$1\n')
-      .replace(/[()]/g, ' ');
-    const segments = lifted
+      .replace(/[()]/g, ' ')
       .split(/&&|\|\||;|\||\n/)
       .map(s => s.trim().replace(/^(bash|sh|zsh|dash)\s+-c\s+['"]?/, '').replace(/^["']/, ''))
       .filter(Boolean);
+  }
+
+  // Blocked bash command patterns — mirrors block-secret-commands.sh
+  function isSecretCommand(command) {
+    if (!command) return false;
+    const segments = splitCommandSegments(command);
 
     const READERS = '(?:cat|head|tail|less|more|xxd|od|hexdump|strings|awk|sed|cp|mv|tar|zip|base64|openssl|grep|rg|fgrep|egrep|nl|tac|view|vim|vi|nano|emacs|code|subl)';
     const SECRETPATH = '(credentials|\\.pem(\\s|$)|\\.key(\\s|$)|id_rsa|id_ed25519|id_ecdsa|id_ed25519_sk|id_ecdsa_sk|id_dsa|identity|ssh_host_.*_key|\\.ssh/|\\.aws/credentials|authorized_keys)';
@@ -129,13 +132,7 @@ function createPlugin(projectRoot) {
   }
 
   function checkAgentCommit(command) {
-    const segments = command
-      .replace(/\$\(([^)]*)\)/g, '\n$1\n')
-      .replace(/`([^`]*)`/g, '\n$1\n')
-      .replace(/[()]/g, ' ')
-      .split(/&&|\|\||;|\||\n/)
-      .map(s => s.trim().replace(/^(bash|sh|zsh|dash)\s+-c\s+['"]?/, '').replace(/^["']/, ''))
-      .filter(Boolean);
+    const segments = splitCommandSegments(command);
     if (!segments.some(s => /^git\s+commit\b/.test(s))) return null;
 
     const message = extractCommitMessage(command);
