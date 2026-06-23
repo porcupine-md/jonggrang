@@ -1856,14 +1856,16 @@ async function cmdInit() {
   // NOTE: .jonggrang/.output/ stays TRACKED on purpose — plans + manifests are
   // committed and travel with each plan's branch on push.
   const gitignorePath = path.join(PROJECT_ROOT, '.gitignore');
-  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n.jonggrang/.worktree/\n`;
+  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n.jonggrang/.worktree/\n.jonggrang/.drafts/\n`;
   try {
     let existing = lib.fileExists(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
     if (!existing.includes('.jonggrang/.ephemeral')) {
       fs.appendFileSync(gitignorePath, jonggrangIgnoreBlock);
-    } else if (!existing.includes('.jonggrang/.worktree')) {
-      // Block already present from an older init — append just the worktree line.
-      fs.appendFileSync(gitignorePath, `.jonggrang/.worktree/\n`);
+    } else {
+      // Append any missing lines individually (idempotent across init upgrades)
+      for (const line of ['.jonggrang/.worktree/', '.jonggrang/.drafts/']) {
+        if (!existing.includes(line)) fs.appendFileSync(gitignorePath, line + '\n');
+      }
     }
   } catch {}
 
