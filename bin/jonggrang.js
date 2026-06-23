@@ -1839,11 +1839,15 @@ async function cmdInit() {
   logSuccess('Installed .opencode/SKILL.md');
 
   // Task & progress state is per-feature now — report migration if it happened
-  if (result.migration && (result.migration.migratedTasks > 0 || result.migration.migratedProgress)) {
+  if (result.migration && (result.migration.migratedTasks > 0 || result.migration.migratedProgress || result.migration.migratedDraft)) {
     const m = result.migration;
-    logSuccess(`Migrated legacy state → per-feature (${m.migratedTasks} tasks${m.features.length ? ` across ${m.features.length} feature(s)` : ''}${m.migratedProgress ? ', progress.txt copied' : ''})`);
+    const bits = [];
+    if (m.migratedTasks > 0) bits.push(`${m.migratedTasks} tasks${m.features.length ? ` across ${m.features.length} feature(s)` : ''}`);
+    if (m.migratedProgress) bits.push('progress.txt copied');
+    if (m.migratedDraft) bits.push(`pending plan.md → draft ${m.migratedDraft}`);
+    logSuccess(`Migrated legacy state → per-feature/per-session (${bits.join(', ')})`);
   } else {
-    logInfo('Task & progress state: per-feature (created on demand at `jonggrang approve`)');
+    logInfo('Task & progress state: per-feature; plan drafts: per-session (created on demand at `jonggrang plan`)');
   }
   logSuccess(`Copied ${result.skillCount} skill templates → .claude/skills, .opencode/skills, .jonggrang/skills`);
 
