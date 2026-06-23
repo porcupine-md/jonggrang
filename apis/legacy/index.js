@@ -42,18 +42,21 @@ module.exports = function register(app, io, ctx) {
 
     function readTasks() {
         try {
-            if (lib.fileExists(paths.tasksFile)) {
-                const data = lib.readJSON(paths.tasksFile);
-                if (data) { state.latestTasks = data; io.emit('tasks_update', state.latestTasks); }
-            }
+            const data = lib.getAllTasks(PROJECT_ROOT);
+            if (data) { state.latestTasks = data; io.emit('tasks_update', state.latestTasks); }
         } catch (err) { console.error('Error reading tasks:', err); }
     }
 
     function readProgress() {
         try {
-            if (lib.fileExists(paths.progressFile)) {
-                state.latestProgress = fs.readFileSync(paths.progressFile, 'utf8');
-                io.emit('progress_update', state.latestProgress);
+            // Progress is per-feature now; read the active feature's progress.txt
+            const fid = lib.resolveActiveFeature(PROJECT_ROOT);
+            if (fid) {
+                const progressPath = lib.progressFileFor(PROJECT_ROOT, fid);
+                if (lib.fileExists(progressPath)) {
+                    state.latestProgress = fs.readFileSync(progressPath, 'utf8');
+                    io.emit('progress_update', state.latestProgress);
+                }
             }
         } catch (err) { console.error('Error reading progress:', err); }
     }
@@ -103,8 +106,11 @@ module.exports = function register(app, io, ctx) {
     // ── Watchers ─────────────────────────────────────────────────
 
     readTasks(); readProgress(); readConfigFile();
-    chokidar.watch(paths.tasksFile, { ignoreInitial: true }).on('all', () => readTasks());
-    chokidar.watch(paths.progressFile, { ignoreInitial: true }).on('all', () => readProgress());
+    // Watch the features directory for per-feature task/progress changes
+    const featuresDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features');
+    if (fs.existsSync(featuresDir)) {
+        chokidar.watch(featuresDir, { ignoreInitial: true }).on('all', () => { readTasks(); readProgress(); });
+    }
     chokidar.watch(paths.configFile, { ignoreInitial: true }).on('all', () => readConfigFile());
     chokidar.watch(paths.planFile, { ignoreInitial: false }).on('all', emitPlanUpdate);
     const jonggrangDir = path.join(PROJECT_ROOT, '.jonggrang');

@@ -3,16 +3,17 @@
 const { Router } = require('express');
 
 module.exports = function(deps) {
-    const { lib, paths } = deps;
+    const { lib, PROJECT_ROOT } = deps;
     const router = Router();
 
     router.get('/tasks', (req, res) => {
-        const data = lib.getTasks(paths.tasksFile);
+        const data = lib.getAllTasks(PROJECT_ROOT);
         res.json(data);
     });
 
     router.get('/tasks/:id', (req, res) => {
-        const task = lib.getTask(paths.tasksFile, req.params.id);
+        const all = lib.getAllTasks(PROJECT_ROOT);
+        const task = all.tasks.find(t => t.id === req.params.id) || null;
         if (!task) return res.status(404).json({ error: 'Task not found' });
         res.json(task);
     });
