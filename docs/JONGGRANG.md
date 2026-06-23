@@ -99,7 +99,8 @@ project-root/
 │       └── tester.md
 ├── .jonggrang/
 │   ├── jonggrang.json          # Project config
-│   ├── plan.md                 # Draft plan (exists between plan → approve)
+│   ├── .drafts/<session>/      # Draft plans (gitignored, per-session — concurrent-safe)
+│   │   └── plan.md            # Pending plan (exists between plan → approve)
 │   ├── .output/                # TRACKED in git — plans + manifests travel with each branch on push
 │   │   └── features/{id}/
 │   │       ├── plan.md         # Archived plan (after approve); frontmatter holds the branch name
@@ -131,7 +132,7 @@ Simple stateless loop. Each iteration gets a fresh context window. Planning is a
 jonggrang plan "feature"
     |
     v
-Phase 1 → AI writes .jonggrang/plan.md  (high-level, human-editable)
+Phase 1 → AI writes .jonggrang/.drafts/<session>/plan.md  (high-level, human-editable)
     |      Interactive: Approve / Edit / Save / Abort
     v
 jonggrang approve   (or auto-triggered by --yes)

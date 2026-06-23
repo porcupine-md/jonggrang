@@ -70,7 +70,7 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 | Command | What it does |
 |---------|-------------|
 | `jonggrang init` | Interactive wizard — sets up `.jonggrang/`, `AGENTS.md`, hooks, skills |
-| `jonggrang plan "desc"` | AI writes `.jonggrang/plan.md` — human reviews before code |
+| `jonggrang plan "desc"` | AI writes a draft plan to `.jonggrang/.drafts/<session>/plan.md` — human reviews before code |
 | `jonggrang approve` | Decomposes plan into atomic tasks in `.jonggrang/.output/features/<id>/jonggrang-tasks.json` |
 | `jonggrang work` | Executes task queue with fresh context per task |
 | `jonggrang status` | Shows task board |

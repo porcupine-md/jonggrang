@@ -13,7 +13,8 @@ Before the work loop can run, a plan must exist and be approved. This is a **two
 ```
 Phase 1 — jonggrang plan "description"
     │
-    ├─ AI writes .jonggrang/plan.md  (high-level, human-editable)
+    ├─ AI writes .jonggrang/.drafts/<session>/plan.md  (high-level, human-editable)
+    │   Each plan call gets its own session-id — concurrent planning is safe.
     │   frontmatter: feature, branch, work_type, description, created_at
     │   optional `base:` (set via `--base` / the web base picker) — the branch the
     │   worktree is cut from; fetched fresh from origin at run time. Default: main/master.
@@ -21,15 +22,16 @@ Phase 1 — jonggrang plan "description"
     ├─ Interactive prompt:
     │   > Approve (immediately run Phase 2)
     │   > Edit plan in $EDITOR, then approve
-    │   > Save for later (exit, plan.md stays on disk)
-    │   > Abort (discard plan.md)
+    │   > Save for later (exit, draft stays on disk)
+    │   > Abort (discard draft)
     │
 Phase 2 — jonggrang approve   (or auto-triggered by --yes)
     │
-    ├─ AI reads .jonggrang/plan.md
+    ├─ Resolves the draft (most-recent, or --session <id>)
+    ├─ AI reads the draft plan.md
     ├─ Decomposes into atomic tasks → .jonggrang/.output/features/<id>/jonggrang-tasks.json
-    └─ Archives plan → .jonggrang/.output/features/<id>/plan.md
-       Deletes .jonggrang/plan.md
+    └─ Promotes plan → .jonggrang/.output/features/<id>/plan.md
+       Discards the draft session folder
 ```
 
 **Interactive options after `jonggrang plan`:**
@@ -37,10 +39,10 @@ Phase 2 — jonggrang approve   (or auto-triggered by --yes)
 | Option | Action |
 |--------|--------|
 | Approve | Run Phase 2 immediately |
-| Edit with AI | Describe changes → AI revises plan.md in-place → loop back |
+| Edit with AI | Describe changes → AI revises the draft in-place → loop back |
 | Edit in $EDITOR | Open editor → loop back to options |
-| Save draft | Save plan.md, exit — run `jonggrang approve` later |
-| Abort | Delete plan.md, exit |
+| Save draft | Keep the draft, exit — run `jonggrang approve` later |
+| Abort | Delete the draft, exit |
 
 **Shorthand options:**
 

@@ -67,7 +67,7 @@ Not a final stage, but a continuous enforcement layer woven into the implement l
 You describe what you want
         |
         v
-  jonggrang plan  -->  Phase 1: AI writes .jonggrang/plan.md (high-level, human-editable)
+  jonggrang plan  -->  Phase 1: AI writes .jonggrang/.drafts/<session>/plan.md (high-level, human-editable)
         |              Review / edit the plan in your editor
         v
   jonggrang approve  -->  Phase 2: AI reads plan.md → decomposes into tasks
@@ -285,7 +285,8 @@ your-project/
 │   └── library/             # Tier 2 — JIT via gateway
 ├── .jonggrang/
 │   ├── jonggrang.json       # Project config
-│   ├── plan.md              # Draft plan (exists between plan → approve)
+│   ├── .drafts/<session>/     # Draft plans (gitignored, per-session — concurrent-safe)
+│   │   └── plan.md            # Pending plan (exists between plan → approve)
 │   ├── .output/
 │   │   └── features/<id>/
 │   │       ├── plan.md              # Archived plan (after approve)

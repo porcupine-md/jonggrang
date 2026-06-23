@@ -75,7 +75,7 @@ Planning is a two-phase process. Phase 1 generates a human-readable draft that y
 
 ```bash
 jonggrang plan "Todo REST API with Express. CRUD endpoints for todos (list, get, create, update, delete) using in-memory storage. TypeScript, Vitest tests, supertest for integration testing."
-# AI writes .jonggrang/plan.md
+# AI writes .jonggrang/.drafts/<session>/plan.md
 # Interactive prompt:
 #   ◆ What would you like to do?
 #   ● Approve — decompose into tasks now

@@ -63,7 +63,7 @@ Tell Jonggrang what you want to build:
 jonggrang plan "user authentication with JWT and password reset"
 ```
 
-The AI writes a plan to `.jonggrang/plan.md`. **Read and edit it** before continuing — this is your chance to correct the AI's assumptions before any code is written.
+The AI writes a draft plan to `.jonggrang/.drafts/<session>/plan.md` (a per-session draft folder, gitignored). **Read and edit it** before continuing — this is your chance to correct the AI's assumptions before any code is written. Each `jonggrang plan` call creates its own session, so concurrent planning doesn't overwrite.
 
 ---
 
@@ -200,7 +200,7 @@ Check `.jonggrang/.output/features/<id>/progress.txt` for what the agent learned
 
 ### Plan looks wrong
 
-Edit `.jonggrang/plan.md` directly before running `jonggrang approve`. The AI only reads it at approval time — you have full control until then.
+Edit the draft plan directly before running `jonggrang approve`. The AI only reads it at approval time — you have full control until then. (`jonggrang approve` defaults to the most-recent draft; use `--session <id>` to pick a specific one.)
 
 ---
 
