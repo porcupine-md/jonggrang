@@ -22,7 +22,18 @@ Then run `jonggrang task next` to find your task assignment — do NOT read `.jo
 6. Run validation: typecheck, tests, lint
 7. Mark done: `jonggrang task done <id>`
 8. Append learnings to `.jonggrang/progress.txt`
-9. Commit with: `git commit -m "type(scope): description"`
+9. Commit using the **structured commit convention** (see docs/COMMIT-CONVENTION.md). All 5 fields required (use "none" if N/A), then the `Co-authored-by:` trailer (marks it as an agent commit → triggers validation):
+   ```
+   <type>: <summary>
+
+   Context: <feature/plan, narrative — not an ID>
+   What: <change intent in prose, not a file list>
+   Why: <rationale>
+   Tradeoff: <what was sacrificed, or "none">
+   Caveats: <next-agent note, or "none">
+
+   Co-authored-by: jonggrang <koko@jonggrang.dev>
+   ```
 
 ## Project Info
 
