@@ -3007,6 +3007,7 @@ function cmdTask(args) {
     else if (subArgs[j] === '--blocked-by')                         { flags.blocked_by = subArgs[++j].split(','); }
     else if (subArgs[j] === '--files')                              { flags.files = subArgs[++j].split(','); }
     else if (subArgs[j] === '--reason')                             { flags.reason = subArgs[++j]; }
+    else if (subArgs[j] === '--feature')                            { flags.feature = subArgs[++j]; }
     else if (subArgs[j] === '--input')                              { flags.input = subArgs[++j]; }
     else if (subArgs[j] === '--pretty')                             { flags.pretty = true; }
     else if (subArgs[j] === '--json')                               { flags.json = true; }
@@ -3016,6 +3017,27 @@ function cmdTask(args) {
 
   const isTTY = process.stdout.isTTY;
   const pretty = flags.pretty || (isTTY && !flags.json);
+
+  // Resolve the per-feature tasks file. Three resolution modes:
+  //  - task-id commands (show/update/done/block/remove): auto-lookup the
+  //    feature via findTaskFeature; --feature overrides.
+  //  - no-task-id commands (add/import/next): --feature if given, else
+  //    resolveActiveFeature (most-recent-incomplete).
+  //  - list: cross-feature (getAllTasks), no single file.
+  function resolveTasksFile(taskId) {
+    let fid = flags.feature;
+    if (!fid && taskId) fid = lib.findTaskFeature(PROJECT_ROOT, taskId);
+    if (!fid) fid = lib.resolveActiveFeature(PROJECT_ROOT);
+    if (!fid) throw new Error('No active feature found. Run `jonggrang plan` + `jonggrang approve` first, or pass --feature <id>.');
+    return lib.tasksFileFor(PROJECT_ROOT, fid);
+  }
+  function resolveFeatureId(taskId) {
+    let fid = flags.feature;
+    if (!fid && taskId) fid = lib.findTaskFeature(PROJECT_ROOT, taskId);
+    if (!fid) fid = lib.resolveActiveFeature(PROJECT_ROOT);
+    if (!fid) throw new Error('No active feature found. Run `jonggrang plan` + `jonggrang approve` first, or pass --feature <id>.');
+    return fid;
+  }
 
   try {
     switch (subcommand) {
@@ -3047,14 +3069,16 @@ function cmdTask(args) {
 
 function taskList(flags, positional, pretty) {
   safeCheckConfig();
-  const data = lib.getTasks(TASKS_FILE);
+  // Cross-feature view: merge all feature task files.
+  const data = lib.getAllTasks(PROJECT_ROOT);
   let tasks = data.tasks || [];
 
   const statusFilter = positional[0] || flags.status;
   if (statusFilter) tasks = tasks.filter(t => t.status === statusFilter);
 
   if (pretty) {
-    console.log(`\n${BOLD}Tasks: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} completed${NC}\n`);
+    const completed = tasks.filter(t => t.status === 'completed').length;
+    console.log(`\n${BOLD}Tasks: ${completed}/${tasks.length} completed${NC}\n`);
     // Check if tasks span multiple features
     const featureIds = new Set(tasks.map(t => t.feature_id).filter(Boolean));
     const multiFeature = featureIds.size > 1;
@@ -3078,7 +3102,8 @@ function taskShow(flags, positional, pretty) {
   safeCheckConfig();
   const taskId = positional[0];
   if (!taskId) throw new Error('Task ID required. Usage: jonggrang task show <task-id>');
-  const task = lib.getTask(TASKS_FILE, taskId);
+  const tasksFile = resolveTasksFile(taskId);
+  const task = lib.getTask(tasksFile, taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
 
   if (pretty) {
@@ -3114,7 +3139,8 @@ function taskAdd(flags, positional, pretty) {
   const title = flags.title || positional[0];
   if (!title) throw new Error('Title required. Usage: jonggrang task add --title "..." or jonggrang task add "title"');
 
-  const task = lib.addTask(TASKS_FILE, {
+  const featureId = resolveFeatureId();
+  const task = lib.addTask(PROJECT_ROOT, featureId, {
     title,
     description: flags.description || '',
     priority: flags.priority,
@@ -3155,7 +3181,8 @@ function taskImport(flags, positional, pretty) {
   if (!Array.isArray(taskDataArray)) throw new Error('Input must be a JSON array of tasks.');
   if (taskDataArray.length === 0) throw new Error('Task array is empty.');
 
-  const created = lib.addTasksBulk(TASKS_FILE, taskDataArray);
+  const featureId = resolveFeatureId();
+  const created = lib.addTasksBulk(PROJECT_ROOT, featureId, taskDataArray);
 
   if (pretty) {
     logSuccess(`Imported ${created.length} task(s):`);
@@ -3181,7 +3208,8 @@ function taskUpdate(flags, positional, pretty) {
 
   if (Object.keys(updates).length === 0) throw new Error('No updates provided. Use flags like --status, --title, --priority, etc.');
 
-  const task = lib.updateTask(TASKS_FILE, taskId, updates);
+  const tasksFile = resolveTasksFile(taskId);
+  const task = lib.updateTask(tasksFile, taskId, updates);
 
   if (pretty) {
     logSuccess(`Updated ${task.id}: ${task.title}`);
@@ -3195,8 +3223,9 @@ function taskDone(flags, positional, pretty) {
   const taskId = positional[0];
   if (!taskId) throw new Error('Task ID required. Usage: jonggrang task done <task-id>');
 
-  lib.markTaskDone(TASKS_FILE, taskId);
-  const task = lib.getTask(TASKS_FILE, taskId);
+  const tasksFile = resolveTasksFile(taskId);
+  lib.markTaskDone(tasksFile, taskId);
+  const task = lib.getTask(tasksFile, taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
 
   if (pretty) {
@@ -3211,19 +3240,20 @@ function taskBlock(flags, positional, pretty) {
   const taskId = positional[0];
   if (!taskId) throw new Error('Task ID required. Usage: jonggrang task block <task-id> [--reason "..."]');
 
-  lib.updateTask(TASKS_FILE, taskId, { status: 'blocked' });
+  const tasksFile = resolveTasksFile(taskId);
+  lib.updateTask(tasksFile, taskId, { status: 'blocked' });
 
   if (flags.reason) {
-    const data = lib.getTasks(TASKS_FILE);
+    const data = lib.getTasks(tasksFile);
     const t = data.tasks.find(x => x.id === taskId);
     if (t) {
       if (!t.error_log) t.error_log = [];
       t.error_log.push(`[${new Date().toISOString()}] Blocked: ${flags.reason}`);
-      lib.writeJSON(TASKS_FILE, data);
+      lib.writeJSON(tasksFile, data);
     }
   }
 
-  const task = lib.getTask(TASKS_FILE, taskId);
+  const task = lib.getTask(tasksFile, taskId);
   if (pretty) {
     logWarn(`Blocked ${task.id}: ${task.title}${flags.reason ? ' — ' + flags.reason : ''}`);
   } else {
@@ -3236,7 +3266,8 @@ function taskRemove(flags, positional, pretty) {
   const taskId = positional[0];
   if (!taskId) throw new Error('Task ID required. Usage: jonggrang task remove <task-id>');
 
-  const removed = lib.removeTask(TASKS_FILE, taskId);
+  const tasksFile = resolveTasksFile(taskId);
+  const removed = lib.removeTask(tasksFile, taskId);
   if (pretty) {
     logSuccess(`Removed ${removed.id}: ${removed.title}`);
   } else {
@@ -3246,7 +3277,9 @@ function taskRemove(flags, positional, pretty) {
 
 function taskNext(flags, positional, pretty) {
   safeCheckConfig();
-  const nextId = lib.getNextTask(TASKS_FILE);
+  const featureId = resolveFeatureId();
+  const tasksFile = lib.tasksFileFor(PROJECT_ROOT, featureId);
+  const nextId = lib.getNextTask(tasksFile);
   if (!nextId) {
     if (pretty) {
       logInfo('No eligible tasks (all completed or blocked).');
@@ -3255,7 +3288,7 @@ function taskNext(flags, positional, pretty) {
     }
     return;
   }
-  const task = lib.getTask(TASKS_FILE, nextId);
+  const task = lib.getTask(tasksFile, nextId);
   if (pretty) {
     console.log(`\nNext task: ${BOLD}${task.id}${NC} — ${task.title}`);
     console.log(`Priority: ${task.priority}  |  Status: ${task.status}`);
