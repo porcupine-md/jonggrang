@@ -59,15 +59,11 @@ setTimeout(() => process.exit(0), 1500);
   });
 });
 
-test('runAgent codex runtime guard redacts assistant text before capture', async () => {
+test('runAgent codex runtime guard redacts agent_message text before capture', async () => {
   await withFakeCodex(`
 process.stdout.write(JSON.stringify({
   type: 'item.completed',
-  item: {
-    type: 'message',
-    role: 'assistant',
-    content: [{ type: 'output_text', text: 'key AKIAIOSFODNN7EXAMPLE done' }]
-  }
+  item: { type: 'agent_message', text: 'key AKIAIOSFODNN7EXAMPLE done' }
 }) + '\\n');
 `, async (projectRoot) => {
     const result = await runAgent('prompt', 'codex', 'supervised', projectRoot, { captureText: true });
