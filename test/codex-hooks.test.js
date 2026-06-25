@@ -460,6 +460,22 @@ test('installCodexHooks: throws (not silent) when template is missing', () => {
   } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
+test('installCodexHooks: overwrites stale project hooks/codex files on reinstall', () => {
+  const { installCodexHooks } = require(path.join(REPO_ROOT, 'lib', 'hooks'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-codex-reinstall-'));
+  try {
+    const staleDispatcher = path.join(tmpDir, 'hooks', 'codex', 'dispatcher.js');
+    fs.mkdirSync(path.dirname(staleDispatcher), { recursive: true });
+    fs.writeFileSync(staleDispatcher, 'stale dispatcher');
+
+    installCodexHooks(tmpDir, REPO_ROOT);
+
+    const updated = fs.readFileSync(staleDispatcher, 'utf8');
+    assert.notEqual(updated, 'stale dispatcher');
+    assert.match(updated, /HOOK_REGISTRY|handleHookError|dispatcher/i);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
 test('installCodexHooks: throws when template has empty hooks object', () => {
   const { installCodexHooks } = require(path.join(REPO_ROOT, 'lib', 'hooks'));
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-codex-empty-'));
@@ -478,11 +494,14 @@ test('installCodexHooks: throws when template has empty hooks object', () => {
   }
 });
 
-test('installHooksForTool: installs codex alongside claude/opencode/jonggrang', () => {
+test('installHooksForTool: intentionally installs all backends regardless of selected tool', () => {
   const { installHooksForTool } = require(path.join(REPO_ROOT, 'lib', 'hooks'));
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-codex-all-'));
   try {
-    const results = installHooksForTool(tmpDir, 'codex', REPO_ROOT);
+    const results = installHooksForTool(tmpDir, 'claude', REPO_ROOT);
+    assert.ok(results.claude, 'expected claude in results');
+    assert.ok(results.opencode, 'expected opencode in results');
+    assert.ok(results.jonggrang, 'expected jonggrang in results');
     assert.ok(results.codex, 'expected codex in results');
     assert.equal(results.codex.installed, true);
     assert.ok(fs.existsSync(results.codex.path));
