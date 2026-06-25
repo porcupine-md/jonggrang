@@ -11,9 +11,10 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
+const { CODEX_REQUIRED_EVENTS } = require(path.join(REPO_ROOT, 'lib', 'hooks'));
 const policies = require(path.join(REPO_ROOT, 'hooks', 'codex', 'lib', 'policies'));
 const handlers = require(path.join(REPO_ROOT, 'hooks', 'codex', 'lib', 'handlers'));
 const dispatcher = path.join(REPO_ROOT, 'hooks', 'codex', 'dispatcher.js');
@@ -270,31 +271,21 @@ test('taskRoleClaim: queues pending role from subagent_type', async () => {
 // ── dispatcher.js — end-to-end via stdin/stdout ──────────────────────────
 
 function runDispatcher(hookName, payload) {
-  const out = execFileSync('node', [dispatcher, hookName], {
+  const result = spawnSync(process.execPath, [dispatcher, hookName], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
     cwd: REPO_ROOT,
-    stdio: ['pipe', 'pipe', 'pipe'],
   });
-  return { stdout: out, exitCode: 0 };
-}
 
-function runDispatcherExpectBlock(hookName, payload) {
-  try {
-    execFileSync('node', [dispatcher, hookName], {
-      input: JSON.stringify(payload),
-      encoding: 'utf8',
-      cwd: REPO_ROOT,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return { stdout: '', exitCode: 0 };
-  } catch (e) {
-    return { stdout: e.stdout?.toString() || '', stderr: e.stderr?.toString() || '', exitCode: e.status };
-  }
+  return {
+    stdout: result.stdout || '',
+    stderr: result.stderr || '',
+    exitCode: result.status,
+  };
 }
 
 test('dispatcher: blockSecretCommands emits PreToolUse deny JSON + exit 2', () => {
-  const { stdout, exitCode } = runDispatcherExpectBlock('blockSecretCommands', {
+  const { stdout, exitCode } = runDispatcher('blockSecretCommands', {
     tool_name: 'Bash',
     tool_input: { command: 'env' },
     cwd: REPO_ROOT,
@@ -307,7 +298,7 @@ test('dispatcher: blockSecretCommands emits PreToolUse deny JSON + exit 2', () =
 });
 
 test('dispatcher: blockSensitiveFiles emits PreToolUse deny for .pem', () => {
-  const { stdout, exitCode } = runDispatcherExpectBlock('blockSensitiveFiles', {
+  const { stdout, exitCode } = runDispatcher('blockSensitiveFiles', {
     tool_name: 'apply_patch',
     tool_input: { command: '*** Add File: server.pem\n+-----BEGIN PRIVATE KEY-----' },
     cwd: REPO_ROOT,
@@ -338,18 +329,10 @@ test('dispatcher: sanitizeOutput emits additionalContext when secret present', (
   assert.match(parsed.hookSpecificOutput.additionalContext, /SECRET LEAK/);
 });
 
-test('dispatcher: unknown hook name fails open with stderr message', () => {
-  let caught;
-  try {
-    execFileSync('node', [dispatcher, 'nonExistentHook'], {
-      input: '{}',
-      encoding: 'utf8',
-      cwd: REPO_ROOT,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-  } catch (e) { caught = e; }
-  assert.ok(caught, 'expected non-zero exit');
-  assert.match(caught.stderr?.toString() || '', /unknown hook/);
+test('dispatcher: unknown hook name fails with stderr message', () => {
+  const { stderr, exitCode } = runDispatcher('nonExistentHook', {});
+  assert.notEqual(exitCode, 0);
+  assert.match(stderr, /unknown hook/);
 });
 
 // ── F1: taskSkillEnforcement → SubagentStop + systemMessage (parity fix) ──
@@ -388,7 +371,7 @@ test('dispatcher: blockSecretCommands handler throw fails CLOSED (deny + exit 2)
   // hooks are the sole enforcement boundary in autonomous mode.
   // blockSecretCommands has a real throw path: a non-string command reaches
   // String.replace without a type guard in policies.isSecretCommand.
-  const { stdout, exitCode } = runDispatcherExpectBlock('blockSecretCommands', {
+  const { stdout, exitCode } = runDispatcher('blockSecretCommands', {
     tool_name: 'Bash',
     tool_input: { command: 12345 },
     cwd: REPO_ROOT,
@@ -411,25 +394,17 @@ test('dispatcher: blockSensitiveFiles + agentFirst are fail-closed (shared handl
   assert.match(src, /FAIL_CLOSED_HOOKS[\s\S]*agentFirst/);
 });
 
-test('dispatcher: sanitizeOutput handler throw fails OPEN (exit 0)', () => {
-  // Non-blocking warning hooks stay fail-open — a crash here must not lock
-  // the agent, only PreToolUse deny hooks fail closed.
-  const { exitCode } = runDispatcher('sanitizeOutput', {
-    tool_response: 'clean output',
-    cwd: REPO_ROOT,
-  });
-  assert.equal(exitCode, 0);
-});
-
 test('dispatcher: non-blocker handler throw fails open (exit 0, no block)', () => {
-  // sessionInit is NOT a fail-closed PreToolUse deny hook — a handler crash
-  // here must fail OPEN so a non-blocking hook bug never locks the agent.
-  const { exitCode } = runDispatcher('sessionInit', {
-    session_id: null,
-    prompt: null,
+  // taskRoleClaim is NOT a fail-closed PreToolUse deny hook. Passing a
+  // non-string agent_type triggers a real handler throw; dispatcher must
+  // fail OPEN so a non-blocking hook bug never locks the agent.
+  const { stdout, stderr, exitCode } = runDispatcher('taskRoleClaim', {
+    agent_type: {},
     cwd: REPO_ROOT,
   });
   assert.equal(exitCode, 0);
+  assert.equal(stdout.trim(), '');
+  assert.match(stderr, /taskRoleClaim error/);
 });
 
 // ── lib/hooks.js — installCodexHooks wiring ──────────────────────────────
@@ -446,12 +421,15 @@ test('installCodexHooks: writes .codex/hooks.json with real hooks object', () =>
     // Strengthened (F3): assert every required event is a NON-EMPTY array
     // with a real dispatcher command — not just truthy. This catches the
     // silent {hooks:{}} failure mode that recreates issue #68.
-    for (const ev of ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 'SubagentStart', 'SessionStart']) {
-      assert.ok(Array.isArray(cfg.hooks[ev]) && cfg.hooks[ev].length > 0, `${ev} must be non-empty array`);
-      for (const entry of cfg.hooks[ev]) {
-        assert.ok(Array.isArray(entry.hooks) && entry.hooks.length > 0, `${ev} entry must have hooks`);
-        for (const h of entry.hooks) {
-          assert.match(h.command, /hooks[\\/]codex[\\/]dispatcher\.js/, `${ev} command must point at dispatcher.js`);
+    for (const eventName of CODEX_REQUIRED_EVENTS) {
+      assert.ok(
+        Array.isArray(cfg.hooks[eventName]) && cfg.hooks[eventName].length > 0,
+        `${eventName} must be non-empty array`
+      );
+      for (const entry of cfg.hooks[eventName]) {
+        assert.ok(Array.isArray(entry.hooks) && entry.hooks.length > 0, `${eventName} entry must have hooks`);
+        for (const hook of entry.hooks) {
+          assert.match(hook.command, /hooks[\\/]codex[\\/]dispatcher\.js/, `${eventName} command must point at dispatcher.js`);
         }
       }
     }

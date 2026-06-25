@@ -34,42 +34,26 @@ const path = require('path');
 
 const handlers = require('./lib/handlers');
 
-// ── Handler registry: jonggrang hook name → handler fn ───────────────────
-const HANDLER_MAP = {
+// ── Hook registry: jonggrang hook name → handler + Codex event ───────────
+// hooks.json decides when a handler runs; the dispatcher keeps the event next
+// to the handler so output translation cannot drift from the routed hook.
+const HOOK_REGISTRY = {
   // PreToolUse
-  blockSensitiveFiles:      handlers.blockSensitiveFiles,
-  blockSecretCommands:      handlers.blockSecretCommands,
-  agentFirst:               handlers.agentFirst,
+  blockSensitiveFiles:  { event: 'PreToolUse',    handler: handlers.blockSensitiveFiles },
+  blockSecretCommands:  { event: 'PreToolUse',    handler: handlers.blockSecretCommands },
+  agentFirst:           { event: 'PreToolUse',    handler: handlers.agentFirst },
   // PostToolUse
-  trackModifications:        handlers.trackModifications,
-  sanitizeOutput:           handlers.sanitizeOutput,
+  trackModifications:   { event: 'PostToolUse',   handler: handlers.trackModifications },
+  sanitizeOutput:       { event: 'PostToolUse',   handler: handlers.sanitizeOutput },
   // Stop / SubagentStop
-  feedbackLoop:             handlers.feedbackLoop,
-  qualityGate:              handlers.qualityGate,
-  outputEnforcement:        handlers.outputEnforcement,
-  secretFinalCheck:         handlers.secretFinalCheck,
-  taskSkillEnforcement:     handlers.taskSkillEnforcement,
+  feedbackLoop:         { event: 'Stop',          handler: handlers.feedbackLoop },
+  qualityGate:          { event: 'Stop',          handler: handlers.qualityGate },
+  outputEnforcement:    { event: 'SubagentStop',  handler: handlers.outputEnforcement },
+  secretFinalCheck:     { event: 'SubagentStop',  handler: handlers.secretFinalCheck },
+  taskSkillEnforcement: { event: 'SubagentStop',  handler: handlers.taskSkillEnforcement },
   // SubagentStart / SessionStart
-  taskRoleClaim:            handlers.taskRoleClaim,
-  sessionInit:              handlers.sessionInit,
-};
-
-// ── Codex event → jonggrang handler name mapping ─────────────────────────
-// (which handler runs for a given codex event is decided by hooks.json matcher,
-//  but the dispatcher also validates the argv hookName is sane)
-const CODEX_EVENT_FOR = {
-  blockSensitiveFiles:      'PreToolUse',
-  blockSecretCommands:      'PreToolUse',
-  agentFirst:               'PreToolUse',
-  trackModifications:        'PostToolUse',
-  sanitizeOutput:           'PostToolUse',
-  feedbackLoop:             'Stop',
-  qualityGate:              'Stop',
-  outputEnforcement:        'SubagentStop',
-  secretFinalCheck:         'SubagentStop',
-  taskSkillEnforcement:     'SubagentStop',
-  taskRoleClaim:            'SubagentStart',
-  sessionInit:              'SessionStart',
+  taskRoleClaim:        { event: 'SubagentStart', handler: handlers.taskRoleClaim },
+  sessionInit:          { event: 'SessionStart',  handler: handlers.sessionInit },
 };
 
 // ── Fail-closed policy ──────────────────────────────────────────────────
@@ -94,7 +78,7 @@ function handleHookError(hookName, err) {
   const msg = err && err.message ? err.message : String(err);
   const label = hookName || 'dispatcher';
   process.stderr.write(`[jonggrang-codex] ${label} error: ${msg}\n`);
-  const codexEvent = CODEX_EVENT_FOR[hookName];
+  const codexEvent = HOOK_REGISTRY[hookName]?.event;
   if (codexEvent === 'PreToolUse' && FAIL_CLOSED_HOOKS.has(hookName)) {
     emitPreToolUseDeny(
       `[jonggrang] fail-closed: ${hookName} internal error (${msg}). ` +
@@ -172,12 +156,12 @@ function emitNonBlockingContext(context, hookEvent) {
 
 async function main() {
   const hookName = process.argv[2];
-  if (!hookName || !HANDLER_MAP[hookName]) {
-    die(`unknown hook: ${hookName || '(none)'}. valid: ${Object.keys(HANDLER_MAP).join(', ')}`);
+  const hook = HOOK_REGISTRY[hookName];
+  if (!hook) {
+    die(`unknown hook: ${hookName || '(none)'}. valid: ${Object.keys(HOOK_REGISTRY).join(', ')}`);
   }
 
-  const handler = HANDLER_MAP[hookName];
-  const codexEvent = CODEX_EVENT_FOR[hookName];
+  const { handler, event: codexEvent } = hook;
 
   // Read stdin payload
   let raw = '';

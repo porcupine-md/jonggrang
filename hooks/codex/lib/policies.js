@@ -10,6 +10,10 @@
 const fs = require('fs');
 const path = require('path');
 
+const SECRET_COMMAND_READERS = '(?:cat|head|tail|less|more|xxd|od|hexdump|strings|awk|sed|cp|mv|tar|zip|base64|openssl|grep|rg|fgrep|egrep|nl|tac|view|vim|vi|nano|emacs|code|subl)';
+const SECRET_PATH_PATTERN = '(credentials|\\.pem(\\s|$)|\\.key(\\s|$)|id_rsa|id_ed25519|id_ecdsa|id_ed25519_sk|id_ecdsa_sk|id_dsa|identity|ssh_host_.*_key|\\.ssh/|\\.aws/credentials|authorized_keys)';
+const SECRET_READER_RE = new RegExp(`\\b${SECRET_COMMAND_READERS}\\b.*${SECRET_PATH_PATTERN}`, 'i');
+
 /**
  * Sensitive-file patterns — mirrors block-sensitive-files.sh.
  * Returns 'block' | 'env' | 'allow' | 'pass'.
@@ -79,16 +83,13 @@ function isSecretCommand(command) {
     .map(s => s.trim().replace(/^(bash|sh|zsh|dash)\s+-c\s+['"]?/, '').replace(/^["']/, '').replace(/["']$/, ''))
     .filter(Boolean);
 
-  const READERS = '(?:cat|head|tail|less|more|xxd|od|hexdump|strings|awk|sed|cp|mv|tar|zip|base64|openssl|grep|rg|fgrep|egrep|nl|tac|view|vim|vi|nano|emacs|code|subl)';
-  const SECRETPATH = '(credentials|\\.pem(\\s|$)|\\.key(\\s|$)|id_rsa|id_ed25519|id_ecdsa|id_ed25519_sk|id_ecdsa_sk|id_dsa|identity|ssh_host_.*_key|\\.ssh/|\\.aws/credentials|authorized_keys)';
-
   for (const seg of segments) {
     if (/^(env|printenv|set)(\s|$)/.test(seg)) return true;
     if (/^export\s+[A-Za-z_][A-Za-z0-9_]*=[^$]/.test(seg)) return true;
     if (/\baws\s+(configure\s+list|sts\s+get-session-token)\b/.test(seg)) return true;
     if (/\bgh\s+auth\s+(token|status)\b/.test(seg)) return true;
     if (/\bkubectl\s+config\s+view\b/.test(seg) && !/--minify/.test(seg)) return true;
-    if (new RegExp(`\\b${READERS}\\b.*${SECRETPATH}`, 'i').test(seg)) return true;
+    if (SECRET_READER_RE.test(seg)) return true;
     if (/\becho\s+\$[A-Za-z_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD)/i.test(seg)) return true;
   }
   return false;

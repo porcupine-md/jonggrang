@@ -270,7 +270,6 @@ const HOOK_DEFINITIONS = {
     opencode_handler: 'agentFirst',
     jonggrang_handler: 'agentFirst',
     codex_handler: 'agentFirst',
-    mytool_handler: 'agentFirst',
     mytool_handler: 'agentFirst',          // ADD — matches function name in hooks/mytool/plugin.js
     match_tools: ['Edit', 'Write'],
     blocking: true,

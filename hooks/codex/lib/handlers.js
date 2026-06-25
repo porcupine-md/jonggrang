@@ -26,6 +26,8 @@ const {
   isSensitiveFile, isSecretCommand, sanitizeSecrets, detectDomain,
 } = require('./policies');
 
+const PERSISTENCE_MARKER_RE = /(jonggrang-output|\.jonggrang\/\.output|persisting-agent-outputs)/i;
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /** Extract file paths from an apply_patch command (*** Add/Update/Delete File: <path>). */
@@ -169,7 +171,7 @@ async function sanitizeOutput(input, _ctx) {
   if (sanitized !== output) {
     return {
       decision: 'allow',
-      context: '⚠ SECRET LEAK DETECTED in tool output. DO NOT repeat the raw secret values, do NOT write them to files, and do NOT commit them. Treat them as untrusted and surface the leak to the user.\n\n---\nREDACTED OUTPUT:\n' + sanitized + '\n---',
+      context: `⚠ SECRET LEAK DETECTED in tool output. DO NOT repeat the raw secret values, do NOT write them to files, and do NOT commit them. Treat them as untrusted and surface the leak to the user.\n\n---\nREDACTED OUTPUT:\n${sanitized}\n---`,
     };
   }
   return { decision: 'allow' };
@@ -180,7 +182,7 @@ async function taskSkillEnforcement(input, _ctx) {
   const output = input.tool_response || input.last_assistant_message || '';
   if (!output) return { decision: 'allow' };
 
-  if (!/(jonggrang-output|\.jonggrang\/\.output|persisting-agent-outputs)/i.test(output)) {
+  if (!PERSISTENCE_MARKER_RE.test(output)) {
     return {
       decision: 'allow',
       context: '⚠ [jonggrang] SKILL COMPLIANCE: agent may not have invoked persisting-agent-outputs. Outputs should be written to .jonggrang/.output/features/{feature_id}/ with jonggrang-output: true.',
@@ -265,10 +267,9 @@ async function outputEnforcement(_input, ctx) {
     const { execFileSync } = require('child_process');
     const untracked = execFileSync('git', ['-C', ctx.projectRoot, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' });
     const staged = execFileSync('git', ['-C', ctx.projectRoot, 'diff', '--name-only', '--cached'], { encoding: 'utf8' });
-    const allNew = [...untracked.split('\n'), ...staged.split('\n')].filter(f => f.endsWith('.md'));
+    const allNew = [...untracked.split('\n'), ...staged.split('\n')].filter(f => f && f.endsWith('.md'));
 
     for (const f of allNew) {
-      if (!f) continue;
       if (!allowedPatterns.some(p => p.test(f))) {
         violations.push(`Unapproved .md file: ${f} (should be in .jonggrang/.output/)`);
       }
@@ -290,8 +291,11 @@ async function secretFinalCheck(_input, ctx) {
     const diff = execFileSync('git', ['-C', ctx.projectRoot, 'diff', '--name-only'], { encoding: 'utf8' });
     const cached = execFileSync('git', ['-C', ctx.projectRoot, 'diff', '--name-only', '--cached'], { encoding: 'utf8' });
     const others = execFileSync('git', ['-C', ctx.projectRoot, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' });
-    modified = [...diff.split('\n'), ...cached.split('\n'), ...others.split('\n')]
-      .filter(f => f).filter((v, i, a) => a.indexOf(v) === i);
+    modified = Array.from(new Set([
+      ...diff.split('\n'),
+      ...cached.split('\n'),
+      ...others.split('\n'),
+    ].filter(Boolean)));
   } catch { return { decision: 'allow' }; }
 
   if (modified.length === 0) return { decision: 'allow' };
