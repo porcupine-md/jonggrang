@@ -72,6 +72,12 @@ test('isSecretCommand: allows benign commands', () => {
   assert.equal(policies.isSecretCommand('npm test'), false);
   assert.equal(policies.isSecretCommand('git status'), false);
   assert.equal(policies.isSecretCommand('echo hello'), false);
+  // shell option-setting is safe (regression: bare `set` was over-blocked)
+  assert.equal(policies.isSecretCommand('set -e'), false);
+  assert.equal(policies.isSecretCommand('set -euo pipefail'), false);
+  assert.equal(policies.isSecretCommand('set -o nounset'), false);
+  // bare `set` still dumps shell vars (POSIX) — stays blocked
+  assert.equal(policies.isSecretCommand('set'), true);
 });
 
 test('sanitizeSecrets: redacts AWS keys, JWTs, private keys, DB URIs', () => {

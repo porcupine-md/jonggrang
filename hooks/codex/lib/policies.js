@@ -4,7 +4,10 @@
 // Ported from hooks/claude/*.sh + hooks/opencode/plugin.js so codex
 // gets the same protection as the other backends.
 //
-// Pure functions only — no I/O, no side effects. Safe to unit-test.
+// Mostly pure functions — no I/O, no side effects — safe to unit-test.
+// Exception: isSensitiveFile() resolves symlinks via fs.realpathSync and
+// checks .gitignore via `git check-ignore` (intentional — prevents symlink
+// bypass and respects gitignore). Mock the filesystem where needed.
 //
 
 const fs = require('fs');
@@ -87,7 +90,11 @@ function isSecretCommand(command) {
     .filter(Boolean);
 
   for (const seg of segments) {
-    if (/^(env|printenv|set)(\s|$)/.test(seg)) return true;
+    // `env`/`printenv` dump environment variables in any form — block.
+    // Bare `set` also dumps shell vars (POSIX), but `set -e`/`set -u`/
+    // `set -o pipefail` are safe option-setting — allow flagged forms.
+    if (/^(env|printenv)(\s|$)/.test(seg)) return true;
+    if (/^set$/.test(seg)) return true;
     if (/^export\s+[A-Za-z_][A-Za-z0-9_]*=[^$]/.test(seg)) return true;
     if (/\baws\s+(configure\s+list|sts\s+get-session-token)\b/.test(seg)) return true;
     if (/\bgh\s+auth\s+(token|status)\b/.test(seg)) return true;
