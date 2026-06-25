@@ -8,7 +8,10 @@
 //   async (input, ctx) => {
 //     decision: 'allow' | 'deny' | 'continue',
 //     reason?:   string,   // model-visible block reason
-//     context?:  string,   // additionalContext (PostToolUse warn / SessionStart)
+//     context?:  string,   // non-blocking warning. Emitted as additionalContext
+//                          //   for PostToolUse/SessionStart/SubagentStart, or
+//                          //   systemMessage for Stop/SubagentStop (codex docs
+//                          //   do not support additionalContext on Stop-family).
 //     stderr?:   string,   // diagnostic to stderr (not model-visible)
 //   }
 //

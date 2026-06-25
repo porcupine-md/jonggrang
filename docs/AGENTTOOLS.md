@@ -442,7 +442,12 @@ For a new tool, create `hooks/mytool/` with the appropriate hook format. The sou
 Codex is the only backend that uses the target tool's **native hooks API** rather than a jonggrang-side plugin or extension. The moving parts:
 
 - **`hooks/codex/hooks.json`** — codex discovers this from `<repo>/.codex/hooks.json` (copied from the template by `installCodexHooks`). Maps codex lifecycle events (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, `SubagentStart`, `SessionStart`) to dispatcher invocations.
-- **`hooks/codex/dispatcher.js`** — entry point invoked as `node .../dispatcher.js <hookName>`. Reads one JSON payload on stdin, routes to the matching handler in `lib/handlers.js`, and emits codex's per-event output contract (`permissionDecision: "deny"` for PreToolUse blocks, `decision: "block"` for Stop/SubagentStop continue, `hookSpecificOutput.additionalContext` for non-blocking warnings).
+- **`hooks/codex/dispatcher.js`** — entry point invoked as `node .../dispatcher.js <hookName>`. Reads one JSON payload on stdin, routes to the matching handler in `lib/handlers.js`, and emits codex's per-event output contract:
+  - `permissionDecision: "deny"` (+ exit 2) for PreToolUse blocks
+  - `decision: "block"` + reason (+ exit 2) for Stop/SubagentStop continue gates
+  - `hookSpecificOutput.additionalContext` for non-blocking warnings on PostToolUse/SessionStart/SubagentStart
+  - top-level `systemMessage` for non-blocking warnings on Stop/SubagentStop (codex docs do not support `additionalContext` on Stop-family events)
+- **Fail-closed policy** — PreToolUse deny hooks (`blockSecretCommands`, `blockSensitiveFiles`, `agentFirst`) fail **closed** on internal error: a crashed blocker emits a deny + exit 2 rather than silently permitting the risky tool call. Codex hooks are the SOLE enforcement boundary in autonomous mode (`--dangerously-bypass-approvals-and-sandbox`), so fail-open here = zero safety net. All other hooks fail open (a non-blocking warning crash must not lock the agent).
 - **`hooks/codex/lib/policies.js`** — pure functions (`isSensitiveFile`, `isSecretCommand`, `sanitizeSecrets`, `detectDomain`) shared with the handler layer. Ported from `hooks/claude/*.sh` + `hooks/opencode/plugin.js` so codex gets identical protection.
 - **`hooks/codex/lib/handlers.js`** — one async handler per jonggrang enforcement hook. Each mirrors the logic in `hooks/claude/<name>.sh` but in JS, calling `lib/feedback.js` / `lib/compaction.js` for stateful gates.
 

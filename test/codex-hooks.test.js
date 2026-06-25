@@ -352,9 +352,78 @@ test('dispatcher: unknown hook name fails open with stderr message', () => {
   assert.match(caught.stderr?.toString() || '', /unknown hook/);
 });
 
-test('dispatcher: handler throw fails open (exit 0, no block)', () => {
-  // Pass malformed input that will make a handler throw internally — dispatcher
-  // must catch and exit 0 so the agent is never blocked by a handler bug.
+// ── F1: taskSkillEnforcement → SubagentStop + systemMessage (parity fix) ──
+
+test('dispatcher: taskSkillEnforcement emits systemMessage (not additionalContext) on SubagentStop', () => {
+  // taskSkillEnforcement is a non-blocking Layer 1 warning (parity with
+  // claude task-skill-enforcement.sh). Codex SubagentStop does NOT support
+  // hookSpecificOutput.additionalContext, so the warning must surface as a
+  // top-level systemMessage — never as decision:block (that would silently
+  // upgrade it to a blocking gate, changing semantics vs claude).
+  const { stdout, exitCode } = runDispatcher('taskSkillEnforcement', {
+    last_assistant_message: 'I finished the task. Results written to /tmp/work.md.',
+    cwd: REPO_ROOT,
+  });
+  assert.equal(exitCode, 0, 'non-blocking warning must exit 0');
+  const parsed = JSON.parse(stdout.trim());
+  assert.equal(parsed.decision, undefined, 'must NOT emit decision:block');
+  assert.equal(parsed.hookSpecificOutput, undefined, 'must NOT emit hookSpecificOutput for SubagentStop');
+  assert.ok(parsed.systemMessage, 'expected systemMessage field');
+  assert.match(parsed.systemMessage, /SKILL COMPLIANCE/);
+});
+
+test('dispatcher: taskSkillEnforcement silent when skill was invoked', () => {
+  const { stdout, exitCode } = runDispatcher('taskSkillEnforcement', {
+    last_assistant_message: 'Wrote output with jonggrang-output: true to .jonggrang/.output/',
+    cwd: REPO_ROOT,
+  });
+  assert.equal(exitCode, 0);
+  assert.equal(stdout.trim(), '');
+});
+
+// ── F2: fail-closed for PreToolUse deny hooks ───────────────────────────
+
+test('dispatcher: blockSecretCommands handler throw fails CLOSED (deny + exit 2)', () => {
+  // A crashed deny hook must NOT silently permit the blocked action — codex
+  // hooks are the sole enforcement boundary in autonomous mode.
+  // blockSecretCommands has a real throw path: a non-string command reaches
+  // String.replace without a type guard in policies.isSecretCommand.
+  const { stdout, exitCode } = runDispatcherExpectBlock('blockSecretCommands', {
+    tool_name: 'Bash',
+    tool_input: { command: 12345 },
+    cwd: REPO_ROOT,
+  });
+  assert.equal(exitCode, 2);
+  const parsed = JSON.parse(stdout.trim());
+  assert.equal(parsed.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(parsed.hookSpecificOutput.permissionDecisionReason, /fail-closed/);
+});
+
+test('dispatcher: blockSensitiveFiles + agentFirst are fail-closed (shared handleHookError path)', () => {
+  // blockSensitiveFiles and agentFirst are too defensive to throw on bad
+  // input (type guards in extractFilePaths/extractPathsFromPatch), so we
+  // can't trigger a real throw via stdin. Instead, statically assert they
+  // are in the FAIL_CLOSED_HOOKS set — the shared handleHookError() logic
+  // (validated end-to-end via blockSecretCommands above) covers them.
+  const src = fs.readFileSync(dispatcher, 'utf8');
+  assert.match(src, /FAIL_CLOSED_HOOKS[\s\S]*blockSecretCommands/);
+  assert.match(src, /FAIL_CLOSED_HOOKS[\s\S]*blockSensitiveFiles/);
+  assert.match(src, /FAIL_CLOSED_HOOKS[\s\S]*agentFirst/);
+});
+
+test('dispatcher: sanitizeOutput handler throw fails OPEN (exit 0)', () => {
+  // Non-blocking warning hooks stay fail-open — a crash here must not lock
+  // the agent, only PreToolUse deny hooks fail closed.
+  const { exitCode } = runDispatcher('sanitizeOutput', {
+    tool_response: 'clean output',
+    cwd: REPO_ROOT,
+  });
+  assert.equal(exitCode, 0);
+});
+
+test('dispatcher: non-blocker handler throw fails open (exit 0, no block)', () => {
+  // sessionInit is NOT a fail-closed PreToolUse deny hook — a handler crash
+  // here must fail OPEN so a non-blocking hook bug never locks the agent.
   const { exitCode } = runDispatcher('sessionInit', {
     session_id: null,
     prompt: null,
@@ -374,17 +443,60 @@ test('installCodexHooks: writes .codex/hooks.json with real hooks object', () =>
     assert.match(configPath, /\.codex[\\/]hooks\.json$/);
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.ok(cfg.hooks, 'expected hooks key');
-    assert.ok(cfg.hooks.PreToolUse, 'expected PreToolUse event');
-    assert.ok(cfg.hooks.Stop, 'expected Stop event');
-    assert.ok(cfg.hooks.PostToolUse, 'expected PostToolUse event');
-    assert.ok(cfg.hooks.SessionStart, 'expected SessionStart event');
+    // Strengthened (F3): assert every required event is a NON-EMPTY array
+    // with a real dispatcher command — not just truthy. This catches the
+    // silent {hooks:{}} failure mode that recreates issue #68.
+    for (const ev of ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 'SubagentStart', 'SessionStart']) {
+      assert.ok(Array.isArray(cfg.hooks[ev]) && cfg.hooks[ev].length > 0, `${ev} must be non-empty array`);
+      for (const entry of cfg.hooks[ev]) {
+        assert.ok(Array.isArray(entry.hooks) && entry.hooks.length > 0, `${ev} entry must have hooks`);
+        for (const h of entry.hooks) {
+          assert.match(h.command, /hooks[\\/]codex[\\/]dispatcher\.js/, `${ev} command must point at dispatcher.js`);
+        }
+      }
+    }
     // _comment / _codex_events helper keys must NOT be in the installed config
     assert.equal(cfg._comment, undefined);
     assert.equal(cfg._codex_events, undefined);
-    // dispatcher command must point at hooks/codex/dispatcher.js
-    const cmd = cfg.hooks.PreToolUse[0].hooks[0].command;
-    assert.match(cmd, /hooks[\\/]codex[\\/]dispatcher\.js/);
   } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test('installCodexHooks: throws (not silent) when template is missing', () => {
+  // F3: a missing/invalid template must throw LOUD, not silently write
+  // {hooks:{}} + return installed:true (that recreates #68's zero-enforcement
+  // failure mode).
+  const { installCodexHooks } = require(path.join(REPO_ROOT, 'lib', 'hooks'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-codex-missing-'));
+  try {
+    assert.throws(
+      () => installCodexHooks(tmpDir, '/nonexistent/install/dir/that/has/no/template'),
+      /cannot read codex hooks template/
+    );
+    // .codex/hooks.json must NOT have been written with empty hooks
+    const cfgPath = path.join(tmpDir, '.codex', 'hooks.json');
+    if (fs.existsSync(cfgPath)) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      assert.fail(`should not have written config, got: ${JSON.stringify(cfg)}`);
+    }
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test('installCodexHooks: throws when template has empty hooks object', () => {
+  const { installCodexHooks } = require(path.join(REPO_ROOT, 'lib', 'hooks'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-codex-empty-'));
+  const fakeInstall = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-codex-fakeinstall-'));
+  try {
+    // plant a broken template with an empty hooks object
+    fs.mkdirSync(path.join(fakeInstall, 'hooks', 'codex'), { recursive: true });
+    fs.writeFileSync(path.join(fakeInstall, 'hooks', 'codex', 'hooks.json'), JSON.stringify({ hooks: {} }));
+    assert.throws(
+      () => installCodexHooks(tmpDir, fakeInstall),
+      /missing non-empty hooks for events/
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(fakeInstall, { recursive: true, force: true });
+  }
 });
 
 test('installHooksForTool: installs codex alongside claude/opencode/jonggrang', () => {
