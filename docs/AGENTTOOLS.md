@@ -453,7 +453,7 @@ The moving parts:
 - **Fail-closed policy** — PreToolUse deny hooks (`blockSecretCommands`, `blockSensitiveFiles`, `agentFirst`) fail **closed** on internal error: if Codex dispatches one of these hooks, a crashed blocker emits a deny + exit 2 rather than silently permitting the risky tool call. All other hooks fail open (a non-blocking warning crash must not lock the agent).
 - **`hooks/codex/lib/policies.js`** — pure functions (`isSensitiveFile`, `isSecretCommand`, `sanitizeSecrets`, `detectDomain`) shared with the handler layer. Ported from `hooks/claude/*.sh` + `hooks/opencode/plugin.js` so codex gets identical protection.
 - **`hooks/codex/lib/handlers.js`** — one async handler per jonggrang enforcement hook. Each mirrors the logic in `hooks/claude/<name>.sh` but in JS, calling `lib/feedback.js` / `lib/compaction.js` for stateful gates.
-- **`lib/codex-runtime-guard.js`** — Codex-only runtime wrapper used by `lib/jonggrang.js` when spawning `codex exec --json`. It inspects JSONL events after Codex emits them, redacts secrets before Jonggrang prints/captures assistant text, aborts the child when a secret command or sensitive-file mutation is observed, marks dirty bits for completed patches, and runs feedback/quality gates before returning success.
+- **`lib/codex-runtime-guard.js`** — Codex-only runtime wrapper used by `lib/jonggrang.js` when spawning `codex exec --json`. It inspects JSONL events after Codex emits them, redacts secrets before Jonggrang prints/captures assistant text, aborts the child when a secret command or sensitive-file mutation is observed, marks dirty bits for completed patches, and runs feasible exit gates before returning success.
 
 **Runtime guard capability matrix:**
 
@@ -464,6 +464,10 @@ The moving parts:
 | Abort on sensitive-file patch/access | Late abort; mutation may already have happened, so user must review workspace |
 | Track modifications / dirty bit | Effective for detected apply_patch/file-path events |
 | Feedback loop / quality gate | Effective before Jonggrang returns success |
+| Output location enforcement | Effective before Jonggrang returns success |
+| Final secret scan (`secret-final-check`) | Effective when `trufflehog` is installed; otherwise skips like the native handler |
+| `task-skill-enforcement` | Skipped in runtime guard: Codex JSONL has no reliable `SubagentStop` signal, so warning on every top-level output would be noisy |
+| `agent-first` | Skipped in runtime guard: role-dependent and pre-execution by design; Codex JSONL does not reliably expose session role before edits |
 | True pre-execution deny parity | Not possible from JSONL; requires upstream hook dispatch or a different Codex integration surface |
 
 **Known gaps (documented, not fixable from jonggrang's side):**

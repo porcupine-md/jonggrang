@@ -99,6 +99,22 @@ test('checkExitGates blocks completion when feedback loop dirty bit is active', 
   }
 });
 
+test('checkExitGates runs output enforcement before successful completion', async () => {
+  const tmpDir = tempProject();
+  try {
+    require('child_process').execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpDir, 'notes.md'), 'stray output');
+    require('child_process').execFileSync('git', ['add', 'notes.md'], { cwd: tmpDir, stdio: 'ignore' });
+
+    const result = await guard.checkExitGates(tmpDir, 'full accumulated output');
+    assert.equal(result.action, 'abort');
+    assert.match(result.reason, /OUTPUT LOCATION VIOLATIONS/);
+    assert.match(result.reason, /notes\.md/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('sanitizeText redacts secrets before display/capture', () => {
   const sanitized = guard.sanitizeText('token AKIAIOSFODNN7EXAMPLE done');
   assert.match(sanitized, /AWS_KEY<REDACTED>/);
