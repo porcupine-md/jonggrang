@@ -51,6 +51,7 @@ test('isSecretCommand: blocks env/printenv and chained forms', () => {
   assert.equal(policies.isSecretCommand('echo $(env)'), true);
   assert.equal(policies.isSecretCommand('echo `printenv`'), true);
   assert.equal(policies.isSecretCommand('bash -c "env"'), true);
+  assert.equal(policies.isSecretCommand('/bin/zsh -lc env'), true);
 });
 
 test('isSecretCommand: blocks readers targeting sensitive paths', () => {

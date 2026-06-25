@@ -80,7 +80,10 @@ function isSecretCommand(command) {
     .replace(/[()]/g, ' ');
   const segments = lifted
     .split(/&&|\|\||;|\||\n/)
-    .map(s => s.trim().replace(/^(bash|sh|zsh|dash)\s+-c\s+['"]?/, '').replace(/^["']/, '').replace(/["']$/, ''))
+    .map(s => s.trim()
+      .replace(/^(?:\S*\/)?(?:bash|sh|zsh|dash)\s+-l?c\s+['"]?/, '')
+      .replace(/^["']/, '')
+      .replace(/["']$/, ''))
     .filter(Boolean);
 
   for (const seg of segments) {

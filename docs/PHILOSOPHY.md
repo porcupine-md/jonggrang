@@ -220,7 +220,7 @@ Hooks enforce quality gates outside the LLM's context. The same rules apply rega
 
 Jonggrang hooks live in `hooks/pi/jonggrang-extension.ts` and are loaded automatically via `--extension` on every `jonggrang agent` invocation — no separate installation step required.
 
-> **Codex runtime caveat:** the Codex column describes Jonggrang's installed native hook mapping. Current `codex exec` releases do not dispatch hooks reliably even when `.codex/hooks.json` is valid and `--dangerously-bypass-hook-trust` is passed (tracked upstream in openai/codex#25875 and #26452). Because Jonggrang invokes Codex through `codex exec`, Codex hook enforcement is not effective at runtime until upstream dispatch is fixed or Jonggrang adds runtime-layer interception.
+> **Codex runtime caveat:** the Codex column describes Jonggrang's installed native hook mapping. Current `codex exec` releases do not dispatch hooks reliably even when `.codex/hooks.json` is valid and `--dangerously-bypass-hook-trust` is passed (tracked upstream in openai/codex#25875 and #26452). Jonggrang therefore adds a Codex-only JSONL runtime guard in `lib/jonggrang.js`; it can redact output, abort after risky events are observed, mark dirty bits, and block completion on exit gates. It is not true pre-execution hook parity because JSONL events are emitted after Codex has dispatched the action.
 
 **Feedback Loop (Level 2 enforcement):**
 

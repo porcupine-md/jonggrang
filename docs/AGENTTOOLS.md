@@ -438,9 +438,9 @@ For a new tool, create `hooks/mytool/` with the appropriate hook format. The sou
 
 ### Codex hooks (reference for the CLI-spawn + native-hooks pattern)
 
-> **Runtime status:** installed, contract-tested, but **not dispatched by `codex exec` as of Codex 0.137.x** (upstream openai/codex#25875 / #26452). Treat this layer as ready plumbing, not effective runtime enforcement, until upstream dispatch is fixed or Jonggrang adds runtime-layer interception.
+> **Runtime status:** native Codex hooks are installed and contract-tested, but **not dispatched by `codex exec` as of Codex 0.137.x** (upstream openai/codex#25875 / #26452). Jonggrang therefore adds a Codex-only JSONL runtime guard in `lib/jonggrang.js` + `lib/codex-runtime-guard.js`. That guard is damage control (redact, abort, mark dirty, block completion), not true pre-execution hook parity.
 
-Codex is the only backend that uses the target tool's **native hooks API** rather than a jonggrang-side plugin or extension.
+Codex is the only backend that uses the target tool's **native hooks API** rather than a jonggrang-side plugin or extension. Because `codex exec` does not currently dispatch those native hooks, Jonggrang also wraps the `codex exec --json` stream at runtime.
 
 The moving parts:
 
@@ -453,17 +453,29 @@ The moving parts:
 - **Fail-closed policy** — PreToolUse deny hooks (`blockSecretCommands`, `blockSensitiveFiles`, `agentFirst`) fail **closed** on internal error: if Codex dispatches one of these hooks, a crashed blocker emits a deny + exit 2 rather than silently permitting the risky tool call. All other hooks fail open (a non-blocking warning crash must not lock the agent).
 - **`hooks/codex/lib/policies.js`** — pure functions (`isSensitiveFile`, `isSecretCommand`, `sanitizeSecrets`, `detectDomain`) shared with the handler layer. Ported from `hooks/claude/*.sh` + `hooks/opencode/plugin.js` so codex gets identical protection.
 - **`hooks/codex/lib/handlers.js`** — one async handler per jonggrang enforcement hook. Each mirrors the logic in `hooks/claude/<name>.sh` but in JS, calling `lib/feedback.js` / `lib/compaction.js` for stateful gates.
+- **`lib/codex-runtime-guard.js`** — Codex-only runtime wrapper used by `lib/jonggrang.js` when spawning `codex exec --json`. It inspects JSONL events after Codex emits them, redacts secrets before Jonggrang prints/captures assistant text, aborts the child when a secret command or sensitive-file mutation is observed, marks dirty bits for completed patches, and runs feedback/quality gates before returning success.
+
+**Runtime guard capability matrix:**
+
+| Capability | Runtime guard status |
+|---|---|
+| Redact leaked secrets from Jonggrang stdout/captured text | Effective before Jonggrang prints/captures text |
+| Abort on secret command (`env`, `/bin/zsh -lc env`, credential readers) | Late abort; command may already have started, but output/session is cut |
+| Abort on sensitive-file patch/access | Late abort; mutation may already have happened, so user must review workspace |
+| Track modifications / dirty bit | Effective for detected apply_patch/file-path events |
+| Feedback loop / quality gate | Effective before Jonggrang returns success |
+| True pre-execution deny parity | Not possible from JSONL; requires upstream hook dispatch or a different Codex integration surface |
 
 **Known gaps (documented, not fixable from jonggrang's side):**
 
-- **`codex exec` runtime dispatch:** current Codex CLI versions have an upstream bug where `codex exec` does not dispatch hooks even with a valid `{ "hooks": ... }` shape, project/global hook config, `[features].hooks = true`, and `--dangerously-bypass-hook-trust`. See openai/codex#25875 and #26452. Because Jonggrang runs Codex through `codex exec`, native Codex hooks are currently installed but **not effective runtime enforcement**. Effective enforcement requires an upstream fix or Jonggrang runtime-layer interception in `lib/jonggrang.js`.
+- **`codex exec` runtime dispatch:** current Codex CLI versions have an upstream bug where `codex exec` does not dispatch hooks even with a valid `{ "hooks": ... }` shape, project/global hook config, `[features].hooks = true`, and `--dangerously-bypass-hook-trust`. See openai/codex#25875 and #26452. Because Jonggrang runs Codex through `codex exec`, native Codex hooks remain installed but not active. The JSONL runtime guard mitigates this gap, but it is observational/post-hoc rather than true pre-execution enforcement.
 - `PreToolUse` does not intercept every shell path even when hooks dispatch — codex's docs are explicit that only "simple" Bash calls are intercepted (not `unified_exec`, `WebSearch`, or other non-MCP tools). So `block-secret-commands` has a smaller coverage surface than the claude/opencode equivalents.
-- `compaction-gate` has no clean native codex event. Codex's `PreCompact` fires *when compaction triggers*, not *before a subagent spawns* — different semantics. The handler is implemented for parity/testing but is **not** wired into `hooks.json`. Enforcing a context-budget gate on codex subagent spawning would require runtime-layer interception in `lib/jonggrang.js`.
+- `compaction-gate` has no clean native codex event. Codex's `PreCompact` fires *when compaction triggers*, not *before a subagent spawns* — different semantics. The handler is implemented for parity/testing but is **not** wired into `hooks.json`. JSONL runtime wrapping still cannot enforce this before Codex spawns/compacts.
 - **Trust flow:** project-local hooks (`.codex/hooks.json`) require review via `/hooks` before they run, unless `--dangerously-bypass-hook-trust` is passed. This is downstream of the `codex exec` dispatch bug above: bypassing hook trust does not help if exec mode never dispatches hooks.
 
 ### Smoke testing Codex hooks
 
-Use two tiers:
+Use three tiers:
 
 1. **Dispatcher contract (deterministic, CI-safe):**
    ```bash
@@ -471,12 +483,19 @@ Use two tiers:
    ```
    This invokes `node hooks/codex/dispatcher.js <hookName>` with Codex-shaped stdin JSON. It proves Jonggrang's dispatcher emits the correct deny/systemMessage/fail-closed output if Codex calls it.
 
-2. **Real `codex exec` runtime diagnostic (manual only):**
+2. **Runtime wrapper contract (deterministic, no real Codex/API):**
+   ```bash
+   npm run smoke:codex-runtime
+   # or: scripts/smoke-codex-runtime-wrapper.sh
+   ```
+   This installs a temporary fake `codex` executable at the front of `PATH` and verifies `lib/jonggrang.js` abort/redaction behavior against fake JSONL. It is intentionally separate from `npm test` so anything that spawns a `codex`-named process is explicit, even though this one is fake and offline.
+
+3. **Real `codex exec` runtime diagnostic (manual only):**
    ```bash
    scripts/smoke-e2e-codex-hooks.sh
    scripts/smoke-e2e-codex-hooks.sh --allow-known-gap
    ```
-   This creates a temporary project with a harmless `SessionStart` sentinel hook and runs `codex exec` with the same hook-trust bypass flag a smoke test should use. Today it is expected to report the upstream known gap: hooks are not dispatched under `codex exec`. Do **not** add this script to `npm test`; it requires Codex authentication and costs API tokens.
+   This creates a temporary project with a harmless `SessionStart` sentinel hook and runs real `codex exec` with the same hook-trust bypass flag a smoke test should use. Today it is expected to report the upstream known gap: hooks are not dispatched under `codex exec`. Do **not** add this script to `npm test` or `npm run check`; it requires Codex authentication and costs API tokens.
 
 ---
 
