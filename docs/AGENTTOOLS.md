@@ -260,7 +260,7 @@ const EVENT_MAP = {
 
 **Hook definitions — add `mytool_handler` key to each entry:**
 
-Every hook definition in `HOOK_DEFINITIONS` has a handler key per backend (`claude_handler`, `opencode_handler`, `jonggrang_handler`). When your tool uses hooks, add `mytool_handler` to **every** hook entry so jonggrang knows which handler to call:
+Every hook definition in `HOOK_DEFINITIONS` has a handler key per backend (`claude_handler`, `opencode_handler`, `jonggrang_handler`, `codex_handler`). When your tool uses hooks, add `mytool_handler` to **every** hook entry so jonggrang knows which handler to call:
 
 ```js
 const HOOK_DEFINITIONS = {
@@ -269,6 +269,8 @@ const HOOK_DEFINITIONS = {
     claude_script: 'hooks/claude/agent-first.sh',
     opencode_handler: 'agentFirst',
     jonggrang_handler: 'agentFirst',
+    codex_handler: 'agentFirst',
+    mytool_handler: 'agentFirst',
     mytool_handler: 'agentFirst',          // ADD — matches function name in hooks/mytool/plugin.js
     match_tools: ['Edit', 'Write'],
     blocking: true,
@@ -423,11 +425,32 @@ hooks/
 │   └── ...
 ├── opencode/
 │   └── plugin.js             ← OpenCode plugin (loaded via .opencode/plugins/)
+├── codex/
+│   ├── hooks.json            ← Codex hooks config (loaded via .codex/)
+│   ├── dispatcher.js         ← stdin→handler→codex JSON output router
+│   └── lib/
+│       ├── policies.js       ← shared secret/sensitive-file/domain logic
+│       └── handlers.js       ← per-hook handlers (mirror of claude .sh)
 └── pi/
     └── jonggrang-extension.ts ← TypeScript Pi SDK extension (loaded via --extension)
 ```
 
 For a new tool, create `hooks/mytool/` with the appropriate hook format. The source directory is copied into the project at `jonggrang init` time by `installHooksForTool()` in `lib/hooks.js`.
+
+### Codex hooks (reference for the CLI-spawn + native-hooks pattern)
+
+Codex is the only backend that uses the target tool's **native hooks API** rather than a jonggrang-side plugin or extension. The moving parts:
+
+- **`hooks/codex/hooks.json`** — codex discovers this from `<repo>/.codex/hooks.json` (copied from the template by `installCodexHooks`). Maps codex lifecycle events (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, `SubagentStart`, `SessionStart`) to dispatcher invocations.
+- **`hooks/codex/dispatcher.js`** — entry point invoked as `node .../dispatcher.js <hookName>`. Reads one JSON payload on stdin, routes to the matching handler in `lib/handlers.js`, and emits codex's per-event output contract (`permissionDecision: "deny"` for PreToolUse blocks, `decision: "block"` for Stop/SubagentStop continue, `hookSpecificOutput.additionalContext` for non-blocking warnings).
+- **`hooks/codex/lib/policies.js`** — pure functions (`isSensitiveFile`, `isSecretCommand`, `sanitizeSecrets`, `detectDomain`) shared with the handler layer. Ported from `hooks/claude/*.sh` + `hooks/opencode/plugin.js` so codex gets identical protection.
+- **`hooks/codex/lib/handlers.js`** — one async handler per jonggrang enforcement hook. Each mirrors the logic in `hooks/claude/<name>.sh` but in JS, calling `lib/feedback.js` / `lib/compaction.js` for stateful gates.
+
+**Known gaps (documented, not fixable from jonggrang's side):**
+
+- `PreToolUse` does not intercept every shell path — codex's docs are explicit that only "simple" Bash calls are intercepted (not `unified_exec`, `WebSearch`, or other non-MCP tools). So `block-secret-commands` has a smaller coverage surface than the claude/opencode equivalents.
+- `compaction-gate` has no clean native codex event. Codex's `PreCompact` fires *when compaction triggers*, not *before a subagent spawns* — different semantics. The handler is implemented for parity/testing but is **not** wired into `hooks.json`. Enforcing a context-budget gate on codex subagent spawning would require a runtime-layer interception in `lib/jonggrang.js` (future work).
+- **Trust flow:** project-local hooks (`.codex/hooks.json`) require review via `/hooks` before they run, unless `--dangerously-bypass-hook-trust` is passed. Verify this does not conflict with the `--dangerously-bypass-approvals-and-sandbox` flag that jonggrang's autonomous mode already passes to `codex exec`.
 
 ---
 

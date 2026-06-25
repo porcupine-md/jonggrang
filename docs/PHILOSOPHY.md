@@ -127,7 +127,8 @@ Jonggrang is built on a **Thin Agent / Fat Platform** model. The AI models are s
 ├─────────────────────────────────────────────┤
 │  HOOK LAYER        Deterministic enforcement │
 │  Claude Code hooks · OpenCode plugin        │
-│  Jonggrang extension (.jonggrang/extensions)│
+│  Codex hooks · Jonggrang extension           │
+│  (.claude / .opencode / .codex / .jonggrang)│
 ├─────────────────────────────────────────────┤
 │  INFRASTRUCTURE    Compaction · Feedback     │
 │  Token gates · Dirty bits · Lock files      │
