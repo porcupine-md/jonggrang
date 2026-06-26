@@ -108,22 +108,23 @@ module.exports = function register(app, io, ctx) {
 
     // ── Watchers ─────────────────────────────────────────────────
 
+    const watchers = [];
     readTasks(); readProgress(); readConfigFile();
-    // Watch the features directory for per-feature task/progress changes
+    // Watch the features directory for per-feature task/progress changes.
+    // Create it first so fresh repos still receive updates after the first plan approval.
     const featuresDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features');
-    if (fs.existsSync(featuresDir)) {
-        chokidar.watch(featuresDir, { ignoreInitial: true }).on('all', () => { readTasks(); readProgress(); });
-    }
-    chokidar.watch(paths.configFile, { ignoreInitial: true }).on('all', () => readConfigFile());
+    fs.mkdirSync(featuresDir, { recursive: true });
+    watchers.push(chokidar.watch(featuresDir, { ignoreInitial: true })
+        .on('all', () => { readTasks(); readProgress(); }));
+    watchers.push(chokidar.watch(paths.configFile, { ignoreInitial: true }).on('all', () => readConfigFile()));
     const draftsDir = path.join(PROJECT_ROOT, '.jonggrang', '.drafts');
-    if (fs.existsSync(draftsDir)) {
-        chokidar.watch(draftsDir, { ignoreInitial: false }).on('all', emitPlanUpdate);
-    }
+    fs.mkdirSync(draftsDir, { recursive: true });
+    watchers.push(chokidar.watch(draftsDir, { ignoreInitial: false }).on('all', emitPlanUpdate));
     const jonggrangDir = path.join(PROJECT_ROOT, '.jonggrang');
     fs.mkdirSync(jonggrangDir, { recursive: true });
-    chokidar.watch(jonggrangDir, { ignoreInitial: true, depth: 4 })
+    watchers.push(chokidar.watch(jonggrangDir, { ignoreInitial: true, depth: 4 })
         .on('add', emitManifestsUpdate)
-        .on('change', emitManifestsUpdate);
+        .on('change', emitManifestsUpdate));
 
     // ── Legacy socket connection ──────────────────────────────────
 
@@ -173,5 +174,6 @@ module.exports = function register(app, io, ctx) {
     return function cleanup() {
         killSafely(state.jonggrangProcess);
         for (const [, group] of groupProcesses) killSafely(group.process);
+        for (const watcher of watchers) watcher.close().catch(() => {});
     };
 };

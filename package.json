@@ -41,7 +41,7 @@
     "check": "bash scripts/check.sh",
     "check:quick": "bash scripts/check.sh --quick",
     "check:syntax": "bash scripts/check.sh --syntax-only",
-    "test": "node test/backend-args.test.js && node test/orchestration-output-files.test.js && node test/base-branch.test.js"
+    "test": "node test/backend-args.test.js && node test/orchestration-output-files.test.js && node test/base-branch.test.js && node test/legacy-watchers.test.js"
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0",
