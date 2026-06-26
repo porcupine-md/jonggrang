@@ -1050,8 +1050,11 @@ async function cmdPlan(args, opts = {}) {
     logInfo(`Session:     ${sid}`);
     logInfo(`Instruction: ${description}`);
     const currentPlan = fs.readFileSync(draftFile, 'utf8');
-    const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description);
+    const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description, draftFile);
     await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
+    const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+    if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+    if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
     logSuccess(`Plan revised (${sid}). Run "jonggrang approve" to decompose into tasks.`);
     return sid;
   }
@@ -1152,6 +1155,9 @@ async function cmdPlan(args, opts = {}) {
       logInfo('Falling back to standard plan generation...');
       const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile);
       await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+      if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+      if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
     } else {
       // Phase 2: Analysis
       logInfo(`${BOLD}[2/3]${NC} Complexity analysis & brainstorm...`);
@@ -1164,6 +1170,9 @@ async function cmdPlan(args, opts = {}) {
         logInfo('Falling back to standard plan generation using discovery only...');
         const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile);
         await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+        const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+        if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+        if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
       } else {
         // Phase 3: Condense
         logInfo(`${BOLD}[3/3]${NC} Condensing into enriched plan.md...`);
@@ -1172,6 +1181,9 @@ async function cmdPlan(args, opts = {}) {
           description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile
         );
         await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+        const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+        if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+        if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
 
         // Clean up intermediate files (plan.md stays in the draft folder)
         try {
@@ -1195,6 +1207,9 @@ async function cmdPlan(args, opts = {}) {
 
     const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile);
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+    const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+    if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+    if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
   }
 
   // The base branch (worktree start-point) is a deterministic user choice, so
@@ -1279,8 +1294,11 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts, sessionId) {
       }
       logInfo('Revising plan with AI...');
       const currentPlan = fs.readFileSync(draftFile, 'utf8');
-      const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, feedback.trim());
+      const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, feedback.trim(), draftFile);
       await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+      if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+      if (_v === 'missing') logWarn('Agent did not write the plan — showing previous version.');
       // loop back → display updated plan + options again
 
     } else if (choice === 'edit') {
