@@ -238,8 +238,9 @@ printf 'feature_id: feat-old\ndescription: old\nstatus: running\nwork_type: SMAL
 echo '{"tasks":[{"id":"task-001","title":"old","status":"pending","feature_id":"feat-old"}]}' > .jonggrang/.output/features/feat-old/jonggrang-tasks.json
 
 # Guard: description + --feature must exit non-zero with the guard message.
-eval "$JG work 'new desc' --feature feat-old --yes --tool jonggrang" 2>&1 | grep -qi "cannot be combined"; RC=$?
-assert "work '<desc>' + --feature rejected"        '[ '"$RC"' -eq 0 ]'
+GUARD_LOG="$ROOT_FIX/work-feature-guard.log"
+eval "$JG work 'new desc' --feature feat-old --yes --tool jonggrang" >"$GUARD_LOG" 2>&1; GUARD_RC=$?
+assert "work '<desc>' + --feature rejected"        '[ "$GUARD_RC" -ne 0 ] && grep -qi "cannot be combined" "$GUARD_LOG"'
 
 # Regression: --feature alone (no description) must still target the feature.
 eval "$JG work --feature feat-old --tool jonggrang" 2>&1 | grep -qi "Targeting feature"; RC=$?
