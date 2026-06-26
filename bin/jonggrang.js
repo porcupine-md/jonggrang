@@ -505,6 +505,16 @@ async function cmdWork(descriptionParts = []) {
   const deepMode    = descriptionParts.includes('--deep');
   const description = descriptionParts.filter(a => !a.startsWith('-')).join(' ').trim();
 
+  // --feature targets an existing approved feature; a positional description triggers
+  // one-shot plan+approve of a NEW feature. Combining them would plan+approve one
+  // feature then execute another — reject as ambiguous.
+  if (WORK_FEATURE_ID && description) {
+    logError('--feature targets an existing approved feature and cannot be combined with a one-shot work description.');
+    logInfo('Use `jonggrang work --feature <id>` to resume an existing feature,');
+    logInfo('or `jonggrang work "<description>"` to plan+execute a new feature.');
+    process.exit(1);
+  }
+
   if (description) {
     logInfo(`One-shot mode: plan + execute "${description}"`);
     const planArgs = [description];

@@ -227,6 +227,24 @@ assert "default resolveActiveDraft picks newer"  '[ "$(node -e "const l=require(
 assert "--session OLD target exists on disk"     'node -e "const l=require(\"$REPO/lib/jonggrang.js\");process.exit(l.fileExists(l.draftFileFor(process.cwd(),\"'"$SID_OLD"'\"))?0:1)"'
 assert "--session NEW target exists on disk"     'node -e "const l=require(\"$REPO/lib/jonggrang.js\");process.exit(l.fileExists(l.draftFileFor(process.cwd(),\"'"$SID_NEW"'\"))?0:1)"'
 
+# ─── Scenario 7: work --feature guards (PR #66 follow-up) ───────
+# `work --feature <id>` targets an existing approved feature. Combining it with
+# a positional description would plan+approve a NEW feature then execute another
+# — must be rejected. Regression: `--feature` alone must still target.
+section "S7: work --feature guard + targeting"
+ROOT_FIX=$(newrepo); cd "$ROOT_FIX"
+mkdir -p .jonggrang/.output/features/feat-old
+printf 'feature_id: feat-old\ndescription: old\nstatus: running\nwork_type: SMALL\ncurrent_phase: 8\ncreated_at: 2026-06-26T10:00:00Z\nupdated_at: 2026-06-26T10:00:00Z\nactive_phases: [8]\nphases:\n  8: {status: pending}\n' > .jonggrang/.output/features/feat-old/MANIFEST.yaml
+echo '{"tasks":[{"id":"task-001","title":"old","status":"pending","feature_id":"feat-old"}]}' > .jonggrang/.output/features/feat-old/jonggrang-tasks.json
+
+# Guard: description + --feature must exit non-zero with the guard message.
+eval "$JG work 'new desc' --feature feat-old --yes --tool jonggrang" 2>&1 | grep -qi "cannot be combined"; RC=$?
+assert "work '<desc>' + --feature rejected"        '[ '"$RC"' -eq 0 ]'
+
+# Regression: --feature alone (no description) must still target the feature.
+eval "$JG work --feature feat-old --tool jonggrang" 2>&1 | grep -qi "Targeting feature"; RC=$?
+assert "work --feature <id> (no desc) still targets" '[ '"$RC"' -eq 0 ]'
+
 # ─────────────────────────────────────────────────────────────
 echo ""
 echo "${B}──────────────────────────────────${N}"
