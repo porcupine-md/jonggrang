@@ -68,6 +68,9 @@ let WEB_HOST = process.env.JONGGRANG_WEB_HOST || '127.0.0.1';
 let WORKTREE_MODE = false;
 let GROUP_TASK_IDS = [];
 let ORCHESTRATE_RESUME = false;
+// Explicit feature target for `jonggrang work --feature <id>`. When set,
+// cmdWork targets this feature instead of the most-recent-incomplete heuristic.
+let WORK_FEATURE_ID = null;
 let ORCHESTRATE_ROLE = '';
 let SKIP_GATES = false;
 let MODEL = process.env.JONGGRANG_MODEL || '';
@@ -576,28 +579,51 @@ async function cmdWork(descriptionParts = []) {
       }
     }
   } else if (!WORKTREE_MODE) {
-    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
-    if (existing) {
-      workFeatureId  = existing.featureId;
-      workManifest   = existing.manifest;
-      workManifestPath = existing.manifestPath;
+    if (WORK_FEATURE_ID) {
+      // Explicit feature target via `work --feature <id>`. Validate it exists and
+      // has a MANIFEST + tasks. Never auto-create — an explicit id must reference
+      // an already-approved feature (unlike the no-arg heuristic which may create).
+      const mPath = orchestration.getManifestPath(PROJECT_ROOT, WORK_FEATURE_ID);
+      const m = orchestration.readManifest(mPath);
+      if (!m) {
+        logError(`Feature "${WORK_FEATURE_ID}" not found. Has it been approved?`);
+        logInfo('Run "jonggrang plan <description>" then "jonggrang approve --session <id>" first.');
+        process.exit(1);
+      }
+      const tasksFile = lib.tasksFileFor(PROJECT_ROOT, WORK_FEATURE_ID);
+      if (!lib.fileExists(tasksFile) || lib.countTotal(tasksFile) === 0) {
+        logError(`Feature "${WORK_FEATURE_ID}" has no tasks to execute.`);
+        logInfo('Run "jonggrang approve --session <id>" to decompose its plan into tasks first.');
+        process.exit(1);
+      }
+      workFeatureId = WORK_FEATURE_ID;
+      workManifest = m;
+      workManifestPath = mPath;
+      logInfo(`Targeting feature: ${WORK_FEATURE_ID} (--feature)`);
     } else {
-      workFeatureId = orchestration.generateFeatureId(description || 'work-session');
-      const created = orchestration.createManifest(
-        PROJECT_ROOT, workFeatureId, description || 'work session', workType
-      );
-      workManifest     = created.manifest;
-      workManifestPath = created.manifestPath;
-      // Planning phases 1-4 already done (cmdPlan ran above)
-      [1, 2, 3, 4].forEach(n => {
-        if (workManifest.active_phases.includes(n))
-          orchestration.completePhase(workManifestPath, n, { source: 'plan' });
-      });
-      // Mark complexity + brainstorm + architect as done (embedded in planning)
-      [5, 6, 7].forEach(n => {
-        if (workManifest.active_phases.includes(n))
-          orchestration.completePhase(workManifestPath, n, { source: 'plan' });
-      });
+      const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+      if (existing) {
+        workFeatureId  = existing.featureId;
+        workManifest   = existing.manifest;
+        workManifestPath = existing.manifestPath;
+      } else {
+        workFeatureId = orchestration.generateFeatureId(description || 'work-session');
+        const created = orchestration.createManifest(
+          PROJECT_ROOT, workFeatureId, description || 'work session', workType
+        );
+        workManifest     = created.manifest;
+        workManifestPath = created.manifestPath;
+        // Planning phases 1-4 already done (cmdPlan ran above)
+        [1, 2, 3, 4].forEach(n => {
+          if (workManifest.active_phases.includes(n))
+            orchestration.completePhase(workManifestPath, n, { source: 'plan' });
+        });
+        // Mark complexity + brainstorm + architect as done (embedded in planning)
+        [5, 6, 7].forEach(n => {
+          if (workManifest.active_phases.includes(n))
+            orchestration.completePhase(workManifestPath, n, { source: 'plan' });
+        });
+      }
     }
     // Resolve the per-feature tasks file for this work session.
     WORK_TASKS_FILE = lib.tasksFileFor(PROJECT_ROOT, workFeatureId);
@@ -3803,6 +3829,7 @@ async function main() {
       case '--dry-run':       DRY_RUN = true; break;
       case '--worktree':     WORKTREE_MODE = true; break;
       case '--group-tasks':  GROUP_TASK_IDS = rest[++i].split(','); break;
+      case '--feature':      WORK_FEATURE_ID = rest[++i]; break;
       case '--name':          INIT_NAME = rest[++i]; break;
       case '--type':          INIT_TYPE = rest[++i]; break;
       case '--work-mode':     INIT_WORK_MODE = rest[++i]; break;

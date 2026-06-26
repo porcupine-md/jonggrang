@@ -89,6 +89,7 @@ jonggrang plan "feature" --deep      # 3-phase deep analysis (risks, alternative
 jonggrang plan "feature" --base develop  # Cut the worktree from a chosen branch (fetched fresh from origin)
 jonggrang work --mode autonomous     # Override autonomy mode
 jonggrang work --task task-003       # Execute specific task only
+jonggrang work --feature feat-abc123 # Target a specific approved feature (multi-feature projects)
 ```
 
 ---
