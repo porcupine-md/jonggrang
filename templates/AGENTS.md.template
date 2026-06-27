@@ -103,13 +103,13 @@ Jonggrang uses a **two-phase planning** flow so humans can review and edit a pla
 ```bash
 # Phase 1 — generate a human-readable draft plan
 jonggrang plan "add JWT authentication"
-# → AI writes .jonggrang/plan.md (high-level, no tasks yet)
+# → AI writes .jonggrang/.drafts/<session>/plan.md (high-level, no tasks yet)
 # → Interactive options:
 #     Approve           → run Phase 2 immediately
 #     Edit with AI      → describe changes, AI revises plan, loop back
 #     Edit in $EDITOR   → open editor, loop back
 #     Save draft        → exit, run "jonggrang approve" later
-#     Abort             → discard plan.md
+#     Abort             → discard the draft plan.md
 
 # Resume after accidental close:
 jonggrang plan
@@ -118,7 +118,7 @@ jonggrang plan
 
 # Phase 2 — approve plan → decompose into tasks
 jonggrang approve
-# → AI reads .jonggrang/plan.md → runs `jonggrang task import` to create tasks
+# → AI reads .jonggrang/.drafts/<session>/plan.md → runs `jonggrang task import` to create tasks
 # → plan.md is archived to .jonggrang/.output/features/<featureId>/plan.md
 
 # Execute tasks
