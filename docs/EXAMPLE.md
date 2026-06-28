@@ -88,7 +88,8 @@ Once approved (or after editing), run Phase 2:
 
 ```bash
 jonggrang approve
-# Reads plan.md → writes jonggrang-tasks.json
+# Reads the most-recent draft plan.md → writes jonggrang-tasks.json
+# Use: jonggrang approve --session <id> when multiple drafts are pending
 # Archives plan.md to .jonggrang/.output/features/<id>/plan.md
 ```
 

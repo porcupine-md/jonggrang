@@ -85,6 +85,7 @@
             <div class="plan-item-title">{{ plan.title }}</div>
             <div class="plan-item-badges">
               <span class="plan-badge" :class="`plan-badge--${plan.status}`">{{ plan.status }}</span>
+              <span v-if="plan.status === 'draft' && plan.mtime" class="plan-age">{{ relativeTime(plan.mtime) }}</span>
               <span
                 v-if="runBadgeOf(plan)"
                 class="plan-badge"
@@ -335,7 +336,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import Button from 'primevue/button';
 import Textarea from 'primevue/textarea';
@@ -369,6 +370,8 @@ function applyPickupPrefill() {
 // Plan list
 const plans = ref([]);
 const selectedPlan = ref(null);
+const nowMs = ref(Date.now());
+let relativeTimer = null;
 
 // Form state
 const description = ref('');
@@ -442,11 +445,25 @@ const canAddNewPlan = computed(() => true);
 // Run badge per plan: live orchestration store first, API snapshot as fallback.
 // Only surface states the plan status badge doesn't already cover.
 function runBadgeOf(plan) {
-  if (plan.id === 'draft') return null;
+  if (plan.status === 'draft') return null;
   const s = orch.groups[plan.id]?.status || plan.run_status;
   if (s === 'running' || s === 'queued') return 'live';
   if (s === 'failed' && plan.status !== 'failed') return 'failed';
   return null;
+}
+
+function relativeTime(ms) {
+  const delta = Math.max(0, nowMs.value - ms);
+  const sec = Math.floor(delta / 1000);
+  if (sec < 45) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hr ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day} day${day === 1 ? '' : 's'} ago`;
+  const month = Math.floor(day / 30);
+  return `${month} mo ago`;
 }
 
 // Base branch push (plans/tasks state → main)
@@ -724,6 +741,7 @@ watch(projectId, loadProjectTool);
 
 // WebSocket events
 onMounted(async () => {
+  relativeTimer = setInterval(() => { nowMs.value = Date.now(); }, 60_000);
   await loadPlans();
   await loadProjectTool();
   loadBase();
@@ -792,6 +810,10 @@ onMounted(async () => {
 });
 
 watch(projectId, loadPlans);
+
+onUnmounted(() => {
+  if (relativeTimer) clearInterval(relativeTimer);
+});
 </script>
 
 <style scoped>
@@ -852,6 +874,7 @@ watch(projectId, loadPlans);
 /* Status badges */
 .plan-item-badges { display: flex; align-items: center; gap: 4px; }
 .plan-badge { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; padding: 1px 5px; }
+.plan-age { font-size: 9px; color: var(--jg-text-faint); }
 .plan-badge--run-live { background: color-mix(in oklch, var(--jg-green) 20%, transparent); color: var(--jg-green); animation: livePulse 1.2s infinite; }
 .plan-badge--run-failed { background: color-mix(in oklch, var(--jg-red) 15%, transparent); color: var(--jg-red); }
 .src-issue-link { display: inline-flex; align-items: center; gap: 2px; font-size: 9px; color: var(--jg-text-faint); text-decoration: none; }

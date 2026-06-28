@@ -472,6 +472,7 @@ Task D (independent)         → Group 3 → worktree-3
 
 The web dashboard runs **each plan as one group** — every task sharing a `feature_id` is one plan, and each plan becomes **one git worktree + one branch**. Within a plan, tasks run **serially in dependency order** (`blocked_by` first); separate plans run **in parallel**, each started from its own **Work Mode**.
 
+- **Pending drafts are per-session**: the plan list can show multiple draft rows at once. Draft cards use the draft `sessionId` as their id, display a relative timestamp (for example `1 min ago`), and every edit/revise/chat/delete/approve action carries that `sessionId`. There is no active root `.jonggrang/plan.md`; legacy root plans are migrated into `.drafts/<session>/plan.md`.
 - **Per-plan Work Mode**: an approved plan's "Work Mode" button (plan list) opens `/projects/:id/plans/:featureId/…` with Pipeline / Tasks / Logs / Changes / Agent / Terminal all scoped to that plan. The **Run** button in the Work Mode sidebar starts only that plan's group; other plans keep running untouched (the run registry is shared and incremental).
 - **Branch per plan** is read from that plan's `plan.md` frontmatter (`branch:`), e.g. `feat/version-endpoint`.
 - **Worktrees** live centrally, outside the repo, under `~/.jonggrang/worktree/{project_id}/{feature_id}/` (so the project stays clean and worktrees persist across container rebuilds). For sandbox projects that per-project dir is bind-mounted into the container at `/root/.worktrees`. The worktree is **created on entering Work Mode** (idempotent, registry in `.jonggrang/.ephemeral/worktrees.json`) so Agent/Terminal can work inside it before any run; a later run reuses it.
@@ -482,6 +483,20 @@ The web dashboard runs **each plan as one group** — every task sharing a `feat
 - **Push plans → base branch** (plan list footer) commits the plan/task/manifest state, **rebases onto `origin/<base>` first** (identical untracked init-scaffolding files are cleared, state-file conflicts resolve in favor of local state — the manager is the single writer), then pushes. A moved `main` (e.g. merged PRs) never causes a rejected push; real conflicts return a clear error instead of guessing.
 - **Sandbox projects run every git operation fully in-container.** For a sandbox project all mutating/network git ops — worktree create, feature commit/diff/push, **and** the "Push plans" checkout/fetch/rebase/commit/push on the base branch — execute inside the container via `docker exec`, using the container's git + its mounted SSH key. There is **no host fallback**: a missing key or remote surfaces as an error rather than silently using the host's credentials. The container is auto-started if stopped. Only read-only status (the base-branch info shown in the UI) is read host-side off the bind-mounted `.git` so it works with the container down. Host projects keep running git on the host.
 - **Git never blocks on a prompt** (host *and* sandbox). Every network git op — clone/fetch/rebase/push — runs non-interactively: `GIT_TERMINAL_PROMPT=0` (fail fast instead of asking for a password), `GIT_ASKPASS` neutered, and `GIT_SSH_COMMAND` with `StrictHostKeyChecking=accept-new` + `BatchMode=yes` so the classic SSH *"Are you sure you want to continue connecting (yes/no)?"* host-key check is auto-accepted for a new host (a **changed** key is still rejected — MITM-safe) and never hangs. Centralized in `lib.gitNonInteractiveEnv()`.
+
+#### Dashboard plan API contract
+
+Draft-scoped endpoints accept `sessionId` (or `session`) in JSON body or query string. If omitted, they target the most-recent draft session, matching CLI default behaviour.
+
+| Endpoint | Draft behaviour |
+|---|---|
+| `GET /api/projects/:id/plans` | Returns pending draft rows with `{ id: sessionId, sessionId, status: "draft", mtime, content }`, plus archived feature plans. |
+| `GET /api/projects/:id/plan?session=<id>` | Reads one draft session; without `session`, reads the most-recent draft. |
+| `PUT /api/projects/:id/plan` | Saves `{ content, mtime?, sessionId }` to that draft's `plan.md`; never writes root `.jonggrang/plan.md`. |
+| `DELETE /api/projects/:id/plan?session=<id>` | Deletes that draft session folder. |
+| `POST /api/projects/:id/plan/revise` | Runs `jonggrang plan --revise ... --session <id>`. |
+| `POST /api/projects/:id/plan/chat` | Discusses the selected draft content. |
+| `POST /api/projects/:id/approve` | Runs `jonggrang approve --session <id>`. |
 
 ```
 Plan: simple-api      (task-001..005, blocked_by chain) → worktree feat/simple-api      (serial within)

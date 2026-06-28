@@ -44,7 +44,7 @@ const PROJECT_ROOT = process.cwd();
 const paths = lib.getProjectPaths(PROJECT_ROOT);
 const CONFIG_FILE   = process.env.JONGGRANG_CONFIG || paths.configFile;
 const TASKS_FILE    = paths.tasksFile;
-const PLAN_FILE     = paths.planFile;
+const LEGACY_PLAN_FILE = paths.legacyPlanFile;
 const PROGRESS_FILE = paths.progressFile;
 const AGENTS_FILE   = paths.agentsFile;
 const SKILLS_DIR    = paths.skillsDir;
@@ -1113,7 +1113,7 @@ async function cmdPlan(args, opts = {}) {
 
   // ── No description → pick from available plans ──────────────
   if (!description) {
-    const available = listAvailablePlans(path.dirname(PLAN_FILE));
+    const available = listAvailablePlans(path.dirname(LEGACY_PLAN_FILE));
     if (available.length === 0) {
       logError('No plans found.');
       logInfo('Run "jonggrang plan <description>" to generate a new plan.');
@@ -2362,7 +2362,7 @@ async function cmdMenuClack() {
 
   while (running) {
     const hasPendingPlan = !!lib.resolveActiveDraft(PROJECT_ROOT);
-    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
+    const hasArchivedPlans = listAvailablePlans(path.dirname(LEGACY_PLAN_FILE)).length > 0;
     const choice = await select({
       message: 'What do you want to do?',
       initialValue: hasPendingPlan ? 'approve' : 'plan',
@@ -2500,7 +2500,7 @@ async function cmdMenuClack() {
 async function cmdMenuTUI(runJonggrangTUI) {
   while (true) {
     const hasPendingPlan = !!lib.resolveActiveDraft(PROJECT_ROOT);
-    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
+    const hasArchivedPlans = listAvailablePlans(path.dirname(LEGACY_PLAN_FILE)).length > 0;
 
     const items = [
       { value: 'init',     label: 'init',      description: 'Initialize project' },
@@ -2585,7 +2585,7 @@ async function cmdMenuTUI(runJonggrangTUI) {
 async function cmdMenuFull(runJonggrangApp) {
   while (true) {
     const hasPendingPlan = !!lib.resolveActiveDraft(PROJECT_ROOT);
-    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
+    const hasArchivedPlans = listAvailablePlans(path.dirname(LEGACY_PLAN_FILE)).length > 0;
 
     const items = [
       { value: 'init',     label: 'init',    description: 'Initialize project' },
@@ -3612,9 +3612,10 @@ Usage: jonggrang <command> [options]
 
 Commands:
   init                    Setup project (interactive or with flags)
-  plan <description>      Phase 1 — generate human-readable .jonggrang/plan.md for review
+  plan <description>      Phase 1 — generate .jonggrang/.drafts/<session>/plan.md for review
   plan <description> --yes  Plan + auto-approve + decompose to tasks in one shot
-  approve                 Phase 2 — decompose approved plan.md into tasks (after review)
+  approve                 Phase 2 — decompose the most-recent draft into tasks
+  approve --session <id>  Phase 2 — decompose a specific draft session into tasks
   work [description]      Execute tasks — with description runs plan → approve → execute
   work --resume           Resume incomplete pipeline from last phase
   plan --update <desc>    Update existing plan (preserves completed tasks)

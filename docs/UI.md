@@ -354,6 +354,17 @@ padding: 20px
 
 Section header inside: `font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--jg-text-faint)`.
 
+### Plan list draft rows
+
+The Plan screen can show multiple pending draft rows. Each draft row uses the draft session id internally (`id === sessionId`) and renders:
+
+- title from the draft content
+- `draft` status badge
+- relative age text beside the badge, e.g. `just now`, `1 min ago`, `2 hr ago`
+- optional source-issue link badge
+
+All draft actions (save, discard, revise, discuss, approve) must carry the selected `sessionId`; the UI must never assume there is only one root draft.
+
 ### Issues screen (top-level `/issues`)
 
 The **Issues** menu (top app nav, beside `projects`) lists GitHub/GitLab issues and picks them up as plans (feature #55).

@@ -25,7 +25,7 @@ Phase 1 — jonggrang plan "description"
     │   > Save for later (exit, draft stays on disk)
     │   > Abort (discard draft)
     │
-Phase 2 — jonggrang approve   (or auto-triggered by --yes)
+Phase 2 — jonggrang approve   (or `jonggrang approve --session <id>` / auto-triggered by --yes)
     │
     ├─ Resolves the draft (most-recent, or --session <id>)
     ├─ AI reads the draft plan.md
@@ -54,7 +54,8 @@ Phase 2 — jonggrang approve   (or auto-triggered by --yes)
 | `jonggrang plan` | No description → picker: list all pending + archived plans |
 | `jonggrang work "feat" --yes` | Full pipeline: plan → approve → execute |
 | `jonggrang work --ignore-plan` | Skip pending plan warning, run existing tasks |
-| `jonggrang approve` | Manual Phase 2 only (after editing saved plan.md) |
+| `jonggrang approve` | Manual Phase 2 only; defaults to the most-recent draft |
+| `jonggrang approve --session <id>` | Approve a specific pending draft session |
 
 **Deep planning (`--deep`):**
 

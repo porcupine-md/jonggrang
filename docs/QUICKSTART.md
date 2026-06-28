@@ -73,6 +73,8 @@ The AI writes a draft plan to `.jonggrang/.drafts/<session>/plan.md` (a per-sess
 jonggrang approve
 ```
 
+`approve` defaults to the most-recent draft. If you have multiple pending drafts, run `jonggrang approve --session <id>` (the session id is shown by `jonggrang plan` / the web dashboard).
+
 The AI decomposes your plan into atomic tasks. Each task is small enough for one AI context window, with clear acceptance criteria and dependency ordering.
 
 Check the task board:

@@ -71,7 +71,7 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 |---------|-------------|
 | `jonggrang init` | Interactive wizard — sets up `.jonggrang/`, `AGENTS.md`, hooks, skills |
 | `jonggrang plan "desc"` | AI writes a draft plan to `.jonggrang/.drafts/<session>/plan.md` — human reviews before code |
-| `jonggrang approve` | Decomposes plan into atomic tasks in `.jonggrang/.output/features/<id>/jonggrang-tasks.json` |
+| `jonggrang approve` | Decomposes the most-recent draft (or `--session <id>`) into `.jonggrang/.output/features/<id>/jonggrang-tasks.json` |
 | `jonggrang work` | Executes task queue with fresh context per task |
 | `jonggrang status` | Shows task board |
 | `jonggrang review` | Comprehensive code review → markdown report |
@@ -87,6 +87,7 @@ jonggrang plan "feature" --yes       # Skip review, auto-approve
 jonggrang work "feature" --yes       # Full pipeline in one command
 jonggrang plan "feature" --deep      # 3-phase deep analysis (risks, alternatives)
 jonggrang plan "feature" --base develop  # Cut the worktree from a chosen branch (fetched fresh from origin)
+jonggrang approve --session draft-abc123  # Approve a specific pending draft
 jonggrang work --mode autonomous     # Override autonomy mode
 jonggrang work --task task-003       # Execute specific task only
 jonggrang work --feature feat-abc123 # Target a specific approved feature (multi-feature projects)
