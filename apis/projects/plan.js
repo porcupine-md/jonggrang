@@ -109,12 +109,9 @@ module.exports = function(deps) {
             // which advances task status but NOT the MANIFEST phase machine.
             let tasksByFeature = {};
             try {
-                const tasksPath = path.join(jonggrangDir, 'jonggrang-tasks.json');
-                if (fs.existsSync(tasksPath)) {
-                    const all = JSON.parse(fs.readFileSync(tasksPath, 'utf-8')).tasks || [];
-                    for (const t of all) {
-                        (tasksByFeature[t.feature_id] = tasksByFeature[t.feature_id] || []).push(t.status);
-                    }
+                const allTasks = lib.getAllTasks(project.path);
+                for (const t of allTasks.tasks || []) {
+                    (tasksByFeature[t.feature_id] = tasksByFeature[t.feature_id] || []).push(t.status);
                 }
             } catch {}
 

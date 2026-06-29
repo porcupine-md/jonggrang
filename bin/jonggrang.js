@@ -285,15 +285,120 @@ function emitSignal(type, data) {
 }
 
 // In worktree mode emit a JSON signal; otherwise write directly to the active feature's tasks file
-function updateTaskMode(taskId, status) {
-  if (WORKTREE_MODE) {
+function updateTaskMode(tasksFile, taskId, status, worktreeMode = false) {
+  if (worktreeMode) {
     emitSignal('task_status', { taskId, status });
   } else {
-    lib.updateTaskStatus(WORK_TASKS_FILE, taskId, status);
+    lib.updateTaskStatus(tasksFile, taskId, status);
   }
 }
 
 const TEST_RETRY_LIMIT = 3;
+
+/**
+ * Run the work loop for a given tasks file.
+ * Executes tasks one by one until done, max iterations reached, or blocked.
+ * Does NOT handle post-work phases — caller is responsible for that.
+ * Does NOT mark MANIFEST phase 8 complete — caller is responsible for that.
+ */
+async function runWorkLoop(tasksFile, options) {
+  const {
+    maxIterations = 0,
+    taskQueue: initialTaskQueue = [],
+    groupTaskIds = [],
+    targetTaskId = '',
+    worktreeMode = false,
+    dryRun = false,
+  } = options;
+
+  let taskQueue = [...initialTaskQueue];
+
+  // If a single target task was specified, resolve its dependency queue
+  if (targetTaskId && !worktreeMode) {
+    taskQueue = lib.getTaskQueue(tasksFile, targetTaskId);
+    if (taskQueue.length > 1) {
+      logInfo(`Task ${targetTaskId} has ${taskQueue.length - 1} pending dependencies — will process them first`);
+    }
+    taskQueue.forEach((id, i) => {
+      const t = lib.getTask(tasksFile, id);
+      const label = id === targetTaskId ? '(target)' : `(dep ${i + 1})`;
+      lib.updateTaskStatus(tasksFile, id, 'waiting');
+      logInfo(`  ${i + 1}. ${id}: ${t ? t.title : '?'} ${label}`);
+    });
+  }
+
+  let iteration = 0;
+  let consecutiveFails = 0;
+  let lastFailedTask = '';
+  const killAfter = parseInt(lib.readConfig(CONFIG_FILE, 'work.kill_after_fails', '3'), 10);
+
+  while (maxIterations === 0 || iteration < maxIterations) {
+    iteration++;
+
+    let taskId;
+    if (taskQueue.length > 0) {
+      taskId = taskQueue.shift();
+    } else if (groupTaskIds.length > 0) {
+      // Group/worktree mode: only ever run the assigned tasks. Do NOT fall back
+      // to getNextTask, which would pick up other plans' tasks from this
+      // worktree's tasks.json copy and break per-plan isolation.
+      taskId = null;
+    } else {
+      taskId = lib.getNextTask(tasksFile);
+    }
+
+    if (!taskId) {
+      logSuccess('All tasks completed!');
+      logInfo(`Completed: ${lib.countCompleted(tasksFile)} / ${lib.countTotal(tasksFile)}`);
+      console.log('');
+      return { completed: true, reason: 'all_done', stats: { completed: lib.countCompleted(tasksFile), total: lib.countTotal(tasksFile) } };
+    }
+
+    const success = await runIteration(tasksFile, iteration, taskId, MODE, dryRun, worktreeMode);
+
+    if (success) {
+      consecutiveFails = 0;
+      lastFailedTask = '';
+    } else {
+      if (lastFailedTask === taskId) {
+        consecutiveFails++;
+      } else {
+        consecutiveFails = 1;
+        lastFailedTask = taskId;
+      }
+
+      if (consecutiveFails >= killAfter) {
+        logError(`Task ${taskId} failed ${consecutiveFails} times. Marking as blocked.`);
+        updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
+        consecutiveFails = 0;
+        lastFailedTask = '';
+      } else if (groupTaskIds.length > 0) {
+        // Group/worktree mode never falls back to getNextTask, so a task that
+        // got reverted to pending would be dropped from the queue and the run
+        // would falsely report "All tasks completed". Re-queue it to retry
+        // within this run (bounded by kill_after_fails above).
+        logWarn(`Re-queuing ${taskId} for retry (attempt ${consecutiveFails}/${killAfter}).`);
+        taskQueue.push(taskId);
+      }
+    }
+
+    console.log('');
+    if (maxIterations === 0) {
+      logInfo(`Progress: ${lib.countCompleted(tasksFile)}/${lib.countTotal(tasksFile)} tasks | Iteration ${iteration}`);
+    } else {
+      logInfo(`Progress: ${lib.countCompleted(tasksFile)}/${lib.countTotal(tasksFile)} tasks | Iteration ${iteration}/${maxIterations}`);
+    }
+    console.log('');
+  }
+
+  if (!worktreeMode) lib.revertWaiting(tasksFile);
+
+  logWarn(`Max iterations (${maxIterations}) reached. Run 'jonggrang work' to continue.`);
+  logInfo(`Completed: ${lib.countCompleted(tasksFile)} / ${lib.countTotal(tasksFile)}`);
+  console.log('');
+  console.log('PAUSED');
+  return { completed: false, reason: 'max_iterations', stats: { completed: lib.countCompleted(tasksFile), total: lib.countTotal(tasksFile) } };
+}
 
 function askUserFeedback(prompt) {
   return new Promise((resolve) => {
@@ -302,20 +407,20 @@ function askUserFeedback(prompt) {
   });
 }
 
-async function runIteration(iteration, taskId) {
-  const task = lib.getTask(WORK_TASKS_FILE, taskId);
+async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, worktreeMode = false) {
+  const task = lib.getTask(tasksFile, taskId);
   const taskTitle = task ? task.title : taskId;
 
   logHeader(`Iteration ${iteration}: ${taskTitle}`);
 
-  updateTaskMode(taskId, 'in_progress');
+  updateTaskMode(tasksFile, taskId, 'in_progress', worktreeMode);
   // Brief pause so the file-watcher fires before the agent starts,
   // ensuring the browser sees the in_progress state transition.
   await new Promise(r => setTimeout(r, 200));
 
-  if (DRY_RUN) {
+  if (dryRun) {
     logWarn(`[DRY RUN] Would execute prompt for task: ${taskId}`);
-    console.log(lib.buildWorkPrompt(taskId, WORK_TASKS_FILE, MODE));
+    console.log(lib.buildWorkPrompt(taskId, tasksFile, mode));
     return true;
   }
 
@@ -325,30 +430,30 @@ async function runIteration(iteration, taskId) {
 
   while (true) {
     // Build prompt — inject test failure feedback on retries
-    const prompt = lib.buildWorkPrompt(taskId, WORK_TASKS_FILE, MODE, testFeedback || undefined);
+    const prompt = lib.buildWorkPrompt(taskId, tasksFile, mode, testFeedback || undefined);
 
     logInfo(`Spawning fresh ${TOOL} instance...${testAttempt > 0 ? ` (test retry ${testAttempt}/${TEST_RETRY_LIMIT})` : ''}`);
-    const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+    const exitCode = await lib.runAgent(prompt, TOOL, mode, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (exitCode !== 0) {
       logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
-      updateTaskMode(taskId, 'pending');
+      updateTaskMode(tasksFile, taskId, 'pending', worktreeMode);
       return false;
     }
 
     // ── Check task completion ─────────────────────────────────
-    const data = lib.getTasks(WORK_TASKS_FILE);
+    const data = lib.getTasks(tasksFile);
     const t = data.tasks.find(t => t.id === taskId);
     if (!t || t.status !== 'completed') {
       logWarn('Agent finished but did not mark task complete. Reverting to pending.');
-      updateTaskMode(taskId, 'pending');
+      updateTaskMode(tasksFile, taskId, 'pending', worktreeMode);
       return false;
     }
 
     // ── Run tests ─────────────────────────────────────────────
     if (!testCmd) {
       logSuccess(`Task ${taskId} completed successfully`);
-      updateTaskMode(taskId, 'completed');
+      updateTaskMode(tasksFile, taskId, 'completed', worktreeMode);
       return true;
     }
 
@@ -357,7 +462,7 @@ async function runIteration(iteration, taskId) {
 
     if (passed) {
       logSuccess(`Task ${taskId} completed — tests passed`);
-      updateTaskMode(taskId, 'completed');
+      updateTaskMode(tasksFile, taskId, 'completed', worktreeMode);
       return true;
     }
 
@@ -367,7 +472,7 @@ async function runIteration(iteration, taskId) {
     if (testAttempt < TEST_RETRY_LIMIT) {
       // Auto-retry: inject test output as feedback, reset task to pending
       testFeedback = output;
-      lib.updateTaskStatus(WORK_TASKS_FILE, taskId, 'pending');
+      lib.updateTaskStatus(tasksFile, taskId, 'pending');
       logInfo('Retrying with test failure output...');
       continue;
     }
@@ -381,14 +486,14 @@ async function runIteration(iteration, taskId) {
 
     if (!userInput) {
       logError(`Task ${taskId} marked as blocked after ${TEST_RETRY_LIMIT} failed test retries.`);
-      updateTaskMode(taskId, 'blocked');
+      updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
       return false;
     }
 
     // User gave feedback — inject it and reset counter for another round
     testFeedback = `User feedback: ${userInput}\n\nLast test output:\n${output}`;
     testAttempt = 0;
-    lib.updateTaskStatus(WORK_TASKS_FILE, taskId, 'pending');
+    lib.updateTaskStatus(tasksFile, taskId, 'pending');
     logInfo('Retrying with user feedback...');
   }
 }
@@ -637,6 +742,19 @@ async function cmdWork(descriptionParts = []) {
     }
     // Resolve the per-feature tasks file for this work session.
     WORK_TASKS_FILE = lib.tasksFileFor(PROJECT_ROOT, workFeatureId);
+
+    // Guard: if phase 8 already completed (e.g. by a prior orchestration
+    // resume that ran the work loop), skip straight to post-work phases.
+    if (workManifest.phases?.[8]?.status === 'completed') {
+      logInfo('Phase 8 (Implement) already completed — skipping to post-work phases');
+      if (!SKIP_GATES) {
+        const gateWorkType = workManifest?.work_type || workType;
+        await runPostWorkPhases(description, gateWorkType, workFeatureId, workManifest, workManifestPath);
+      }
+      console.log('COMPLETE');
+      return;
+    }
+
     // Phase 8 = Implement — mark as running for the duration of the work loop
     if (workManifest.active_phases.includes(8))
       orchestration.startPhase(workManifestPath, 8);
@@ -685,94 +803,37 @@ async function cmdWork(descriptionParts = []) {
     TASK_ID = '';
   }
 
-  let iteration = 0;
-  let consecutiveFails = 0;
-  let lastFailedTask = '';
-  const killAfter = parseInt(lib.readConfig(CONFIG_FILE, 'work.kill_after_fails', '3'), 10);
+  const result = await runWorkLoop(WORK_TASKS_FILE, {
+    maxIterations: MAX_ITERATIONS,
+    taskQueue,
+    groupTaskIds: GROUP_TASK_IDS,
+    targetTaskId: TASK_ID,
+    worktreeMode: WORKTREE_MODE,
+    dryRun: DRY_RUN,
+  });
 
-  while (MAX_ITERATIONS === 0 || iteration < MAX_ITERATIONS) {
-    iteration++;
-
-    let taskId;
-    if (taskQueue.length > 0) {
-      taskId = taskQueue.shift();
-    } else if (GROUP_TASK_IDS.length > 0) {
-      // Group/worktree mode: only ever run the assigned tasks. Do NOT fall back
-      // to getNextTask, which would pick up other plans' tasks from this
-      // worktree's tasks.json copy and break per-plan isolation.
-      taskId = null;
-    } else {
-      taskId = lib.getNextTask(WORK_TASKS_FILE);
+  if (result.completed) {
+    // Complete phase 8 (Implement) now that all tasks are done
+    if (workManifestPath && workManifest?.active_phases?.includes(8)) {
+      orchestration.completePhase(workManifestPath, 8, { source: 'work-loop' });
+      workManifest = orchestration.readManifest(workManifestPath);
     }
 
-    if (!taskId) {
-      logSuccess('All tasks completed!');
-      logInfo(`Completed: ${lib.countCompleted(WORK_TASKS_FILE)} / ${lib.countTotal(WORK_TASKS_FILE)}`);
-      console.log('');
-
-      // Complete phase 8 (Implement) now that all tasks are done
-      if (workManifestPath && workManifest?.active_phases?.includes(8)) {
-        orchestration.completePhase(workManifestPath, 8, { source: 'work-loop' });
-        workManifest = orchestration.readManifest(workManifestPath);
-      }
-
-      // Run post-work quality gates (Simplify → … → Complete) based on work type.
-      // Runs in both normal and worktree mode. In worktree mode we require a
-      // manifest we resolved by feature_id above, so runPostWorkPhases never
-      // falls back to findIncompleteManifest (which would target another plan).
-      if (!SKIP_GATES && (!WORKTREE_MODE || workManifestPath)) {
-        const gateWorkType = workManifest?.work_type || workType;
-        await runPostWorkPhases(description, gateWorkType, workFeatureId, workManifest, workManifestPath);
-      }
-
-      console.log('COMPLETE');
-      return;
+    // Run post-work quality gates (Simplify → … → Complete) based on work type.
+    // Runs in both normal and worktree mode. In worktree mode we require a
+    // manifest we resolved by feature_id above, so runPostWorkPhases never
+    // falls back to findIncompleteManifest (which would target another plan).
+    if (!SKIP_GATES && (!WORKTREE_MODE || workManifestPath)) {
+      const gateWorkType = workManifest?.work_type || workType;
+      await runPostWorkPhases(description, gateWorkType, workFeatureId, workManifest, workManifestPath);
     }
 
-    const success = await runIteration(iteration, taskId);
-
-    if (success) {
-      consecutiveFails = 0;
-      lastFailedTask = '';
-    } else {
-      if (lastFailedTask === taskId) {
-        consecutiveFails++;
-      } else {
-        consecutiveFails = 1;
-        lastFailedTask = taskId;
-      }
-
-      if (consecutiveFails >= killAfter) {
-        logError(`Task ${taskId} failed ${consecutiveFails} times. Marking as blocked.`);
-        updateTaskMode(taskId, 'blocked');
-        consecutiveFails = 0;
-        lastFailedTask = '';
-      } else if (GROUP_TASK_IDS.length > 0) {
-        // Group/worktree mode never falls back to getNextTask, so a task that
-        // got reverted to pending would be dropped from the queue and the run
-        // would falsely report "All tasks completed". Re-queue it to retry
-        // within this run (bounded by kill_after_fails above) — keep going
-        // until every group task is genuinely completed or blocked.
-        logWarn(`Re-queuing ${taskId} for retry (attempt ${consecutiveFails}/${killAfter}).`);
-        taskQueue.push(taskId);
-      }
-    }
-
-    console.log('');
-    if (MAX_ITERATIONS === 0) {
-      logInfo(`Progress: ${lib.countCompleted(WORK_TASKS_FILE)}/${lib.countTotal(WORK_TASKS_FILE)} tasks | Iteration ${iteration}`);
-    } else {
-      logInfo(`Progress: ${lib.countCompleted(WORK_TASKS_FILE)}/${lib.countTotal(WORK_TASKS_FILE)} tasks | Iteration ${iteration}/${MAX_ITERATIONS}`);
-    }
-    console.log('');
+    console.log('COMPLETE');
+    return;
   }
 
-  if (!WORKTREE_MODE) lib.revertWaiting(WORK_TASKS_FILE);
-
-  logWarn(`Max iterations (${MAX_ITERATIONS}) reached. Run 'jonggrang work' to continue.`);
-  logInfo(`Completed: ${lib.countCompleted(WORK_TASKS_FILE)} / ${lib.countTotal(WORK_TASKS_FILE)}`);
-  console.log('');
-  console.log('PAUSED');
+  // Max iterations reached — already logged by runWorkLoop
+  return;
 }
 
 // ============================================================
@@ -2104,6 +2165,34 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       logInfo('Resume with: jonggrang work --resume');
       orchestration.failPhase(manifestPath, phaseNum, 'Awaiting human input (brainstorming)');
       process.exit(0);
+    }
+
+    // ── Phase 8: Implementation — delegate to work loop when tasks exist ──
+    if (phaseNum === 8) {
+      const tasksFile = lib.tasksFileFor(PROJECT_ROOT, featureId);
+      const pendingCount = lib.fileExists(tasksFile) ? lib.countPending(tasksFile) : 0;
+
+      if (pendingCount > 0) {
+        logInfo(`Phase 8: delegating to work loop (${pendingCount} pending tasks)`);
+        const result = await runWorkLoop(tasksFile, {
+          maxIterations: 0,
+          worktreeMode: false,
+          dryRun: DRY_RUN,
+        });
+
+        if (result.completed) {
+          orchestration.completePhase(manifestPath, 8, { source: 'work-loop' });
+          logSuccess('Phase 8 complete (work loop finished all tasks)');
+        } else {
+          orchestration.failPhase(manifestPath, 8, `Work loop incomplete: ${result.reason}`);
+          logWarn(`Phase 8 incomplete: ${result.reason}`);
+        }
+        manifest = orchestration.readManifest(manifestPath);
+        continue;
+      }
+
+      // No pending tasks — fall through to generic phase agent (legacy behavior)
+      logInfo('Phase 8: no pending tasks — running generic implementation agent');
     }
 
     // ── Build phase prompt(s) ─────────────────────────────────────

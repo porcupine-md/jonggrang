@@ -30,8 +30,6 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // silently skips entries that don't exist.
 const COPY_INTO_WORKTREE = [
     '.jonggrang/jonggrang.json',
-    '.jonggrang/jonggrang-tasks.json',
-    '.jonggrang/progress.txt',
     '.jonggrang/.output',
     '.jonggrang/skills',
     '.jonggrang/lib',
@@ -338,7 +336,6 @@ module.exports = function(deps) {
         return true;
     }
 
-    const tasksFileOf  = (project) => path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
     const snapshotPath = (project) => path.join(project.path, '.jonggrang', '.ephemeral', 'orchestration-run.json');
 
     function emit(projectId, event, payload) {
@@ -483,10 +480,15 @@ module.exports = function(deps) {
 
     function applySignal(project, signal) {
         if (signal.type !== 'task_status' || !signal.taskId) return;
-        const mainTasks = tasksFileOf(project);
         try {
-            if (signal.status === 'completed') lib.markTaskDone(mainTasks, signal.taskId);
-            else lib.updateTaskStatus(mainTasks, signal.taskId, signal.status);
+            const featureId = lib.findTaskFeature(project.path, signal.taskId);
+            if (!featureId) {
+                console.error('orchestration applySignal error: task feature not found', signal.taskId);
+                return;
+            }
+            const tasksFile = lib.tasksFileFor(project.path, featureId);
+            if (signal.status === 'completed') lib.markTaskDone(tasksFile, signal.taskId);
+            else lib.updateTaskStatus(tasksFile, signal.taskId, signal.status);
         } catch (err) {
             console.error('orchestration applySignal error:', err.message);
         }
@@ -695,7 +697,7 @@ module.exports = function(deps) {
 
         let groups;
         try {
-            groups = lib.groupPlans(tasksFileOf(project), project.path);
+            groups = lib.groupPlansAll(project.path);
         } catch (err) {
             return res.status(500).json({ error: { code: 'GROUP_ERROR', message: err.message } });
         }
@@ -802,7 +804,7 @@ module.exports = function(deps) {
 
         let groups;
         try {
-            groups = lib.groupPlans(tasksFileOf(project), project.path);
+            groups = lib.groupPlansAll(project.path);
         } catch (err) {
             return res.status(500).json({ error: { code: 'GROUP_ERROR', message: err.message } });
         }

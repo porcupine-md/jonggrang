@@ -112,7 +112,6 @@ module.exports = function register(app, io, ctx) {
                 try { lib.migrateLegacyPlanDraft(project.path); } catch {}
                 const sid = lib.resolveActiveDraft(project.path);
                 const planPath = sid ? lib.draftFileFor(project.path, sid) : '';
-                const tasksPath = path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
                 const state = webState.deriveState(project.path);
                 io.to(`project:${project.id}`).emit('state', { project_id: project.id, state });
                 if (planPath && fs.existsSync(planPath)) {
@@ -122,10 +121,10 @@ module.exports = function register(app, io, ctx) {
                 } else {
                     io.to(`project:${project.id}`).emit('plan.deleted', { project_id: project.id, sessionId: sid || null });
                 }
-                if (fs.existsSync(tasksPath)) {
-                    const data = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'));
-                    io.to(`project:${project.id}`).emit('tasks.update', { project_id: project.id, tasks: data.tasks || [] });
-                }
+                try {
+                    const allTasks = lib.getAllTasks(project.path);
+                    io.to(`project:${project.id}`).emit('tasks.update', { project_id: project.id, tasks: allTasks.tasks || [] });
+                } catch {}
                 if (changedPath && changedPath.endsWith('MANIFEST.yaml')) {
                     try {
                         const manifest = orchestration.readManifest(changedPath);
@@ -167,13 +166,10 @@ module.exports = function register(app, io, ctx) {
                 if (!project) return;
                 try { lib.migrateLegacyPlanDraft(project.path); } catch {}
                 const state = webState.deriveState(project.path);
-                const tasksPath = path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
                 const sid = lib.resolveActiveDraft(project.path);
                 const planPath = sid ? lib.draftFileFor(project.path, sid) : '';
                 let tasks = [];
-                if (fs.existsSync(tasksPath)) {
-                    try { tasks = JSON.parse(fs.readFileSync(tasksPath, 'utf-8')).tasks || []; } catch {}
-                }
+                try { tasks = lib.getAllTasks(project.path).tasks || []; } catch {}
                 let planContent = null;
                 let planMtime = null;
                 if (planPath && fs.existsSync(planPath)) {
