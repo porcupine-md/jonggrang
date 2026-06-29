@@ -112,12 +112,18 @@ export default function (pi: ExtensionAPI) {
   // Do NOT use __dirname — the extension is loaded via --extension flag, not from a fixed install path.
   const projectRoot = process.cwd();
   const jonggrangLib = (() => {
-    // Try npm package first, then fall back to co-located lib/
+    // 1. Try npm package (project-local or globally installed)
     try {
       return path.dirname(require.resolve("jonggrang/lib/jonggrang.js"));
-    } catch {
-      return path.join(projectRoot, "node_modules", "jonggrang", "lib");
-    }
+    } catch {}
+    // 2. Co-located lib/ relative to this extension file (handles global
+    //    install via symlink, npx, or --extension flag from repo clone)
+    try {
+      const coLocated = path.join(__dirname, '..', '..', 'lib');
+      if (fs.existsSync(path.join(coLocated, 'codemap.js'))) return coLocated;
+    } catch {}
+    // 3. Last resort: project-local node_modules
+    return path.join(projectRoot, "node_modules", "jonggrang", "lib");
   })();
 
   function loadLib(name: string) {
