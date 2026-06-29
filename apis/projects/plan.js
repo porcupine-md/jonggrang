@@ -294,6 +294,74 @@ module.exports = function(deps) {
         res.status(202).json({ job_id: project.id });
     });
 
+    // GET the clarifying questions the planning agent submitted (feature: plan ask).
+    router.get('/:id/plan/questions', (req, res) => {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+        const qPath = path.join(project.path, '.jonggrang', 'plan-questions.json');
+        if (!fs.existsSync(qPath)) return res.json({ exists: false, goal_analysis: '', questions: [] });
+        try {
+            const data = JSON.parse(fs.readFileSync(qPath, 'utf-8'));
+            res.json({ exists: true, goal_analysis: data.goal_analysis || '', questions: data.questions || [] });
+        } catch (err) {
+            res.status(500).json({ error: { code: 'READ_ERROR', message: err.message } });
+        }
+    });
+
+    // Answer the clarifying questions → run Pass B (generate the plan with the
+    // answers). Answers are passed to the CLI inline (base64) so the same path
+    // works under the Docker sandbox without host/container fs ownership issues.
+    router.post('/:id/plan/answers', (req, res) => {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+        const { description, deep, tool, model, effort, base, answers } = req.body || {};
+        if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
+        if (!Array.isArray(answers) || answers.length === 0) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'answers must be a non-empty array' } });
+        }
+        if (answers.length > 20) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'too many answers (max 20)' } });
+        }
+        for (const a of answers) {
+            if (!a || typeof a !== 'object' || !a.id) {
+                return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'each answer needs an id' } });
+            }
+        }
+        if (tool && !VALID_PLAN_TOOL.includes(tool)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `tool must be one of: ${VALID_PLAN_TOOL.join(', ')}` } });
+        }
+        if (model && typeof model === 'string' && model.length > MAX_STRING_LEN) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'model must be under 100 characters' } });
+        }
+        if (effort) {
+            const allowed = tool ? (STATIC_EFFORTS[tool] || []) : ALL_EFFORTS;
+            if (!allowed.includes(effort)) {
+                const expected = allowed.length ? allowed.join(', ') : '(this backend takes no effort level)';
+                return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `effort must be one of: ${expected}` } });
+            }
+        }
+        if (base && !lib.isSafeBranchName(base)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'base must be a plain branch name (letters, digits, . _ / -)' } });
+        }
+
+        const goal_analysis = typeof req.body.goal_analysis === 'string' ? req.body.goal_analysis : '';
+        const payload = { goal_analysis, answers };
+        const inline = Buffer.from(JSON.stringify(payload), 'utf-8').toString('base64');
+        if (inline.length > 200000) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'answers payload too large' } });
+        }
+
+        const args = ['plan', description, ...(deep ? ['--deep'] : []), '--answers-inline', inline];
+        if (tool)   args.push('--tool', tool);
+        if (model)  args.push('--model', model);
+        if (effort) args.push('--effort', effort);
+        if (base)   args.push('--base', base);
+        const child = spawnForProject(project, args);
+        wireProjectProcess(project.id, child, 'plan');
+        res.status(202).json({ job_id: project.id });
+    });
+
     router.put('/:id/plan', (req, res) => {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });

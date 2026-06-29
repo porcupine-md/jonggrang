@@ -80,6 +80,22 @@ module.exports = function register(app, io, ctx) {
             const lines = data.toString().split(/\r?\n/).filter(l => l.trim());
             for (const line of lines) {
                 io.to(`project:${projectId}`).emit('process.log', { project_id: projectId, stream, line, raw: line, seq: seq++ });
+                // The planning agent surfaces clarifying questions via a JSON signal
+                // line (`{"type":"plan_questions",...}`). Relay the stored questions
+                // to the client so it can render an answer form.
+                if (stream === 'stdout' && line.includes('"plan_questions"')) {
+                    try {
+                        const sig = JSON.parse(line.trim());
+                        if (sig && sig.type === 'plan_questions') {
+                            const project = webState.getProject(projectId);
+                            const qPath = project && path.join(project.path, '.jonggrang', 'plan-questions.json');
+                            if (qPath && fs.existsSync(qPath)) {
+                                const questions = JSON.parse(fs.readFileSync(qPath, 'utf-8'));
+                                io.to(`project:${projectId}`).emit('plan.questions', { project_id: projectId, ...questions });
+                            }
+                        }
+                    } catch { /* not a signal line — ignore */ }
+                }
             }
         };
         child.stdout.on('data', logLine('stdout'));

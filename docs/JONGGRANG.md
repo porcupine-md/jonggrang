@@ -101,6 +101,8 @@ project-root/
 │   ├── jonggrang.json          # Project config
 │   ├── .drafts/<session>/      # Draft plans (gitignored, per-session — concurrent-safe)
 │   │   └── plan.md            # Pending plan (exists between plan → approve)
+│   ├── plan-questions.json     # Clarifying questions the agent submitted via `plan ask`
+│   ├── plan-answers.json       # Your answers (reused on `plan --revise`)
 │   ├── .output/                # TRACKED in git — plans + manifests travel with each branch on push
 │   │   └── features/{id}/
 │   │       ├── plan.md         # Archived plan (after approve); frontmatter holds the branch name

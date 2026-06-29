@@ -13,8 +13,18 @@ Before the work loop can run, a plan must exist and be approved. This is a **two
 ```
 Phase 1 — jonggrang plan "description"
     │
-    ├─ AI writes .jonggrang/.drafts/<session>/plan.md  (high-level, human-editable)
-    │   Each plan call gets its own session-id — concurrent planning is safe.
+    ├─ Pass A — Clarify: the agent analyzes the goal first. If anything is
+    │   ambiguous it SUBMITS clarifying questions via `jonggrang plan ask`
+    │   (an agent-facing intake command, the sibling of `task import`) instead of
+    │   guessing. You answer each — pick an option (every option carries its
+    │   rationale) or type your own. Skipped when the request is unambiguous, or
+    │   with `--no-ask`. Q&A is stored in .jonggrang/plan-questions.json +
+    │   plan-answers.json (durable — reused on `plan --revise`).
+    │
+    ├─ Pass B — AI writes .jonggrang/.drafts/<session>/plan.md  (high-level,
+    │   human-editable), honoring the answers and recording them in a
+    │   `## Clarifications` section. Each plan call gets its own session-id —
+    │   concurrent planning is safe.
     │   frontmatter: feature, branch, work_type, description, created_at
     │   optional `base:` (set via `--base` / the web base picker) — the branch the
     │   worktree is cut from; fetched fresh from origin at run time. Default: main/master.

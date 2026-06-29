@@ -333,6 +333,57 @@
       </div>
     </div>
   </Dialog>
+
+  <!-- Clarifying questions from the planning agent (feature: plan ask) -->
+  <Dialog v-model:visible="showQuestionForm" modal header="A few questions before planning"
+          :style="{width:'560px'}" :draggable="false" :closable="false">
+    <div v-if="pendingQuestions" class="qa-body">
+      <p v-if="pendingQuestions.goal_analysis" class="qa-goal">
+        <strong>Goal:</strong> {{ pendingQuestions.goal_analysis }}
+      </p>
+      <div v-for="(q, qi) in pendingQuestions.questions" :key="q.id" class="qa-question">
+        <div class="qa-q-title">{{ qi + 1 }}. {{ q.question }}</div>
+        <div v-if="q.rationale" class="qa-q-why">Why: {{ q.rationale }}</div>
+
+        <template v-if="q.type === 'single_choice'">
+          <label v-for="o in q.options" :key="o.value" class="qa-opt">
+            <input type="radio" :name="'q-'+q.id" :value="o.value" v-model="answerDraft[q.id].choice" />
+            <span class="qa-opt-label">{{ o.label }}</span>
+            <span v-if="o.rationale" class="qa-opt-why">— {{ o.rationale }}</span>
+          </label>
+          <label v-if="q.allow_freetext" class="qa-opt">
+            <input type="radio" :name="'q-'+q.id" value="__freetext__" v-model="answerDraft[q.id].choice" />
+            <span class="qa-opt-label">✎ Type my own</span>
+          </label>
+          <input v-if="answerDraft[q.id].choice === '__freetext__'" v-model="answerDraft[q.id].freetext"
+                 class="qa-input" placeholder="Your answer" />
+        </template>
+
+        <template v-else-if="q.type === 'multi_choice'">
+          <label v-for="o in q.options" :key="o.value" class="qa-opt">
+            <input type="checkbox" :value="o.value" v-model="answerDraft[q.id].choices" />
+            <span class="qa-opt-label">{{ o.label }}</span>
+            <span v-if="o.rationale" class="qa-opt-why">— {{ o.rationale }}</span>
+          </label>
+          <label v-if="q.allow_freetext" class="qa-opt">
+            <input type="checkbox" v-model="answerDraft[q.id].useFreetext" />
+            <span class="qa-opt-label">✎ Add my own</span>
+          </label>
+          <input v-if="answerDraft[q.id].useFreetext" v-model="answerDraft[q.id].freetext"
+                 class="qa-input" placeholder="Your answer" />
+        </template>
+
+        <template v-else>
+          <textarea v-model="answerDraft[q.id].freetext" class="qa-textarea" rows="2"
+                    :placeholder="q.rationale || 'Your answer'" />
+        </template>
+      </div>
+    </div>
+    <template #footer>
+      <Button label="Cancel" text @click="cancelQuestions" />
+      <Button label="Generate Plan" icon="pi pi-sparkles" @click="submitAnswers" />
+    </template>
+  </Dialog>
 </template>
 
 <script setup>
@@ -390,6 +441,13 @@ const showToolModal = ref(false);
 const availableModels = ref([]);
 const availableEfforts = ref([]);
 const loadingModels = ref(false);
+
+// Plan clarifying questions (feature: plan ask). When the planning agent submits
+// questions, the server relays them via the `plan.questions` socket event; we show
+// a form, collect answers, and POST them to run Pass B (plan generation).
+const pendingQuestions = ref(null);   // { goal_analysis, questions:[] } or null
+const showQuestionForm = ref(false);
+const answerDraft = reactive({});     // keyed by question id
 
 const TOOLS = [
   { label: 'OpenCode',      value: 'opencode' },
@@ -620,6 +678,8 @@ async function generatePlan() {
   genLog.value = '';
   generating.value = true;
   showNewPlanForm.value = false;
+  pendingQuestions.value = null;
+  showQuestionForm.value = false;
   try {
     const body = { description: description.value, deep: deep.value };
     if (selectedTool.value)   body.tool   = selectedTool.value;
@@ -639,6 +699,65 @@ async function generatePlan() {
     genError.value = e.message;
     generating.value = false;
   }
+}
+
+// Build the answers payload from the form draft and run Pass B (plan generation).
+async function submitAnswers() {
+  if (!pendingQuestions.value) return;
+  const FREETEXT = '__freetext__';
+  const answers = [];
+  for (const q of pendingQuestions.value.questions) {
+    const d = answerDraft[q.id] || {};
+    if (q.type === 'single_choice') {
+      if (d.choice === FREETEXT) {
+        answers.push({ id: q.id, question: q.question, type: q.type, value: FREETEXT, freetext: (d.freetext || '').trim() });
+      } else {
+        const opt = (q.options || []).find(o => o.value === d.choice);
+        answers.push({ id: q.id, question: q.question, type: q.type, value: d.choice, label: opt ? opt.label : d.choice, freetext: null });
+      }
+    } else if (q.type === 'multi_choice') {
+      const chosen = Array.isArray(d.choices) ? d.choices : [];
+      const labels = chosen.map(v => { const o = (q.options || []).find(x => x.value === v); return o ? o.label : v; });
+      answers.push({ id: q.id, question: q.question, type: q.type, value: chosen, label: labels.join(', '), freetext: d.useFreetext ? (d.freetext || '').trim() : null });
+    } else {
+      const t = (d.freetext || '').trim();
+      answers.push({ id: q.id, question: q.question, type: 'text', value: t, freetext: t });
+    }
+  }
+
+  genError.value = '';
+  genLog.value = '';
+  generating.value = true;
+  showQuestionForm.value = false;
+  const goal_analysis = pendingQuestions.value.goal_analysis || '';
+  pendingQuestions.value = null;
+
+  const body = { description: description.value, deep: deep.value, answers, goal_analysis };
+  if (selectedTool.value)   body.tool   = selectedTool.value;
+  if (selectedModel.value)  body.model  = selectedModel.value;
+  if (selectedEffort.value) body.effort = selectedEffort.value;
+  if (selectedBase.value)   body.base   = selectedBase.value;
+  try {
+    const res = await fetch(`/api/projects/${projectId.value}/plan/answers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error?.message || 'Failed');
+    }
+  } catch (e) {
+    genError.value = e.message;
+    generating.value = false;
+  }
+}
+
+function cancelQuestions() {
+  showQuestionForm.value = false;
+  pendingQuestions.value = null;
+  generating.value = false;
+  showNewPlanForm.value = true; // let the user edit the request and try again
 }
 
 async function submitRevise() {
@@ -783,6 +902,19 @@ onMounted(async () => {
     loadPlans();
   });
 
+  socket.on('plan.questions', ({ project_id, goal_analysis, questions }) => {
+    if (project_id !== projectId.value) return;
+    Object.keys(answerDraft).forEach(k => delete answerDraft[k]);
+    for (const q of (questions || [])) {
+      if (q.type === 'multi_choice') answerDraft[q.id] = { choices: [], freetext: '', useFreetext: false };
+      else if (q.type === 'single_choice') answerDraft[q.id] = { choice: (q.options && q.options[0] ? q.options[0].value : ''), freetext: '' };
+      else answerDraft[q.id] = { freetext: '' };
+    }
+    pendingQuestions.value = { goal_analysis: goal_analysis || '', questions: questions || [] };
+    showQuestionForm.value = true;
+    generating.value = false;
+  });
+
   socket.on('process.log', ({ project_id, line }) => {
     if (project_id !== projectId.value) return;
     if (generating.value || approving.value || revising.value) {
@@ -801,6 +933,9 @@ onMounted(async () => {
     if (wasApproving && code !== 0) {
       genError.value = 'Approve failed — no new tasks were created. Re-run "Approve & Decompose".';
     }
+    // When the agent surfaced questions (Pass A), keep the description and the
+    // question form — generation isn't done; we're waiting for the user's answers.
+    if (pendingQuestions.value) return;
     if (wasGenerating || wasRevising || wasApproving) {
       description.value = '';
       if (wasGenerating) selectedPlan.value = null; // select the newly-created newest draft
@@ -1061,4 +1196,20 @@ onUnmounted(() => {
   color: var(--jg-text); font-family: var(--font-mono); font-size: 12px; outline: none;
 }
 .tool-modal-input:focus { border-color: var(--jg-green); }
+
+/* Clarifying questions form (feature: plan ask) */
+.qa-body { display: flex; flex-direction: column; gap: 16px; max-height: 60vh; overflow-y: auto; }
+.qa-goal { margin: 0; font-size: 13px; color: var(--jg-text-dim); }
+.qa-question { display: flex; flex-direction: column; gap: 4px; }
+.qa-q-title { font-weight: 600; font-size: 13px; color: var(--jg-text); }
+.qa-q-why { font-size: 12px; color: var(--jg-text-dim); margin-bottom: 4px; }
+.qa-opt { display: flex; align-items: baseline; gap: 6px; font-size: 13px; cursor: pointer; padding: 2px 0; }
+.qa-opt-label { color: var(--jg-text); }
+.qa-opt-why { color: var(--jg-text-dim); font-size: 12px; }
+.qa-input, .qa-textarea {
+  width: 100%; padding: 6px 8px; border-radius: 6px; margin-top: 4px;
+  background: var(--jg-bg); border: 1px solid var(--jg-border);
+  color: var(--jg-text); font-family: var(--font-mono); font-size: 12px; outline: none;
+}
+.qa-input:focus, .qa-textarea:focus { border-color: var(--jg-green); }
 </style>
