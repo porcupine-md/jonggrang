@@ -144,9 +144,11 @@ pretty when TTY — exactly like `taskImport` (`bin/jonggrang.js:3160-3165`).
 - Parse JSON; reject with a clear message on parse error (like `taskImport`
   `bin/jonggrang.js:3150-3156`).
 - `questions` non-empty; cap at **6** (avoid an interrogation; log if truncated).
-- Each question: `question` required; `type` ∈ {single_choice, multi_choice, text}
-  else coerced to `text`; choice types need ≥2 `options` each with `value`+`label`
-  (`rationale` optional → rendered as hint).
+- Each question: `question` required; `type` ∈ {single_choice, multi_choice, text}.
+  An **omitted** `type` defaults to `text`; an **explicit unsupported** `type` (e.g. a
+  typo like `single-choice`) is **rejected with a clear error** — not silently coerced —
+  so the agent fixes its call instead of shipping a broken UX/contract. Choice types
+  need ≥2 `options` each with `value`+`label` (`rationale` optional → rendered as hint).
 - Auto-assign missing `id`s.
 - Empty/zero questions is an **error** for `plan ask` (the agent shouldn't call it
   with nothing) — distinct from "agent chose not to ask", which means it never

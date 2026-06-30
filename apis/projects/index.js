@@ -76,31 +76,51 @@ module.exports = function register(app, io, ctx) {
     function wireProjectProcess(projectId, child, command) {
         io.to(`project:${projectId}`).emit('process.started', { project_id: projectId, command, pid: child.pid });
         let seq = 0;
-        const logLine = (stream) => (data) => {
-            const lines = data.toString().split(/\r?\n/).filter(l => l.trim());
-            for (const line of lines) {
-                io.to(`project:${projectId}`).emit('process.log', { project_id: projectId, stream, line, raw: line, seq: seq++ });
-                // The planning agent surfaces clarifying questions via a JSON signal
-                // line (`{"type":"plan_questions",...}`). Relay the stored questions
-                // to the client so it can render an answer form.
-                if (stream === 'stdout' && line.includes('"plan_questions"')) {
-                    try {
-                        const sig = JSON.parse(line.trim());
-                        if (sig && sig.type === 'plan_questions') {
-                            const project = webState.getProject(projectId);
-                            const qPath = project && path.join(project.path, '.jonggrang', 'plan-questions.json');
-                            if (qPath && fs.existsSync(qPath)) {
-                                const questions = JSON.parse(fs.readFileSync(qPath, 'utf-8'));
-                                io.to(`project:${projectId}`).emit('plan.questions', { project_id: projectId, ...questions });
-                            }
-                        }
-                    } catch { /* not a signal line — ignore */ }
-                }
+        // Read the stored clarifying questions and relay them to the client so it
+        // can render an answer form (feature: plan ask).
+        const emitPlanQuestions = () => {
+            const project = webState.getProject(projectId);
+            const qPath = project && path.join(project.path, '.jonggrang', 'plan-questions.json');
+            if (!qPath || !fs.existsSync(qPath)) return;
+            try {
+                const questions = JSON.parse(fs.readFileSync(qPath, 'utf-8'));
+                io.to(`project:${projectId}`).emit('plan.questions', { project_id: projectId, ...questions });
+            } catch { /* unreadable store — ignore */ }
+        };
+
+        const handleLine = (stream, line) => {
+            if (!line.trim()) return;
+            io.to(`project:${projectId}`).emit('process.log', { project_id: projectId, stream, line, raw: line, seq: seq++ });
+            // The planning agent surfaces clarifying questions via a JSON signal
+            // line (`{"type":"plan_questions",...}`). Parse the *complete* line.
+            if (stream === 'stdout' && line.includes('"plan_questions"')) {
+                try {
+                    const sig = JSON.parse(line.trim());
+                    if (sig && sig.type === 'plan_questions') emitPlanQuestions();
+                } catch { /* not a signal line — ignore */ }
             }
         };
-        child.stdout.on('data', logLine('stdout'));
-        child.stderr.on('data', logLine('stderr'));
+
+        // `stdout`/`stderr` 'data' events do NOT guarantee whole lines — a JSON
+        // signal line can be split across chunks. Buffer per stream and only
+        // handle a line once its terminating newline has arrived.
+        const buffers = { stdout: '', stderr: '' };
+        const onData = (stream) => (data) => {
+            buffers[stream] += data.toString();
+            let nl;
+            while ((nl = buffers[stream].indexOf('\n')) !== -1) {
+                const line = buffers[stream].slice(0, nl).replace(/\r$/, '');
+                buffers[stream] = buffers[stream].slice(nl + 1);
+                handleLine(stream, line);
+            }
+        };
+        child.stdout.on('data', onData('stdout'));
+        child.stderr.on('data', onData('stderr'));
         child.on('close', (code, signal) => {
+            // Flush any trailing partial line (output not terminated by a newline).
+            for (const stream of ['stdout', 'stderr']) {
+                if (buffers[stream]) { handleLine(stream, buffers[stream].replace(/\r$/, '')); buffers[stream] = ''; }
+            }
             io.to(`project:${projectId}`).emit('process.exited', { project_id: projectId, code, signal });
             try {
                 const project = webState.getProject(projectId);

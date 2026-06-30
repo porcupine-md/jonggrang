@@ -1434,6 +1434,10 @@ async function cmdPlan(args, opts = {}) {
   // guessing. We collect the user's answers and feed them into generation (Pass B).
   let clarifications = '';
   {
+    // Fresh plan run: drop any stale answers from a previous plan so they can't
+    // leak into this run (--no-ask / no-questions cases) or a later `--revise`.
+    // Pass B (--answers/-inline) re-saves the current run's answers below.
+    lib.clearPlanAnswers(ANSWERS_FILE);
     let answers = loadPreAnswers(answersInput, answersInline); // web/scripts: Pass B directly
     if (!answers && !noAsk && !autoApprove) {
       lib.clearPlanQuestions(QUESTIONS_FILE);
