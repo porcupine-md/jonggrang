@@ -124,7 +124,10 @@ module.exports = function register(app, io, ctx) {
                 try {
                     const allTasks = lib.getAllTasks(project.path);
                     io.to(`project:${project.id}`).emit('tasks.update', { project_id: project.id, tasks: allTasks.tasks || [] });
-                } catch {}
+                } catch {
+                    console.log('Error reading tasks', project.path);
+                }
+                
                 if (changedPath && changedPath.endsWith('MANIFEST.yaml')) {
                     try {
                         const manifest = orchestration.readManifest(changedPath);
@@ -168,6 +171,7 @@ module.exports = function register(app, io, ctx) {
                 const state = webState.deriveState(project.path);
                 const sid = lib.resolveActiveDraft(project.path);
                 const planPath = sid ? lib.draftFileFor(project.path, sid) : '';
+                // Tasks are per-feature under .output/features/<id>/; merge via getAllTasks.
                 let tasks = [];
                 try { tasks = lib.getAllTasks(project.path).tasks || []; } catch {}
                 let planContent = null;

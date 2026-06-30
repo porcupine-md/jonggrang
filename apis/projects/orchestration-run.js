@@ -539,16 +539,25 @@ module.exports = function(deps) {
             path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml'), 'syncManifest');
     }
     function syncProgress(project, ctx, group) {
-        mirrorFromWorktree(project, ctx, group, path.join('.jonggrang', 'progress.txt'), 'syncProgress');
+        mirrorFromWorktree(project, ctx, group,
+            path.join('.jonggrang', '.output', 'features', group.featureId, 'progress.txt'), 'syncProgress');
+    }
+    // Mirror the worktree's per-feature task board back to main. The host-side
+    // applySignal write fails under sandbox (main tasks.json is root-owned by the
+    // in-container approve → host EACCES), so mirror the file via the container.
+    function syncTasks(project, ctx, group) {
+        mirrorFromWorktree(project, ctx, group,
+            path.join('.jonggrang', '.output', 'features', group.featureId, 'jonggrang-tasks.json'), 'syncTasks');
     }
 
     function wireWorker(project, ctx, run, group) {
         const child = group.child;
         group.pid = child.pid;
-        // Live-mirror the worktree manifest + progress log → main project while the worker runs.
+        // Live-mirror the worktree manifest + progress log + task board → main while the worker runs.
         group.manifestSync = setInterval(() => {
             syncManifest(project, ctx, group);
             syncProgress(project, ctx, group);
+            syncTasks(project, ctx, group);
         }, 1500);
         let buf = '';
         const onData = (stream) => (data) => {
@@ -580,6 +589,7 @@ module.exports = function(deps) {
             if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
             syncManifest(project, ctx, group); // final state (e.g. completed) → main project
             syncProgress(project, ctx, group); // final progress log → main project
+            syncTasks(project, ctx, group);    // final task board → main project
             if (code === 0) {
                 try {
                     group.committed = commitWorktreeCtx(ctx, group.worktreePath, `feat(${group.featureId}): ${group.title}`);
