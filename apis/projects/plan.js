@@ -49,6 +49,26 @@ module.exports = function(deps) {
         return firstLine.replace(/^#+\s*/, '').trim() || 'Untitled Plan';
     }
 
+    function migrateLegacyDraft(project) {
+        try { return lib.migrateLegacyPlanDraft(project.path); } catch { return null; }
+    }
+
+    function requestedSession(req) {
+        return (req.body && (req.body.sessionId || req.body.session))
+            || (req.query && (req.query.sessionId || req.query.session))
+            || '';
+    }
+
+    function resolveDraft(project, sessionId = '') {
+        migrateLegacyDraft(project);
+        const drafts = lib.getAllDrafts(project.path);
+        const draft = sessionId
+            ? drafts.find(d => d.sessionId === sessionId)
+            : drafts[0];
+        if (!draft) return null;
+        return { sessionId: draft.sessionId, planPath: draft.planPath };
+    }
+
     // GET /api/projects/:id/plans — list of all plans (draft + archived)
     router.get('/:id/plans', (req, res) => {
         const project = webState.getProject(req.params.id);
@@ -56,14 +76,22 @@ module.exports = function(deps) {
 
         const plans = [];
         const jonggrangDir = path.join(project.path, '.jonggrang');
+        migrateLegacyDraft(project);
 
-        // 1. Active draft plan
-        const draftPath = path.join(jonggrangDir, 'plan.md');
-        if (fs.existsSync(draftPath)) {
+        // 1. Pending draft sessions from .drafts/<session>/plan.md
+        for (const draft of lib.getAllDrafts(project.path)) {
             try {
-                const content = fs.readFileSync(draftPath, 'utf-8');
-                const mtime = fs.statSync(draftPath).mtimeMs;
-                plans.push({ id: 'draft', title: extractPlanTitle(content), status: 'draft', mtime, content, source_issue: parseSourceIssue(content) });
+                const content = fs.readFileSync(draft.planPath, 'utf-8');
+                const mtime = fs.statSync(draft.planPath).mtimeMs;
+                plans.push({
+                    id: draft.sessionId,
+                    sessionId: draft.sessionId,
+                    title: extractPlanTitle(content),
+                    status: 'draft',
+                    mtime,
+                    content,
+                    source_issue: parseSourceIssue(content),
+                });
             } catch {}
         }
 
@@ -81,12 +109,9 @@ module.exports = function(deps) {
             // which advances task status but NOT the MANIFEST phase machine.
             let tasksByFeature = {};
             try {
-                const tasksPath = path.join(jonggrangDir, 'jonggrang-tasks.json');
-                if (fs.existsSync(tasksPath)) {
-                    const all = JSON.parse(fs.readFileSync(tasksPath, 'utf-8')).tasks || [];
-                    for (const t of all) {
-                        (tasksByFeature[t.feature_id] = tasksByFeature[t.feature_id] || []).push(t.status);
-                    }
+                const allTasks = lib.getAllTasks(project.path);
+                for (const t of allTasks.tasks || []) {
+                    (tasksByFeature[t.feature_id] = tasksByFeature[t.feature_id] || []).push(t.status);
                 }
             } catch {}
 
@@ -157,7 +182,10 @@ module.exports = function(deps) {
         const { instruction } = req.body || {};
         if (!instruction) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'instruction required' } });
 
-        const args = ['plan', '--revise', instruction];
+        const draft = resolveDraft(project, requestedSession(req));
+        if (!draft) return res.status(422).json({ error: { code: 'PLAN_NOT_FOUND', message: 'No draft plan found. Generate a plan first.' } });
+
+        const args = ['plan', '--revise', instruction, '--session', draft.sessionId];
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan-revise');
         res.status(202).json({ job_id: project.id });
@@ -167,13 +195,13 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        // 1. Active draft plan
-        const planPath = path.join(project.path, '.jonggrang', 'plan.md');
-        if (fs.existsSync(planPath)) {
+        // 1. Active (or requested) draft session
+        const draft = resolveDraft(project, requestedSession(req));
+        if (draft) {
             try {
-                const content = fs.readFileSync(planPath, 'utf-8');
-                const mtime = fs.statSync(planPath).mtimeMs;
-                return res.json({ exists: true, state: 'draft', content, mtime });
+                const content = fs.readFileSync(draft.planPath, 'utf-8');
+                const mtime = fs.statSync(draft.planPath).mtimeMs;
+                return res.json({ exists: true, state: 'draft', sessionId: draft.sessionId, content, mtime });
             } catch (err) {
                 return res.status(500).json({ error: err.message });
             }
@@ -273,7 +301,9 @@ module.exports = function(deps) {
         const { content, mtime } = req.body || {};
         if (content === undefined) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'content required' } });
 
-        const planPath = path.join(project.path, '.jonggrang', 'plan.md');
+        const draft = resolveDraft(project, requestedSession(req));
+        if (!draft) return res.status(422).json({ error: { code: 'PLAN_NOT_FOUND', message: 'No draft plan found. Generate a plan first.' } });
+        const planPath = draft.planPath;
 
         if (mtime && fs.existsSync(planPath)) {
             const currentMtime = fs.statSync(planPath).mtimeMs;
@@ -286,7 +316,7 @@ module.exports = function(deps) {
             fs.mkdirSync(path.dirname(planPath), { recursive: true });
             fs.writeFileSync(planPath, content, 'utf-8');
             const newMtime = fs.statSync(planPath).mtimeMs;
-            res.json({ mtime: newMtime });
+            res.json({ sessionId: draft.sessionId, mtime: newMtime });
         } catch (err) {
             res.status(500).json({ error: err.message });
         }
@@ -296,9 +326,9 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const planPath = path.join(project.path, '.jonggrang', 'plan.md');
+        const draft = resolveDraft(project, requestedSession(req));
         try {
-            if (fs.existsSync(planPath)) fs.unlinkSync(planPath);
+            if (draft) fs.rmSync(lib.draftDirFor(project.path, draft.sessionId), { recursive: true, force: true });
             res.status(204).send();
         } catch (err) {
             res.status(500).json({ error: err.message });

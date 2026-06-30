@@ -85,6 +85,7 @@
             <div class="plan-item-title">{{ plan.title }}</div>
             <div class="plan-item-badges">
               <span class="plan-badge" :class="`plan-badge--${plan.status}`">{{ plan.status }}</span>
+              <span v-if="plan.status === 'draft' && plan.mtime" class="plan-age">{{ relativeTime(plan.mtime) }}</span>
               <span
                 v-if="runBadgeOf(plan)"
                 class="plan-badge"
@@ -274,7 +275,7 @@
             <span class="plan-viewer-title">{{ selectedPlan.title }}</span>
             <span class="plan-badge" :class="`plan-badge--${selectedPlan.status}`">{{ selectedPlan.status }}</span>
             <RouterLink
-              v-if="selectedPlan.id !== 'draft'"
+              v-if="selectedPlan.status !== 'draft'"
               :to="`/projects/${projectId}/plans/${selectedPlan.id}/pipeline`"
               style="margin-left:auto"
             >
@@ -335,7 +336,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import Button from 'primevue/button';
 import Textarea from 'primevue/textarea';
@@ -343,7 +344,6 @@ import Select from 'primevue/select';
 import Dialog from 'primevue/dialog';
 import { marked } from 'marked';
 import { useLogTerminal } from '../../composables/useLogTerminal.js';
-import { useProjectsStore } from '../../stores/projects.js';
 import { useWsStore } from '../../stores/ws.js';
 import { useOrchestrationStore } from '../../stores/orchestration.js';
 import { usePickupStore } from '../../stores/pickup.js';
@@ -351,7 +351,6 @@ import ProviderIcon from '../ProviderIcon.vue';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
-const projects = useProjectsStore();
 const ws = useWsStore();
 const orch = useOrchestrationStore();
 const pickup = usePickupStore();
@@ -368,12 +367,11 @@ function applyPickupPrefill() {
   showNewPlanForm.value = true;
 }
 
-const project = computed(() => projects.byId[projectId.value]);
-const state = computed(() => project.value?.derived_state?.state || 'idle');
-
 // Plan list
 const plans = ref([]);
 const selectedPlan = ref(null);
+const nowMs = ref(Date.now());
+let relativeTimer = null;
 
 // Form state
 const description = ref('');
@@ -442,19 +440,30 @@ const isIdle = computed(() =>
   plans.value.length === 0 && !generating.value && !showNewPlanForm.value
 );
 
-const canAddNewPlan = computed(() => {
-  if (['tasks_pending', 'working', 'done'].includes(state.value)) return true;
-  return plans.value.length > 0 && plans.value.every(p => p.status === 'done');
-});
+const canAddNewPlan = computed(() => true);
 
 // Run badge per plan: live orchestration store first, API snapshot as fallback.
 // Only surface states the plan status badge doesn't already cover.
 function runBadgeOf(plan) {
-  if (plan.id === 'draft') return null;
+  if (plan.status === 'draft') return null;
   const s = orch.groups[plan.id]?.status || plan.run_status;
   if (s === 'running' || s === 'queued') return 'live';
   if (s === 'failed' && plan.status !== 'failed') return 'failed';
   return null;
+}
+
+function relativeTime(ms) {
+  const delta = Math.max(0, nowMs.value - ms);
+  const sec = Math.floor(delta / 1000);
+  if (sec < 45) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hr ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day} day${day === 1 ? '' : 's'} ago`;
+  const month = Math.floor(day / 30);
+  return `${month} mo ago`;
 }
 
 // Base branch push (plans/tasks state → main)
@@ -543,6 +552,7 @@ function selectPlan(plan) {
   selectedPlan.value = plan;
   if (plan.status === 'draft') {
     planContent.value = plan.content || '';
+    planMtime.value = plan.mtime || null;
     dirty.value = false;
   }
   showNewPlanForm.value = false;
@@ -641,7 +651,7 @@ async function submitRevise() {
     const res = await fetch(`/api/projects/${projectId.value}/plan/revise`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instruction: reviseInstruction.value }),
+      body: JSON.stringify({ instruction: reviseInstruction.value, sessionId: selectedPlan.value?.sessionId || selectedPlan.value?.id }),
     });
     if (!res.ok) {
       const err = await res.json();
@@ -666,7 +676,7 @@ async function sendChat() {
     const res = await fetch(`/api/projects/${projectId.value}/plan/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, history }),
+      body: JSON.stringify({ message: msg, history, sessionId: selectedPlan.value?.sessionId || selectedPlan.value?.id }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || 'Chat failed');
@@ -691,7 +701,7 @@ async function savePlan() {
   const res = await fetch(`/api/projects/${projectId.value}/plan`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, mtime: planMtime.value }),
+    body: JSON.stringify({ content, mtime: planMtime.value, sessionId: selectedPlan.value?.sessionId || selectedPlan.value?.id }),
   });
   if (res.ok) {
     const d = await res.json();
@@ -702,7 +712,8 @@ async function savePlan() {
 
 async function discardPlan() {
   if (!confirm('Discard this plan?')) return;
-  await fetch(`/api/projects/${projectId.value}/plan`, { method: 'DELETE' });
+  const sessionId = encodeURIComponent(selectedPlan.value?.sessionId || selectedPlan.value?.id || '');
+  await fetch(`/api/projects/${projectId.value}/plan?session=${sessionId}`, { method: 'DELETE' });
   selectedPlan.value = null;
   planContent.value = '';
   dirty.value = false;
@@ -713,7 +724,11 @@ async function approvePlan() {
   if (dirty.value) await savePlan();
   genLog.value = '';
   approving.value = true;
-  const res = await fetch(`/api/projects/${projectId.value}/approve`, { method: 'POST' });
+  const res = await fetch(`/api/projects/${projectId.value}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId: selectedPlan.value?.sessionId || selectedPlan.value?.id }),
+  });
   if (!res.ok) {
     const err = await res.json();
     genError.value = err.error?.message || 'Approve failed';
@@ -726,6 +741,7 @@ watch(projectId, loadProjectTool);
 
 // WebSocket events
 onMounted(async () => {
+  relativeTimer = setInterval(() => { nowMs.value = Date.now(); }, 60_000);
   await loadPlans();
   await loadProjectTool();
   loadBase();
@@ -745,19 +761,25 @@ onMounted(async () => {
   const socket = ws.socket;
   if (!socket) return;
 
-  socket.on('plan.content', ({ project_id, content, mtime }) => {
+  socket.on('plan.content', ({ project_id, sessionId, content, mtime }) => {
     if (project_id !== projectId.value) return;
-    planContent.value = content;
-    planMtime.value = mtime;
-    // Reload plan list to reflect status changes
+    const selectedSession = selectedPlan.value?.sessionId || selectedPlan.value?.id;
+    if (!selectedSession || selectedSession === sessionId) {
+      planContent.value = content;
+      planMtime.value = mtime;
+    }
+    // Reload plan list to reflect new draft sessions and status changes
     loadPlans();
   });
 
-  socket.on('plan.deleted', ({ project_id }) => {
+  socket.on('plan.deleted', ({ project_id, sessionId }) => {
     if (project_id !== projectId.value) return;
-    planContent.value = '';
-    planMtime.value = null;
-    dirty.value = false;
+    const selectedSession = selectedPlan.value?.sessionId || selectedPlan.value?.id;
+    if (!sessionId || selectedSession === sessionId) {
+      planContent.value = '';
+      planMtime.value = null;
+      dirty.value = false;
+    }
     loadPlans();
   });
 
@@ -781,12 +803,17 @@ onMounted(async () => {
     }
     if (wasGenerating || wasRevising || wasApproving) {
       description.value = '';
+      if (wasGenerating) selectedPlan.value = null; // select the newly-created newest draft
       loadPlans();
     }
   });
 });
 
 watch(projectId, loadPlans);
+
+onUnmounted(() => {
+  if (relativeTimer) clearInterval(relativeTimer);
+});
 </script>
 
 <style scoped>
@@ -847,6 +874,7 @@ watch(projectId, loadPlans);
 /* Status badges */
 .plan-item-badges { display: flex; align-items: center; gap: 4px; }
 .plan-badge { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; padding: 1px 5px; }
+.plan-age { font-size: 9px; color: var(--jg-text-faint); }
 .plan-badge--run-live { background: color-mix(in oklch, var(--jg-green) 20%, transparent); color: var(--jg-green); animation: livePulse 1.2s infinite; }
 .plan-badge--run-failed { background: color-mix(in oklch, var(--jg-red) 15%, transparent); color: var(--jg-red); }
 .src-issue-link { display: inline-flex; align-items: center; gap: 2px; font-size: 9px; color: var(--jg-text-faint); text-decoration: none; }
