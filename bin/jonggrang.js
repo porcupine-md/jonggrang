@@ -2068,7 +2068,7 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
         phaseUnits = [{ core: plan.prompt, label: null }];
       }
     } else {
-      phaseUnits = [{ core: orchestration.buildPhaseContext(manifest, phaseNum), label: null }];
+      phaseUnits = [{ core: orchestration.buildPhaseContext(manifest, phaseNum, PROJECT_ROOT), label: null }];
     }
 
     const agentsContent = lib.fileExists(paths.agentsFile)
@@ -3525,6 +3525,99 @@ Examples:
 }
 
 // ============================================================
+// CODEMAP — deterministic codebase overview (mirrors pi-compass)
+// ============================================================
+
+function cmdCodemap(args) {
+  const flags = { refresh: false, json: false, stats: false, hash: false, path: false };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--refresh' || a === '-r') flags.refresh = true;
+    else if (a === '--json') flags.json = true;
+    else if (a === '--stats') flags.stats = true;
+    else if (a === '--hash') flags.hash = true;
+    else if (a === '--path') flags.path = true;
+    else if (a === '--help' || a === '-h' || a === 'help') { cmdCodemapHelp(); return; }
+  }
+
+  const projectRoot = PROJECT_ROOT;
+  const codemap = require('../lib/codemap');
+  const cachePath = codemap.getCachePath(projectRoot);
+
+  try {
+    if (flags.path) {
+      console.log(cachePath);
+      return;
+    }
+    if (flags.hash) {
+      console.log(codemap.computeContentHash(projectRoot));
+      return;
+    }
+
+    const { codemap: cm, fromCache, stale } = codemap.getOrGenerateCodemap(projectRoot, { force: flags.refresh });
+
+    if (flags.json) {
+      console.log(JSON.stringify({ fromCache, stale, cachePath, codemap: cm }, null, 2));
+      return;
+    }
+
+    if (flags.stats) {
+      console.log(`\n${BOLD}Codemap Stats${NC}\n`);
+      console.log(`  Project:        ${cm.project.name}${cm.project.version ? ` v${cm.project.version}` : ''}`);
+      console.log(`  Generated:      ${cm.generatedAt}`);
+      console.log(`  Content hash:   ${cm.contentHash}`);
+      console.log(`  From cache:     ${fromCache ? 'yes' : 'no (regenerated)'}${stale ? ' — STALE' : ''}`);
+      console.log(`  Cache file:     ${cachePath}`);
+      console.log(`  Packages:       ${cm.packages.length}`);
+      console.log(`  Frameworks:     ${cm.frameworks.length} (${cm.frameworks.map(f => f.id).join(', ') || '—'})`);
+      console.log(`  Entry points:   ${cm.entryPoints.length}`);
+      console.log(`  Build scripts:  ${cm.buildScripts.length}`);
+      console.log(`  Conventions:    ${cm.conventions.length}`);
+      console.log(`  Key files:      ${cm.keyFiles.length}`);
+      console.log(`  Dir entries:    ${cm.directoryTree.length}`);
+      console.log('');
+      return;
+    }
+
+    // Default: print markdown
+    console.log(codemap.formatCodemapMarkdown(cm));
+    if (stale) {
+      console.log(`\n${YELLOW}⚠️  Codemap is stale. Run \`jonggrang codemap --refresh\` to update.${NC}`);
+    } else if (fromCache) {
+      console.log(`\n${DIM}(served from cache: ${cachePath})${NC}`);
+    }
+  } catch (err) {
+    logError(err.message);
+    process.exit(1);
+  }
+}
+
+function cmdCodemapHelp() {
+  console.log(`jonggrang codemap — deterministic codebase overview (mirrors pi-compass)
+
+Usage: jonggrang codemap [options]
+
+Generates a deterministic, LLM-free codebase map and caches it at
+.jonggrang/codemap/codemap.json. The map is reused across all agent prompts
+so fresh-context agents get a fast, consistent orientation of the project.
+
+Options:
+  (none)                 Print the codemap as markdown (cache-aware)
+  --refresh, -r          Force regeneration (ignore cache)
+  --json                 Machine-readable JSON output
+  --stats                Show summary statistics only
+  --hash                 Print the current content hash
+  --path                 Print the cache file path
+
+Examples:
+  jonggrang codemap                    # show markdown (uses cache if fresh)
+  jonggrang codemap --refresh          # rebuild cache from scratch
+  jonggrang codemap --stats            # one-line summary
+  jonggrang codemap --json | jq '.frameworks'
+`);
+}
+
+// ============================================================
 // HELP
 // ============================================================
 
@@ -3548,6 +3641,7 @@ Commands:
   review                  Run code review
   task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
   manifest [sub]          Inspect output-file manifests (list, show, add)
+  codemap [opts]          Show/refresh deterministic codebase map (LLM-free)
   agent                   Start interactive chat with the AI agent (Pi TUI)
   login                   Add provider credentials (OAuth subscription or API key)
   logout                  Remove provider credentials
@@ -3620,7 +3714,9 @@ Examples:
   jonggrang status                          # pipeline + task board
   jonggrang web                             # visual dashboard
   jonggrang bot-reviewer settings           # configure GitLab token + repos
-  jonggrang bot-reviewer gitlab             # start MR review bot`);
+  jonggrang bot-reviewer gitlab             # start MR review bot
+  jonggrang codemap                         # show project structure (cache-aware)
+  jonggrang codemap --refresh               # force regen of .jonggrang/codemap/codemap.json`);
 }
 
 // ============================================================
@@ -3733,6 +3829,11 @@ async function main() {
 
   if (command === 'manifest') {
     cmdManifest(rest);
+    return;
+  }
+
+  if (command === 'codemap') {
+    cmdCodemap(rest);
     return;
   }
 
