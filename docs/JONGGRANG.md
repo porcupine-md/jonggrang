@@ -392,6 +392,30 @@ See [SKILLS.md](./SKILLS.md) for full documentation.
 
 ---
 
+## Codemap (LLM-free Project Context)
+
+Every fresh-context agent receives a deterministic codebase map at the top of its prompt under `## Project Context (codemap)`. The codemap is built by `lib/codemap.js`, cached at `.jonggrang/codemap/codemap.json`, and invalidated by a SHA-256 content hash.
+
+**Surface area:**
+
+- All `build*Prompt()` functions in `lib/jonggrang.js` (work, plan, approve, deep-plan, review, bugs, …).
+- All orchestration phases via `orchestration.buildPhaseContext()` (heavier on phase 3 codebase-discovery and phase 8 implementation; skipped for phase 9 simplify which already gets a per-file diff).
+- The Pi TUI session via `hooks/pi/jonggrang-extension.ts` — `before_agent_start` prepends the codemap to the system prompt on the first turn only (mirrors pi-compass).
+
+**What it contains:** project name + version, packages, detected frameworks, entry points, npm/Make scripts, test framework, conventions (TypeScript, ESLint, Prettier, Docker, CI), key files (AGENTS.md, CLAUDE.md, README, …), and a depth-limited directory tree — truncated to ~3000–4500 chars per prompt.
+
+**CLI:**
+
+```bash
+jonggrang codemap                 # print markdown (cache-aware)
+jonggrang codemap --refresh       # force regen
+jonggrang codemap --stats         # one-line summary
+```
+
+The codemap is **mandatory-soft**: the prompt builder falls back to the legacy `## Project Config` + "read AGENTS.md" approach if the codemap module is unavailable, so the pipeline never breaks because of codemap.
+
+---
+
 ## Deterministic Hooks
 
 While skills provide guidance, **hooks provide enforcement**. They run outside the LLM's context and cannot be bypassed.
