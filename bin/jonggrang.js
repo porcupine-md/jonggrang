@@ -44,7 +44,7 @@ const PROJECT_ROOT = process.cwd();
 const paths = lib.getProjectPaths(PROJECT_ROOT);
 const CONFIG_FILE   = process.env.JONGGRANG_CONFIG || paths.configFile;
 const TASKS_FILE    = paths.tasksFile;
-const PLAN_FILE     = paths.planFile;
+const LEGACY_PLAN_FILE = paths.legacyPlanFile;
 const PROGRESS_FILE = paths.progressFile;
 const AGENTS_FILE   = paths.agentsFile;
 const SKILLS_DIR    = paths.skillsDir;
@@ -68,10 +68,18 @@ let WEB_HOST = process.env.JONGGRANG_WEB_HOST || '127.0.0.1';
 let WORKTREE_MODE = false;
 let GROUP_TASK_IDS = [];
 let ORCHESTRATE_RESUME = false;
+// Explicit feature target for `jonggrang work --feature <id>`. When set,
+// cmdWork targets this feature instead of the most-recent-incomplete heuristic.
+let WORK_FEATURE_ID = null;
 let ORCHESTRATE_ROLE = '';
 let SKIP_GATES = false;
 let MODEL = process.env.JONGGRANG_MODEL || '';
 let EFFORT = process.env.JONGGRANG_EFFORT || '';
+
+// Per-feature tasks file for the active work loop. Set when workFeatureId resolves
+// at the start of cmdWork. Used by updateTaskMode/runIteration/progress counts.
+// Null until cmdWork resolves it; task-id commands use their own resolveTasksFile().
+let WORK_TASKS_FILE = null;
 
 // Init options
 let INIT_NAME = '';
@@ -98,6 +106,10 @@ const CYAN = '\x1b[0;36m';
 const NC = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
+
+// ANSI color for a task status string. Used by cmdStatus and the task subcommands.
+const STATUS_COLORS = { completed: GREEN, in_progress: YELLOW, blocked: RED };
+function statusColor(status) { return STATUS_COLORS[status] || NC; }
 
 // ============================================================
 // LOGGING HELPERS
@@ -272,16 +284,121 @@ function emitSignal(type, data) {
   console.log(JSON.stringify({ type, ...data }));
 }
 
-// In worktree mode emit a JSON signal; otherwise write directly to tasks file
-function updateTaskMode(taskId, status) {
-  if (WORKTREE_MODE) {
+// In worktree mode emit a JSON signal; otherwise write directly to the active feature's tasks file
+function updateTaskMode(tasksFile, taskId, status, worktreeMode = false) {
+  if (worktreeMode) {
     emitSignal('task_status', { taskId, status });
   } else {
-    lib.updateTaskStatus(TASKS_FILE, taskId, status);
+    lib.updateTaskStatus(tasksFile, taskId, status);
   }
 }
 
 const TEST_RETRY_LIMIT = 3;
+
+/**
+ * Run the work loop for a given tasks file.
+ * Executes tasks one by one until done, max iterations reached, or blocked.
+ * Does NOT handle post-work phases — caller is responsible for that.
+ * Does NOT mark MANIFEST phase 8 complete — caller is responsible for that.
+ */
+async function runWorkLoop(tasksFile, options) {
+  const {
+    maxIterations = 0,
+    taskQueue: initialTaskQueue = [],
+    groupTaskIds = [],
+    targetTaskId = '',
+    worktreeMode = false,
+    dryRun = false,
+  } = options;
+
+  let taskQueue = [...initialTaskQueue];
+
+  // If a single target task was specified, resolve its dependency queue
+  if (targetTaskId && !worktreeMode) {
+    taskQueue = lib.getTaskQueue(tasksFile, targetTaskId);
+    if (taskQueue.length > 1) {
+      logInfo(`Task ${targetTaskId} has ${taskQueue.length - 1} pending dependencies — will process them first`);
+    }
+    taskQueue.forEach((id, i) => {
+      const t = lib.getTask(tasksFile, id);
+      const label = id === targetTaskId ? '(target)' : `(dep ${i + 1})`;
+      lib.updateTaskStatus(tasksFile, id, 'waiting');
+      logInfo(`  ${i + 1}. ${id}: ${t ? t.title : '?'} ${label}`);
+    });
+  }
+
+  let iteration = 0;
+  let consecutiveFails = 0;
+  let lastFailedTask = '';
+  const killAfter = parseInt(lib.readConfig(CONFIG_FILE, 'work.kill_after_fails', '3'), 10);
+
+  while (maxIterations === 0 || iteration < maxIterations) {
+    iteration++;
+
+    let taskId;
+    if (taskQueue.length > 0) {
+      taskId = taskQueue.shift();
+    } else if (groupTaskIds.length > 0) {
+      // Group/worktree mode: only ever run the assigned tasks. Do NOT fall back
+      // to getNextTask, which would pick up other plans' tasks from this
+      // worktree's tasks.json copy and break per-plan isolation.
+      taskId = null;
+    } else {
+      taskId = lib.getNextTask(tasksFile);
+    }
+
+    if (!taskId) {
+      logSuccess('All tasks completed!');
+      logInfo(`Completed: ${lib.countCompleted(tasksFile)} / ${lib.countTotal(tasksFile)}`);
+      console.log('');
+      return { completed: true, reason: 'all_done', stats: { completed: lib.countCompleted(tasksFile), total: lib.countTotal(tasksFile) } };
+    }
+
+    const success = await runIteration(tasksFile, iteration, taskId, MODE, dryRun, worktreeMode);
+
+    if (success) {
+      consecutiveFails = 0;
+      lastFailedTask = '';
+    } else {
+      if (lastFailedTask === taskId) {
+        consecutiveFails++;
+      } else {
+        consecutiveFails = 1;
+        lastFailedTask = taskId;
+      }
+
+      if (consecutiveFails >= killAfter) {
+        logError(`Task ${taskId} failed ${consecutiveFails} times. Marking as blocked.`);
+        updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
+        consecutiveFails = 0;
+        lastFailedTask = '';
+      } else if (groupTaskIds.length > 0) {
+        // Group/worktree mode never falls back to getNextTask, so a task that
+        // got reverted to pending would be dropped from the queue and the run
+        // would falsely report "All tasks completed". Re-queue it to retry
+        // within this run (bounded by kill_after_fails above).
+        logWarn(`Re-queuing ${taskId} for retry (attempt ${consecutiveFails}/${killAfter}).`);
+        taskQueue.push(taskId);
+      }
+    }
+
+    console.log('');
+    if (maxIterations === 0) {
+      logInfo(`Progress: ${lib.countCompleted(tasksFile)}/${lib.countTotal(tasksFile)} tasks | Iteration ${iteration}`);
+    } else {
+      logInfo(`Progress: ${lib.countCompleted(tasksFile)}/${lib.countTotal(tasksFile)} tasks | Iteration ${iteration}/${maxIterations}`);
+    }
+    console.log('');
+  }
+
+  if (!worktreeMode) lib.revertWaiting(tasksFile);
+
+  logWarn(`Max iterations (${maxIterations}) reached. Run 'jonggrang work' to continue.`);
+  logInfo(`Completed: ${lib.countCompleted(tasksFile)} / ${lib.countTotal(tasksFile)}`);
+  console.log('');
+  console.log('PAUSED');
+  return { completed: false, reason: 'max_iterations', stats: { completed: lib.countCompleted(tasksFile), total: lib.countTotal(tasksFile) } };
+}
 
 function askUserFeedback(prompt) {
   return new Promise((resolve) => {
@@ -290,20 +407,20 @@ function askUserFeedback(prompt) {
   });
 }
 
-async function runIteration(iteration, taskId) {
-  const task = lib.getTask(TASKS_FILE, taskId);
+async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, worktreeMode = false) {
+  const task = lib.getTask(tasksFile, taskId);
   const taskTitle = task ? task.title : taskId;
 
   logHeader(`Iteration ${iteration}: ${taskTitle}`);
 
-  updateTaskMode(taskId, 'in_progress');
+  updateTaskMode(tasksFile, taskId, 'in_progress', worktreeMode);
   // Brief pause so the file-watcher fires before the agent starts,
   // ensuring the browser sees the in_progress state transition.
   await new Promise(r => setTimeout(r, 200));
 
-  if (DRY_RUN) {
+  if (dryRun) {
     logWarn(`[DRY RUN] Would execute prompt for task: ${taskId}`);
-    console.log(lib.buildWorkPrompt(taskId, TASKS_FILE, MODE));
+    console.log(lib.buildWorkPrompt(taskId, tasksFile, mode));
     return true;
   }
 
@@ -313,30 +430,30 @@ async function runIteration(iteration, taskId) {
 
   while (true) {
     // Build prompt — inject test failure feedback on retries
-    const prompt = lib.buildWorkPrompt(taskId, TASKS_FILE, MODE, testFeedback || undefined);
+    const prompt = lib.buildWorkPrompt(taskId, tasksFile, mode, testFeedback || undefined);
 
     logInfo(`Spawning fresh ${TOOL} instance...${testAttempt > 0 ? ` (test retry ${testAttempt}/${TEST_RETRY_LIMIT})` : ''}`);
-    const exitCode = await lib.runAgent(prompt, TOOL, MODE, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+    const exitCode = await lib.runAgent(prompt, TOOL, mode, PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (exitCode !== 0) {
       logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
-      updateTaskMode(taskId, 'pending');
+      updateTaskMode(tasksFile, taskId, 'pending', worktreeMode);
       return false;
     }
 
     // ── Check task completion ─────────────────────────────────
-    const data = lib.getTasks(TASKS_FILE);
+    const data = lib.getTasks(tasksFile);
     const t = data.tasks.find(t => t.id === taskId);
     if (!t || t.status !== 'completed') {
       logWarn('Agent finished but did not mark task complete. Reverting to pending.');
-      updateTaskMode(taskId, 'pending');
+      updateTaskMode(tasksFile, taskId, 'pending', worktreeMode);
       return false;
     }
 
     // ── Run tests ─────────────────────────────────────────────
     if (!testCmd) {
       logSuccess(`Task ${taskId} completed successfully`);
-      updateTaskMode(taskId, 'completed');
+      updateTaskMode(tasksFile, taskId, 'completed', worktreeMode);
       return true;
     }
 
@@ -345,7 +462,7 @@ async function runIteration(iteration, taskId) {
 
     if (passed) {
       logSuccess(`Task ${taskId} completed — tests passed`);
-      updateTaskMode(taskId, 'completed');
+      updateTaskMode(tasksFile, taskId, 'completed', worktreeMode);
       return true;
     }
 
@@ -355,7 +472,7 @@ async function runIteration(iteration, taskId) {
     if (testAttempt < TEST_RETRY_LIMIT) {
       // Auto-retry: inject test output as feedback, reset task to pending
       testFeedback = output;
-      lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+      lib.updateTaskStatus(tasksFile, taskId, 'pending');
       logInfo('Retrying with test failure output...');
       continue;
     }
@@ -369,14 +486,14 @@ async function runIteration(iteration, taskId) {
 
     if (!userInput) {
       logError(`Task ${taskId} marked as blocked after ${TEST_RETRY_LIMIT} failed test retries.`);
-      updateTaskMode(taskId, 'blocked');
+      updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
       return false;
     }
 
     // User gave feedback — inject it and reset counter for another round
     testFeedback = `User feedback: ${userInput}\n\nLast test output:\n${output}`;
     testAttempt = 0;
-    lib.updateTaskStatus(TASKS_FILE, taskId, 'pending');
+    lib.updateTaskStatus(tasksFile, taskId, 'pending');
     logInfo('Retrying with user feedback...');
   }
 }
@@ -394,7 +511,7 @@ function resolveWorkType(description) {
   if (description) return orchestration.classifyWorkType(description);
 
   // 3. Infer from total task count (task titles are too noisy for text classification)
-  const data = lib.getTasks(TASKS_FILE);
+  const data = lib.getAllTasks(PROJECT_ROOT);
   if (!data.tasks || data.tasks.length === 0) return 'SMALL';
   const total = data.tasks.length;
   if (total >= 6) return 'LARGE';
@@ -493,26 +610,36 @@ async function cmdWork(descriptionParts = []) {
   const deepMode    = descriptionParts.includes('--deep');
   const description = descriptionParts.filter(a => !a.startsWith('-')).join(' ').trim();
 
+  // --feature targets an existing approved feature; a positional description triggers
+  // one-shot plan+approve of a NEW feature. Combining them would plan+approve one
+  // feature then execute another — reject as ambiguous.
+  if (WORK_FEATURE_ID && description) {
+    logError('--feature targets an existing approved feature and cannot be combined with a one-shot work description.');
+    logInfo('Use `jonggrang work --feature <id>` to resume an existing feature,');
+    logInfo('or `jonggrang work "<description>"` to plan+execute a new feature.');
+    process.exit(1);
+  }
+
   if (description) {
     logInfo(`One-shot mode: plan + execute "${description}"`);
     const planArgs = [description];
     if (autoApprove) planArgs.push('--yes');
     if (deepMode)    planArgs.push('--deep');
-    await cmdPlan(planArgs, { fromWork: true });
-    // Continue only if tasks were actually created (user approved or --yes)
-    if (lib.fileExists(PLAN_FILE)) {
-      // plan.md still exists → user chose "save draft" or "abort"
+    const plannedSession = await cmdPlan(planArgs, { fromWork: true });
+    // If the session we just planned still has a draft on disk, the user didn't
+    // approve (saved draft or aborted) → nothing to execute.
+    if (plannedSession && lib.fileExists(lib.draftFileFor(PROJECT_ROOT, plannedSession))) {
       logWarn('Plan not approved — nothing to execute. Run "jonggrang approve" then "jonggrang work".');
       return;
     }
-    if (!lib.fileExists(TASKS_FILE) || lib.countPending(TASKS_FILE) === 0) {
+    if (lib.countPending(lib.getAllTasks(PROJECT_ROOT)) === 0) {
       logWarn('No pending tasks to execute.');
       return;
     }
     console.log('');
-  } else if (lib.fileExists(PLAN_FILE) && !descriptionParts.includes('--ignore-plan')) {
-    // No description given but there is an unapproved plan — warn and stop
-    logWarn('There is a pending plan at .jonggrang/plan.md that has not been approved yet.');
+  } else if (lib.resolveActiveDraft(PROJECT_ROOT) && !descriptionParts.includes('--ignore-plan')) {
+    // No description given but there is an unapproved draft — warn and stop
+    logWarn('There is a pending plan draft that has not been approved yet.');
     logInfo('Run "jonggrang approve" to decompose it into tasks, then "jonggrang work".');
     logInfo('Or run "jonggrang work --ignore-plan" to skip the plan and run existing tasks.');
     process.exit(1);
@@ -540,14 +667,16 @@ async function cmdWork(descriptionParts = []) {
   let workFeatureId = null, workManifest = null, workManifestPath = null;
   if (WORKTREE_MODE && GROUP_TASK_IDS.length > 0) {
     // A worktree run executes exactly one plan (group). Resolve THAT plan's
-    // manifest by its tasks' feature_id — never findIncompleteManifest, which
+    // feature from its tasks' feature_id — never findIncompleteManifest, which
     // would pick an arbitrary seeded manifest and run another plan's phases in
     // this worktree. Tracking the manifest here is what lets the post-work
     // phases (Simplify → … → Complete) run in worktree mode instead of the
     // pipeline stalling at Implement.
-    const firstTask = GROUP_TASK_IDS.map(id => lib.getTask(TASKS_FILE, id)).find(Boolean);
-    const fid = firstTask && firstTask.feature_id;
+    const firstGroupId = GROUP_TASK_IDS.find(id => lib.findTaskFeature(PROJECT_ROOT, id));
+    const fid = firstGroupId ? lib.findTaskFeature(PROJECT_ROOT, firstGroupId) : null;
     if (fid) {
+      WORK_TASKS_FILE = lib.tasksFileFor(PROJECT_ROOT, fid);
+      const firstTask = lib.getTask(WORK_TASKS_FILE, firstGroupId);
       const mPath = orchestration.getManifestPath(PROJECT_ROOT, fid);
       const m = orchestration.readManifest(mPath);
       if (m) {
@@ -565,29 +694,67 @@ async function cmdWork(descriptionParts = []) {
       }
     }
   } else if (!WORKTREE_MODE) {
-    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
-    if (existing) {
-      workFeatureId  = existing.featureId;
-      workManifest   = existing.manifest;
-      workManifestPath = existing.manifestPath;
+    if (WORK_FEATURE_ID) {
+      // Explicit feature target via `work --feature <id>`. Validate it exists and
+      // has a MANIFEST + tasks. Never auto-create — an explicit id must reference
+      // an already-approved feature (unlike the no-arg heuristic which may create).
+      const mPath = orchestration.getManifestPath(PROJECT_ROOT, WORK_FEATURE_ID);
+      const m = orchestration.readManifest(mPath);
+      if (!m) {
+        logError(`Feature "${WORK_FEATURE_ID}" not found. Has it been approved?`);
+        logInfo('Run "jonggrang plan <description>" then "jonggrang approve --session <id>" first.');
+        process.exit(1);
+      }
+      const tasksFile = lib.tasksFileFor(PROJECT_ROOT, WORK_FEATURE_ID);
+      if (!lib.fileExists(tasksFile) || lib.countTotal(tasksFile) === 0) {
+        logError(`Feature "${WORK_FEATURE_ID}" has no tasks to execute.`);
+        logInfo('Run "jonggrang approve --session <id>" to decompose its plan into tasks first.');
+        process.exit(1);
+      }
+      workFeatureId = WORK_FEATURE_ID;
+      workManifest = m;
+      workManifestPath = mPath;
+      logInfo(`Targeting feature: ${WORK_FEATURE_ID} (--feature)`);
     } else {
-      workFeatureId = orchestration.generateFeatureId(description || 'work-session');
-      const created = orchestration.createManifest(
-        PROJECT_ROOT, workFeatureId, description || 'work session', workType
-      );
-      workManifest     = created.manifest;
-      workManifestPath = created.manifestPath;
-      // Planning phases 1-4 already done (cmdPlan ran above)
-      [1, 2, 3, 4].forEach(n => {
-        if (workManifest.active_phases.includes(n))
-          orchestration.completePhase(workManifestPath, n, { source: 'plan' });
-      });
-      // Mark complexity + brainstorm + architect as done (embedded in planning)
-      [5, 6, 7].forEach(n => {
-        if (workManifest.active_phases.includes(n))
-          orchestration.completePhase(workManifestPath, n, { source: 'plan' });
-      });
+      const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+      if (existing) {
+        workFeatureId  = existing.featureId;
+        workManifest   = existing.manifest;
+        workManifestPath = existing.manifestPath;
+      } else {
+        workFeatureId = orchestration.generateFeatureId(description || 'work-session');
+        const created = orchestration.createManifest(
+          PROJECT_ROOT, workFeatureId, description || 'work session', workType
+        );
+        workManifest     = created.manifest;
+        workManifestPath = created.manifestPath;
+        // Planning phases 1-4 already done (cmdPlan ran above)
+        [1, 2, 3, 4].forEach(n => {
+          if (workManifest.active_phases.includes(n))
+            orchestration.completePhase(workManifestPath, n, { source: 'plan' });
+        });
+        // Mark complexity + brainstorm + architect as done (embedded in planning)
+        [5, 6, 7].forEach(n => {
+          if (workManifest.active_phases.includes(n))
+            orchestration.completePhase(workManifestPath, n, { source: 'plan' });
+        });
+      }
     }
+    // Resolve the per-feature tasks file for this work session.
+    WORK_TASKS_FILE = lib.tasksFileFor(PROJECT_ROOT, workFeatureId);
+
+    // Guard: if phase 8 already completed (e.g. by a prior orchestration
+    // resume that ran the work loop), skip straight to post-work phases.
+    if (workManifest.phases?.[8]?.status === 'completed') {
+      logInfo('Phase 8 (Implement) already completed — skipping to post-work phases');
+      if (!SKIP_GATES) {
+        const gateWorkType = workManifest?.work_type || workType;
+        await runPostWorkPhases(description, gateWorkType, workFeatureId, workManifest, workManifestPath);
+      }
+      console.log('COMPLETE');
+      return;
+    }
+
     // Phase 8 = Implement — mark as running for the duration of the work loop
     if (workManifest.active_phases.includes(8))
       orchestration.startPhase(workManifestPath, 8);
@@ -599,7 +766,7 @@ async function cmdWork(descriptionParts = []) {
   logInfo(`Mode: ${MODE}`);
   if (WORKTREE_MODE) logInfo('Worktree mode: ON');
   logInfo(MAX_ITERATIONS === 0 ? 'Max iterations: unlimited' : `Max iterations: ${MAX_ITERATIONS}`);
-  logInfo(`Tasks: ${lib.countPending(TASKS_FILE)} pending / ${lib.countTotal(TASKS_FILE)} total`);
+  logInfo(`Tasks: ${lib.countPending(WORK_TASKS_FILE)} pending / ${lib.countTotal(WORK_TASKS_FILE)} total`);
 
   // Skip branch checkout in worktree mode (worktree already on its own branch)
   if (!WORKTREE_MODE && BRANCH) {
@@ -616,114 +783,57 @@ async function cmdWork(descriptionParts = []) {
   if (GROUP_TASK_IDS.length > 0) {
     // Worktree mode: use the provided group task list
     taskQueue = GROUP_TASK_IDS.filter(id => {
-      const t = lib.getTask(TASKS_FILE, id);
+      const t = lib.getTask(WORK_TASKS_FILE, id);
       return t && t.status !== 'completed';
     });
     logInfo(`Group tasks: ${taskQueue.join(', ')}`);
   } else if (TASK_ID) {
-    taskQueue = lib.getTaskQueue(TASKS_FILE, TASK_ID);
+    taskQueue = lib.getTaskQueue(WORK_TASKS_FILE, TASK_ID);
     if (taskQueue.length > 1) {
       logInfo(`Task ${TASK_ID} has ${taskQueue.length - 1} pending dependencies — will process them first`);
     }
     if (!WORKTREE_MODE) {
       taskQueue.forEach((id, i) => {
-        const t = lib.getTask(TASKS_FILE, id);
+        const t = lib.getTask(WORK_TASKS_FILE, id);
         const label = id === TASK_ID ? '(target)' : `(dep ${i + 1})`;
-        lib.updateTaskStatus(TASKS_FILE, id, 'waiting');
+        lib.updateTaskStatus(WORK_TASKS_FILE, id, 'waiting');
         logInfo(`  ${i + 1}. ${id}: ${t ? t.title : '?'} ${label}`);
       });
     }
     TASK_ID = '';
   }
 
-  let iteration = 0;
-  let consecutiveFails = 0;
-  let lastFailedTask = '';
-  const killAfter = parseInt(lib.readConfig(CONFIG_FILE, 'work.kill_after_fails', '3'), 10);
+  const result = await runWorkLoop(WORK_TASKS_FILE, {
+    maxIterations: MAX_ITERATIONS,
+    taskQueue,
+    groupTaskIds: GROUP_TASK_IDS,
+    targetTaskId: TASK_ID,
+    worktreeMode: WORKTREE_MODE,
+    dryRun: DRY_RUN,
+  });
 
-  while (MAX_ITERATIONS === 0 || iteration < MAX_ITERATIONS) {
-    iteration++;
-
-    let taskId;
-    if (taskQueue.length > 0) {
-      taskId = taskQueue.shift();
-    } else if (GROUP_TASK_IDS.length > 0) {
-      // Group/worktree mode: only ever run the assigned tasks. Do NOT fall back
-      // to getNextTask, which would pick up other plans' tasks from this
-      // worktree's tasks.json copy and break per-plan isolation.
-      taskId = null;
-    } else {
-      taskId = lib.getNextTask(TASKS_FILE);
+  if (result.completed) {
+    // Complete phase 8 (Implement) now that all tasks are done
+    if (workManifestPath && workManifest?.active_phases?.includes(8)) {
+      orchestration.completePhase(workManifestPath, 8, { source: 'work-loop' });
+      workManifest = orchestration.readManifest(workManifestPath);
     }
 
-    if (!taskId) {
-      logSuccess('All tasks completed!');
-      logInfo(`Completed: ${lib.countCompleted(TASKS_FILE)} / ${lib.countTotal(TASKS_FILE)}`);
-      console.log('');
-
-      // Complete phase 8 (Implement) now that all tasks are done
-      if (workManifestPath && workManifest?.active_phases?.includes(8)) {
-        orchestration.completePhase(workManifestPath, 8, { source: 'work-loop' });
-        workManifest = orchestration.readManifest(workManifestPath);
-      }
-
-      // Run post-work quality gates (Simplify → … → Complete) based on work type.
-      // Runs in both normal and worktree mode. In worktree mode we require a
-      // manifest we resolved by feature_id above, so runPostWorkPhases never
-      // falls back to findIncompleteManifest (which would target another plan).
-      if (!SKIP_GATES && (!WORKTREE_MODE || workManifestPath)) {
-        const gateWorkType = workManifest?.work_type || workType;
-        await runPostWorkPhases(description, gateWorkType, workFeatureId, workManifest, workManifestPath);
-      }
-
-      console.log('COMPLETE');
-      return;
+    // Run post-work quality gates (Simplify → … → Complete) based on work type.
+    // Runs in both normal and worktree mode. In worktree mode we require a
+    // manifest we resolved by feature_id above, so runPostWorkPhases never
+    // falls back to findIncompleteManifest (which would target another plan).
+    if (!SKIP_GATES && (!WORKTREE_MODE || workManifestPath)) {
+      const gateWorkType = workManifest?.work_type || workType;
+      await runPostWorkPhases(description, gateWorkType, workFeatureId, workManifest, workManifestPath);
     }
 
-    const success = await runIteration(iteration, taskId);
-
-    if (success) {
-      consecutiveFails = 0;
-      lastFailedTask = '';
-    } else {
-      if (lastFailedTask === taskId) {
-        consecutiveFails++;
-      } else {
-        consecutiveFails = 1;
-        lastFailedTask = taskId;
-      }
-
-      if (consecutiveFails >= killAfter) {
-        logError(`Task ${taskId} failed ${consecutiveFails} times. Marking as blocked.`);
-        updateTaskMode(taskId, 'blocked');
-        consecutiveFails = 0;
-        lastFailedTask = '';
-      } else if (GROUP_TASK_IDS.length > 0) {
-        // Group/worktree mode never falls back to getNextTask, so a task that
-        // got reverted to pending would be dropped from the queue and the run
-        // would falsely report "All tasks completed". Re-queue it to retry
-        // within this run (bounded by kill_after_fails above) — keep going
-        // until every group task is genuinely completed or blocked.
-        logWarn(`Re-queuing ${taskId} for retry (attempt ${consecutiveFails}/${killAfter}).`);
-        taskQueue.push(taskId);
-      }
-    }
-
-    console.log('');
-    if (MAX_ITERATIONS === 0) {
-      logInfo(`Progress: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} tasks | Iteration ${iteration}`);
-    } else {
-      logInfo(`Progress: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} tasks | Iteration ${iteration}/${MAX_ITERATIONS}`);
-    }
-    console.log('');
+    console.log('COMPLETE');
+    return;
   }
 
-  if (!WORKTREE_MODE) lib.revertWaiting(TASKS_FILE);
-
-  logWarn(`Max iterations (${MAX_ITERATIONS}) reached. Run 'jonggrang work' to continue.`);
-  logInfo(`Completed: ${lib.countCompleted(TASKS_FILE)} / ${lib.countTotal(TASKS_FILE)}`);
-  console.log('');
-  console.log('PAUSED');
+  // Max iterations reached — already logged by runWorkLoop
+  return;
 }
 
 // ============================================================
@@ -783,38 +893,34 @@ function cmdStatus() {
   }
 
   // ── Task board ────────────────────────────────────────────────
-  console.log(`Tasks: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} completed`);
+  const data = lib.getAllTasks(PROJECT_ROOT);
+  const totalTasks = data.tasks.length;
+  const completedTasks = data.tasks.filter(t => t.status === 'completed').length;
+  console.log(`Tasks: ${completedTasks}/${totalTasks} completed`);
   console.log('');
 
-  const data = lib.getTasks(TASKS_FILE);
-  if (!data.tasks || data.tasks.length === 0) {
-    const hasPlan = lib.fileExists(PLAN_FILE);
+  if (totalTasks === 0) {
+    const drafts = lib.getAllDrafts(PROJECT_ROOT);
     console.log(`${BOLD}ID          Status       Title${NC}`);
     console.log('--------------------------------------------------------------');
-    if (hasPlan) {
-      console.log(`${NC}  (pending plan.md — run: jonggrang approve  to decompose into tasks)${NC}`);
+    if (drafts.length > 0) {
+      console.log(`${NC}  (${drafts.length} pending draft(s) — run: jonggrang approve  to decompose into tasks)${NC}`);
     } else {
       console.log(`${NC}  (no tasks yet — run: jonggrang plan "feature"  then  jonggrang approve)${NC}`);
     }
     return;
   }
 
-  // Group tasks by feature_id (null = legacy/no feature link)
+  // Group tasks by feature_id (every task has one under per-feature files)
   const groups = new Map();
   for (const task of data.tasks) {
-    const key = task.feature_id || '__legacy__';
+    const key = task.feature_id || 'unfiled';
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(task);
   }
 
   const printTask = (task) => {
-    let color;
-    switch (task.status) {
-      case 'completed':   color = GREEN; break;
-      case 'in_progress': color = YELLOW; break;
-      case 'blocked':     color = RED; break;
-      default:            color = NC; break;
-    }
+    const color = statusColor(task.status);
     const id = (task.id || '').padEnd(11);
     const status = (task.status || '').padEnd(12);
     console.log(`${color}${id} ${status} ${task.title || ''}${NC}`);
@@ -823,7 +929,7 @@ function cmdStatus() {
   if (groups.size === 1) {
     // Single feature — simple flat list (original layout)
     const [key, tasks] = [...groups][0];
-    if (key !== '__legacy__') {
+    if (key !== 'unfiled') {
       const archivePlan = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', key, 'plan.md');
       const label = lib.fileExists(archivePlan) ? parsePlanFrontmatter(fs.readFileSync(archivePlan, 'utf8')).feature || key : key;
       console.log(`${BOLD}ID          Status       Title${NC}   ${DIM}[${label}]${NC}`);
@@ -836,7 +942,7 @@ function cmdStatus() {
     // Multiple features — group by feature
     for (const [key, tasks] of groups) {
       let groupLabel = key;
-      if (key !== '__legacy__') {
+      if (key !== 'unfiled') {
         const archivePlan = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', key, 'plan.md');
         if (lib.fileExists(archivePlan)) {
           const fm = parsePlanFrontmatter(fs.readFileSync(archivePlan, 'utf8'));
@@ -848,13 +954,7 @@ function cmdStatus() {
       console.log(`${BOLD}  ID          Status       Title${NC}`);
       console.log('  ------------------------------------------------------------');
       for (const task of tasks) {
-        let color;
-        switch (task.status) {
-          case 'completed':   color = GREEN; break;
-          case 'in_progress': color = YELLOW; break;
-          case 'blocked':     color = RED; break;
-          default:            color = NC; break;
-        }
+        const color = statusColor(task.status);
         const id = (task.id || '').padEnd(11);
         const status = (task.status || '').padEnd(12);
         console.log(`${color}  ${id} ${status} ${task.title || ''}${NC}`);
@@ -905,19 +1005,19 @@ function parsePlanFrontmatter(content) {
   };
 }
 
-/** Collect pending plan.md + all archived feature plan.mds, sorted newest first */
+/** Collect draft sessions + all archived feature plan.mds, sorted newest first */
 function listAvailablePlans(jonggrangDir) {
   const plans = [];
+  const projectRoot = path.dirname(jonggrangDir);
 
-  // Pending plan
-  const pendingPath = path.join(jonggrangDir, 'plan.md');
-  if (lib.fileExists(pendingPath)) {
-    const content = fs.readFileSync(pendingPath, 'utf8');
-    const fm = parsePlanFrontmatter(content);
+  // Draft sessions (pending, pre-approval)
+  const drafts = lib.getAllDrafts(projectRoot);
+  for (const d of drafts) {
     plans.push({
-      value:     pendingPath,
-      label:     `[pending]  ${fm.feature || 'unnamed'}${fm.description ? ' — ' + fm.description : ''}`,
+      value:     d.planPath,
+      label:     `[draft]    ${d.feature || 'unnamed'}${d.description ? ' — ' + d.description : ''}  ${DIM}(${d.sessionId})${NC}`,
       isPending: true,
+      sessionId: d.sessionId,
     });
   }
 
@@ -948,10 +1048,11 @@ function listAvailablePlans(jonggrangDir) {
 }
 
 /** Display plan.md content in a bordered box */
-function displayPlanBox(planFile) {
+function displayPlanBox(planFile, sessionId) {
   if (!lib.fileExists(planFile)) return;
   console.log('');
-  console.log(`${BOLD}${CYAN}┌─── .jonggrang/plan.md ─────────────────────────────────────${NC}`);
+  const header = sessionId ? `┌─── draft ${sessionId} ─────────────────────────────────────` : `┌─── plan ──────────────────────────────────────────────────`;
+  console.log(`${BOLD}${CYAN}${header}${NC}`);
   const planText = fs.readFileSync(planFile, 'utf8');
   planText.split('\n').forEach(line => console.log(`${CYAN}│${NC} ${line}`));
   console.log(`${BOLD}${CYAN}└────────────────────────────────────────────────────────────${NC}`);
@@ -963,25 +1064,9 @@ function displayPlanBox(planFile) {
 async function ensureInit() {
   const validation = lib.validateProjectState(PROJECT_ROOT);
 
-  // All 3 files valid — ready to go
+  // Config valid — ready to go. Tasks/progress are per-feature and created on
+  // demand at approve time, so their absence is not an init failure.
   if (validation.allValid) return true;
-
-  // Config is valid but tasks/progress are missing/corrupt — auto-regenerate them
-  if (validation.config.valid) {
-    const existingConfig = lib.readJSON(CONFIG_FILE);
-    const name = existingConfig?.name || path.basename(PROJECT_ROOT);
-
-    if (!validation.tasks.valid) {
-      lib.writeJSON(TASKS_FILE, { feature: '', branch: '', tasks: [] });
-      logWarn(`Regenerated jonggrang-tasks.json (was ${validation.tasks.reason}).`);
-    }
-    if (!validation.progress.valid) {
-      const now = new Date().toISOString().split('T')[0];
-      fs.writeFileSync(PROGRESS_FILE, `# Jonggrang Progress Log — ${name}\n# Created: ${now}\n`);
-      logWarn(`Regenerated progress.txt (was ${validation.progress.reason}).`);
-    }
-    return true;
-  }
 
   // Config itself is invalid — need full init
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
@@ -1018,6 +1103,7 @@ async function cmdPlan(args, opts = {}) {
   let reviseMode = false;
   let filePath = null;
   let baseBranch = '';
+  let sessionId = '';
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -1027,6 +1113,7 @@ async function cmdPlan(args, opts = {}) {
     else if (arg === '--src') { filePath = args[++i]; }
     else if (arg.startsWith('--src=')) { filePath = arg.slice(6); }
     else if (arg === '--base') baseBranch = args[++i] || '';
+    else if (arg === '--session') sessionId = args[++i] || '';
     else if (!arg.startsWith('--')) description = arg;
   }
 
@@ -1040,10 +1127,16 @@ async function cmdPlan(args, opts = {}) {
 
   if (!await ensureInit()) return;
 
-  // ── Revise mode: AI rewrites existing plan.md ────────────────
+  // ── Revise mode: AI rewrites an existing draft ──────────────
   if (reviseMode) {
-    if (!lib.fileExists(PLAN_FILE)) {
-      logError('No plan.md found to revise. Generate a plan first.');
+    const sid = sessionId || lib.resolveActiveDraft(PROJECT_ROOT);
+    if (!sid) {
+      logError('No draft plan found to revise. Generate one with: jonggrang plan "<description>"');
+      process.exit(1);
+    }
+    const draftFile = lib.draftFileFor(PROJECT_ROOT, sid);
+    if (!lib.fileExists(draftFile)) {
+      logError(`Draft ${sid} not found.`);
       process.exit(1);
     }
     if (!description) {
@@ -1054,12 +1147,16 @@ async function cmdPlan(args, opts = {}) {
       TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
     }
     logHeader('JONGGRANG Plan — Revise with AI');
+    logInfo(`Session:     ${sid}`);
     logInfo(`Instruction: ${description}`);
-    const currentPlan = fs.readFileSync(PLAN_FILE, 'utf8');
-    const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description);
+    const currentPlan = fs.readFileSync(draftFile, 'utf8');
+    const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description, draftFile);
     await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
-    logSuccess('Plan revised. Run "jonggrang approve" to decompose into tasks.');
-    return;
+    const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+    if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+    if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
+    logSuccess(`Plan revised (${sid}). Run "jonggrang approve" to decompose into tasks.`);
+    return sid;
   }
 
   if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
@@ -1092,7 +1189,7 @@ async function cmdPlan(args, opts = {}) {
 
   // ── No description and no file → pick from available plans ──────────────
   if (!description && !srcPath) {
-    const available = listAvailablePlans(path.dirname(PLAN_FILE));
+    const available = listAvailablePlans(path.dirname(LEGACY_PLAN_FILE));
     if (available.length === 0) {
       logError('No plans found.');
       logInfo('Run "jonggrang plan <description>" to generate a new plan.');
@@ -1111,50 +1208,44 @@ async function cmdPlan(args, opts = {}) {
     });
     if (isCancel(picked)) { cancel('Aborted.'); return; }
 
-    // If archived → copy back to plan.md so the rest of the flow works normally
-    if (picked !== PLAN_FILE) {
-      if (lib.fileExists(PLAN_FILE)) {
-        const overwrite = await confirm({
-          message: 'A pending plan already exists. Replace it with the selected plan?',
-          initialValue: false,
-        });
-        if (isCancel(overwrite) || !overwrite) { cancel('Cancelled.'); return; }
-      }
-      fs.copyFileSync(picked, PLAN_FILE);
-      logInfo('Plan loaded from archive.');
+    // Resolve to a draft session. If the picked plan is already a draft, use
+    // it directly. If it's an archived feature plan, create a new draft session
+    // and copy the archived plan.md into it (so the user can re-approve/rework).
+    const chosen = available.find(a => a.value === picked);
+    let pickedSessionId = chosen && chosen.sessionId;
+    if (!pickedSessionId) {
+      // Archived plan → new draft session
+      pickedSessionId = lib.generateDraftId((chosen && chosen.featureId) || 'plan');
+      const newDraftDir = lib.draftDirFor(PROJECT_ROOT, pickedSessionId);
+      fs.mkdirSync(newDraftDir, { recursive: true });
+      fs.copyFileSync(picked, lib.draftFileFor(PROJECT_ROOT, pickedSessionId));
+      logInfo(`Loaded archived plan into new draft session ${pickedSessionId}.`);
     }
 
     // Fall through to the interactive options loop below (skip generation)
-    await showPlanOptions(isInteractiveTTY, autoApprove, opts);
-    return;
+    await showPlanOptions(isInteractiveTTY, autoApprove, opts, pickedSessionId);
+    return pickedSessionId;
   }
 
   // ── Description given → generate new plan ───────────────────
+  // Each plan call gets its own draft session (concurrent-safe). No overwrite
+  // prompt — drafts coexist; approve defaults to the most-recent.
+  const sid = sessionId || lib.generateDraftId(description);
+  const draftDir = lib.draftDirFor(PROJECT_ROOT, sid);
+  const draftFile = lib.draftFileFor(PROJECT_ROOT, sid);
+  fs.mkdirSync(draftDir, { recursive: true });
 
-  // If there is already a pending plan, ask what to do
-  if (lib.fileExists(PLAN_FILE)) {
-    if (isInteractiveTTY) {
-      const overwrite = await confirm({
-        message: 'A pending plan.md already exists. Overwrite it with a new plan?',
-        initialValue: false,
-      });
-      if (isCancel(overwrite) || !overwrite) {
-        logInfo('Keeping existing plan. Run "jonggrang approve" to continue with it.');
-        return;
-      }
-    } else {
-      logWarn('Overwriting existing .jonggrang/plan.md...');
-    }
+  const existingDrafts = lib.getAllDrafts(PROJECT_ROOT).filter(d => d.sessionId !== sid);
+  if (existingDrafts.length > 0 && !sessionId) {
+    logInfo(`${existingDrafts.length} pending draft(s) already exist. This creates a new session (${sid}); 'jonggrang approve' defaults to the most recent, or use 'jonggrang approve --session <id>'.`);
   }
 
   if (deepMode) {
     // ── Deep mode: 3 sequential AI phases ──────────────────────
-    const jonggrangDir = path.dirname(PLAN_FILE);
-    const ephemeralDir = path.join(jonggrangDir, '.ephemeral');
-    const discoveryFile = path.join(ephemeralDir, 'deep-plan-discovery.md');
-    const analysisFile = path.join(ephemeralDir, 'deep-plan-analysis.md');
-
-    fs.mkdirSync(ephemeralDir, { recursive: true });
+    // Discovery + analysis intermediates live in the draft session folder;
+    // only plan.md promotes to features/<id>/ at approve.
+    const discoveryFile = path.join(draftDir, 'deep-plan-discovery.md');
+    const analysisFile = path.join(draftDir, 'deep-plan-analysis.md');
 
     // Clear any stale feedback-loop state from previous work sessions.
     // Deep-plan phases are read-only discovery/planning — they must not be blocked
@@ -1164,43 +1255,52 @@ async function cmdPlan(args, opts = {}) {
     logHeader('JONGGRANG Plan — Deep Mode (3 phases)');
     logInfo(`Feature: ${description || (srcPath ? `[from ${srcPath}]` : '')}`);
     logInfo(`Tool:    ${TOOL}`);
+    logInfo(`Session: ${sid}`);
 
     // Phase 1: Discovery
     logInfo(`${BOLD}[1/3]${NC} Codebase discovery...`);
-    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, srcPath);
+    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, srcPath);
     await lib.runAgent(discoveryPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (!lib.fileExists(discoveryFile)) {
-      logError('Discovery agent did not write .jonggrang/.ephemeral/deep-plan-discovery.md');
+      logError(`Discovery agent did not write ${discoveryFile}`);
       logInfo('Falling back to standard plan generation...');
-      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE, srcPath);
+      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath);
       await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+      if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+      if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
     } else {
       // Phase 2: Analysis
       logInfo(`${BOLD}[2/3]${NC} Complexity analysis & brainstorm...`);
       const discoveryContent = fs.readFileSync(discoveryFile, 'utf8');
-      const analysisPrompt = lib.buildDeepPlanAnalysisPrompt(description, discoveryContent);
+      const analysisPrompt = lib.buildDeepPlanAnalysisPrompt(description, discoveryContent, analysisFile, srcPath);
       await lib.runAgent(analysisPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
       if (!lib.fileExists(analysisFile)) {
-        logError('Analysis agent did not write .jonggrang/.ephemeral/deep-plan-analysis.md');
+        logError(`Analysis agent did not write ${analysisFile}`);
         logInfo('Falling back to standard plan generation using discovery only...');
-        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE, srcPath);
+        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath);
         await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+        const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+        if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+        if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
       } else {
         // Phase 3: Condense
         logInfo(`${BOLD}[3/3]${NC} Condensing into enriched plan.md...`);
         const analysisContent = fs.readFileSync(analysisFile, 'utf8');
         const condensePrompt = lib.buildDeepPlanCondensePrompt(
-          description, discoveryContent, analysisContent, CONFIG_FILE, TASKS_FILE, srcPath
+          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath
         );
         await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+        const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+        if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+        if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
 
-        // Clean up ephemeral files
+        // Clean up intermediate files (plan.md stays in the draft folder)
         try {
           fs.unlinkSync(discoveryFile);
           fs.unlinkSync(analysisFile);
-          fs.rmdirSync(ephemeralDir);
         } catch { /* ignore if already gone */ }
 
         logSuccess('Deep plan complete.');
@@ -1211,57 +1311,64 @@ async function cmdPlan(args, opts = {}) {
     logHeader('JONGGRANG Plan — Phase 1');
     logInfo(`Feature: ${description || (srcPath ? `[from ${srcPath}]` : '')}`);
     logInfo(`Tool:    ${TOOL}`);
+    logInfo(`Session: ${sid}`);
     logInfo('Generating draft plan...');
 
     // Clear stale feedback-loop state — planning is read-only, must not be blocked.
     feedback.clearFeedbackState(PROJECT_ROOT);
 
-    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, TASKS_FILE, srcPath);
+    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath);
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+    const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+    if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+    if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
   }
 
   // The base branch (worktree start-point) is a deterministic user choice, so
   // write it into the generated plan.md frontmatter (overriding anything the AI
   // may have put there). Covers both deep + standard generation paths above.
   // Warn if it didn't take — otherwise the worktree silently cuts from HEAD.
-  if (baseBranch && lib.fileExists(PLAN_FILE) && !lib.setPlanBase(PLAN_FILE, baseBranch)) {
+  if (baseBranch && lib.fileExists(draftFile) && !lib.setPlanBase(draftFile, baseBranch)) {
     logWarn(`Could not write base "${baseBranch}" to the plan frontmatter — the worktree will start from HEAD unless you set it manually.`);
   }
 
   if (autoApprove) {
     logInfo('Auto-approving plan (--yes)...');
-    await cmdApprove([], { quiet: true });
+    await cmdApprove([], { quiet: true, session: sid });
     if (!opts.fromWork) logSuccess('Tasks ready. Run "jonggrang work" to execute.');
-    return;
+    return sid;
   }
 
-  await showPlanOptions(isInteractiveTTY, false, opts);
+  await showPlanOptions(isInteractiveTTY, false, opts, sid);
+  return sid;
 }
 
 /**
  * Display the current plan.md and loop through options until the user
  * approves, aborts, or saves the plan for later.
  */
-async function showPlanOptions(isInteractiveTTY, autoApprove, opts = {}) {
+async function showPlanOptions(isInteractiveTTY, autoApprove, opts, sessionId) {
+  const draftFile = lib.draftFileFor(PROJECT_ROOT, sessionId);
   const doApprove = async () => {
-    await cmdApprove([], { quiet: true });
+    await cmdApprove([], { quiet: true, session: sessionId });
     if (!opts.fromWork) logSuccess('Tasks ready. Run "jonggrang work" to execute.');
   };
 
-  if (!lib.fileExists(PLAN_FILE)) {
-    logError('No plan.md found. Run "jonggrang plan <description>" first.');
+  if (!lib.fileExists(draftFile)) {
+    logError(`Draft ${sessionId} not found.`);
     return;
   }
 
   if (autoApprove) {
-    displayPlanBox(PLAN_FILE);
+    displayPlanBox(draftFile, sessionId);
     logInfo('Auto-approving plan (--yes)...');
     await doApprove();
     return;
   }
 
   if (!isInteractiveTTY) {
-    logSuccess('Draft plan written to .jonggrang/plan.md');
+    logSuccess(`Draft plan written (session ${sessionId}).`);
+    logInfo(`Path: ${path.relative(PROJECT_ROOT, draftFile)}`);
     logInfo('Review / edit it, then run "jonggrang approve" to decompose into tasks.');
     return;
   }
@@ -1269,7 +1376,7 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts = {}) {
   // Interactive options loop
   let done = false;
   while (!done) {
-    displayPlanBox(PLAN_FILE);
+    displayPlanBox(draftFile, sessionId);
 
     const choice = await select({
       message: 'What would you like to do?',
@@ -1298,31 +1405,34 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts = {}) {
         continue;
       }
       logInfo('Revising plan with AI...');
-      const currentPlan = fs.readFileSync(PLAN_FILE, 'utf8');
-      const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, feedback.trim());
+      const currentPlan = fs.readFileSync(draftFile, 'utf8');
+      const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, feedback.trim(), draftFile);
       await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+      if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+      if (_v === 'missing') logWarn('Agent did not write the plan — showing previous version.');
       // loop back → display updated plan + options again
 
     } else if (choice === 'edit') {
       const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
-      execSync(`${editor} "${PLAN_FILE}"`, { stdio: 'inherit' });
+      execSync(`${editor} "${draftFile}"`, { stdio: 'inherit' });
       // loop back → display edited plan + options again
 
     } else if (choice === 'delete') {
       const confirm_ = await confirm({ message: 'Delete this plan permanently?', initialValue: false });
       if (!isCancel(confirm_) && confirm_) {
-        fs.unlinkSync(PLAN_FILE);
+        try { fs.rmSync(lib.draftDirFor(PROJECT_ROOT, sessionId), { recursive: true, force: true }); } catch {}
         logWarn('Plan deleted.');
         done = true;
       }
       // if user cancels/says no → loop back
 
     } else if (choice === 'cancel') {
-      logInfo('Exited. Plan saved at .jonggrang/plan.md');
+      logInfo(`Exited. Draft saved (session ${sessionId}).`);
       done = true;
 
     } else { // 'later'
-      logSuccess('Draft plan saved to .jonggrang/plan.md');
+      logSuccess(`Draft plan saved (session ${sessionId}).`);
       logInfo('Edit it freely, then run "jonggrang approve" to decompose into tasks.');
       done = true;
     }
@@ -1332,9 +1442,21 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts = {}) {
 // ── PHASE 2: Approve plan → decompose to tasks + archive ──────
 // opts.quiet = true  → skip "Run jonggrang work" tail (used when called from within cmdWork/cmdPlan)
 async function cmdApprove(args, opts = {}) {
-  if (!lib.fileExists(PLAN_FILE)) {
-    logError('No pending plan found at .jonggrang/plan.md');
+  // Resolve the draft to approve: --session override, else most-recent draft.
+  let sessionId = opts.session || '';
+  // Allow --session as a CLI flag too
+  for (let i = 0; i < (args || []).length; i++) {
+    if (args[i] === '--session') sessionId = args[++i] || '';
+  }
+  if (!sessionId) sessionId = lib.resolveActiveDraft(PROJECT_ROOT);
+  if (!sessionId) {
+    logError('No draft plan found to approve.');
     logInfo('Run "jonggrang plan <description>" first.');
+    process.exit(1);
+  }
+  const draftFile = lib.draftFileFor(PROJECT_ROOT, sessionId);
+  if (!lib.fileExists(draftFile)) {
+    logError(`Draft ${sessionId} not found.`);
     process.exit(1);
   }
 
@@ -1345,79 +1467,72 @@ async function cmdApprove(args, opts = {}) {
   }
   resolveModelAndEffort();
 
-  const planContent = fs.readFileSync(PLAN_FILE, 'utf8');
+  logHeader('JONGGRANG Approve — Phase 2');
+  logInfo(`Draft session: ${sessionId}`);
+
+  const planContent = fs.readFileSync(draftFile, 'utf8');
 
   // Parse YAML frontmatter fields
   const fm = parsePlanFrontmatter(planContent);
   const featureName = fm.feature || 'work-session';
   const workType    = fm.work_type || 'MEDIUM';
 
-  // Generate featureId BEFORE running the agent so we can stamp new tasks
+  // Generate featureId BEFORE running the agent so we can create the feature
+  // directory + MANIFEST first. The decompose agent writes tasks via
+  // `jonggrang task import --feature <id>`, which needs the feature folder to
+  // exist (resolveActiveFeature won't find this feature until its MANIFEST exists).
   const featureId = orchestration.generateFeatureId(featureName);
 
-  // Snapshot existing task IDs (only those committed to a completed feature).
-  // Orphan tasks (feature_id: null) are leftovers from a previous partial approve
-  // that never reached the archive step — purge them now so the agent gets a
-  // clean slate and won't hit "task already exists" errors.
-  const tasksBeforeClean = lib.getTasks(TASKS_FILE);
-  if (tasksBeforeClean?.tasks?.some(t => t.feature_id == null)) {
-    const cleaned = { ...tasksBeforeClean, tasks: tasksBeforeClean.tasks.filter(t => t.feature_id != null) };
-    lib.writeJSON(TASKS_FILE, cleaned);
+  // Create the feature output directory + MANIFEST up front (before decompose).
+  // The plan.md is archived after the agent succeeds; only the folder + MANIFEST
+  // are created now so `task import --feature` has a home to write to.
+  const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
+  fs.mkdirSync(outputDir, { recursive: true });
+  const manifestPath = path.join(outputDir, 'MANIFEST.yaml');
+  if (!fs.existsSync(manifestPath)) {
+    orchestration.createManifest(PROJECT_ROOT, featureId, featureName, workType);
   }
+
+  // Snapshot existing task IDs globally (across all features) so we can detect
+  // which tasks the agent created. With per-feature files there are no orphan
+  // `feature_id: null` tasks to purge — the feature file starts empty.
   const existingTaskIds = new Set(
-    (lib.getTasks(TASKS_FILE)?.tasks || []).map(t => t.id)
+    (lib.getAllTasks(PROJECT_ROOT)?.tasks || []).map(t => t.id)
   );
 
-  logHeader('JONGGRANG Approve — Phase 2');
   logInfo(`Feature:    ${featureName}`);
   logInfo(`Feature ID: ${featureId}`);
   logInfo(`Work type:  ${workType}`);
   logInfo('Decomposing plan into tasks...');
 
-  const prompt = lib.buildTasksFromPlanPrompt(planContent, CONFIG_FILE, TASKS_FILE, SKILLS_DIR);
+  const prompt = lib.buildTasksFromPlanPrompt(planContent, CONFIG_FILE, PROJECT_ROOT, featureId, SKILLS_DIR);
   await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
-  // Stamp every newly created task with the authoritative feature_id.
-  // Always overwrite: the decomposition agent may have set feature_id to the bare slug
-  // (e.g. "frontend-backend-integration") from the plan frontmatter, which lacks the
-  // unique suffix (e.g. "-mo35rirj"). That wrong ID breaks plan.md path lookups.
-  const tasksData = lib.getTasks(TASKS_FILE);
-  if (tasksData && tasksData.tasks) {
-    let modified = false;
-    for (const task of tasksData.tasks) {
-      if (!existingTaskIds.has(task.id) && task.feature_id !== featureId) {
-        task.feature_id = featureId;
-        modified = true;
-      }
-    }
-    if (modified) lib.writeJSON(TASKS_FILE, tasksData);
-  }
+  // No feature_id stamping needed — the agent wrote via `task import --feature`,
+  // which stamps feature_id and enforces global ID uniqueness in the lib layer.
 
   // Only archive if the agent actually created new tasks
-  const refreshedTasks = lib.getTasks(TASKS_FILE);
-  const newTasks = (refreshedTasks?.tasks || []).filter(t => !existingTaskIds.has(t.id));
+  const newTasks = (lib.getAllTasks(PROJECT_ROOT)?.tasks || []).filter(t => !existingTaskIds.has(t.id));
   if (newTasks.length === 0) {
     logError('Agent did not create any tasks. plan.md has been preserved — re-run "jonggrang approve" after fixing the issue.');
     process.exit(1);
   }
 
-  // Archive the approved plan
-  const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.copyFileSync(PLAN_FILE, path.join(outputDir, 'plan.md'));
-  fs.unlinkSync(PLAN_FILE);
+  // Promote the draft plan into the feature folder (move, not copy). The draft
+  // session folder is discarded after — only plan.md persists in features/<id>/.
+  fs.copyFileSync(draftFile, path.join(outputDir, 'plan.md'));
+  try { fs.rmSync(lib.draftDirFor(PROJECT_ROOT, sessionId), { recursive: true, force: true }); } catch {}
 
-  // Create a MANIFEST for this feature so cmdWork can resume under the correct feature ID.
-  // Without this, cmdWork creates a generic work-session-xxx MANIFEST disconnected from the plan.
-  const manifestPath = path.join(outputDir, 'MANIFEST.yaml');
-  if (!fs.existsSync(manifestPath)) {
-    const created = orchestration.createManifest(PROJECT_ROOT, featureId, featureName, workType);
-    // Mark all planning phases as done — they were completed by plan+approve
-    const mPath = created.manifestPath;
-    [1, 2, 3, 4, 5, 6, 7].forEach(n => {
-      if (created.manifest.active_phases.includes(n))
-        orchestration.completePhase(mPath, n, { source: 'approve' });
-    });
+  // Mark all planning phases as done — they were completed by plan+approve.
+  // (MANIFEST was created above; here we just complete phases 1-7.)
+  if (fs.existsSync(manifestPath)) {
+    const manifest = orchestration.readManifest(manifestPath);
+    if (manifest) {
+      [1, 2, 3, 4, 5, 6, 7].forEach(n => {
+        if (manifest.active_phases.includes(n))
+          orchestration.completePhase(manifestPath, n, { source: 'approve' });
+      });
+    }
   }
 
   logSuccess('Plan approved.');
@@ -1617,15 +1732,15 @@ async function cmdBug(args) {
     logInfo(`Feature: ${feat.featureName}`);
     logInfo(`Open bugs: ${openBugs.length}`);
 
-    // Snapshot existing task IDs before agent runs
-    const existingTaskIds = new Set((lib.getTasks(TASKS_FILE)?.tasks || []).map(t => t.id));
+    // Snapshot existing task IDs globally before agent runs
+    const existingTaskIds = new Set((lib.getAllTasks(PROJECT_ROOT)?.tasks || []).map(t => t.id));
 
-    const prompt = lib.buildBugsToTasksPrompt(openBugs, feat.featureId, CONFIG_FILE, TASKS_FILE);
+    const prompt = lib.buildBugsToTasksPrompt(openBugs, feat.featureId, CONFIG_FILE, PROJECT_ROOT);
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
 
-    // Find new tasks and correlate with bugs via TASK_CREATED output lines
-    // Also update bugs.md for any open bugs → converted
-    const newTasks = (lib.getTasks(TASKS_FILE)?.tasks || []).filter(t => !existingTaskIds.has(t.id));
+    // Find new tasks (anywhere — agent wrote via `task import --feature`) and
+    // correlate with bugs by order. Also update bugs.md for open bugs → converted.
+    const newTasks = (lib.getAllTasks(PROJECT_ROOT)?.tasks || []).filter(t => !existingTaskIds.has(t.id));
     if (newTasks.length > 0) {
       // Assign bugs to tasks in order (AI creates one task per bug in order)
       for (let i = 0; i < Math.min(openBugs.length, newTasks.length); i++) {
@@ -1691,11 +1806,10 @@ async function cmdBug(args) {
 
   if (createTask) {
     const title = `Fix: ${description.split('\n')[0].slice(0, 80)}`;
-    const task = lib.addTask(TASKS_FILE, {
+    const task = lib.addTask(PROJECT_ROOT, feat.featureId, {
       title,
       description: `Bug ${bugId}: ${description}`,
       priority: 1,
-      feature_id: feat.featureId,
       skill: null,
       blocked_by: [],
       files: [],
@@ -1722,43 +1836,31 @@ async function cmdInit() {
   const validation = lib.validateProjectState(PROJECT_ROOT);
 
   if (validation.allValid && !INIT_FORCE) {
-    // All 3 files exist and are valid — skip re-initialization
+    // Config valid — project is initialized. Tasks/progress are per-feature now.
     const existingConfig = lib.readJSON(CONFIG_FILE);
-    const existingTasks = lib.getTasks(TASKS_FILE);
-    const taskCount = existingTasks.tasks?.length || 0;
-    const completedCount = existingTasks.tasks?.filter(t => t.status === 'completed').length || 0;
+    const allTasks = lib.getAllTasks(PROJECT_ROOT);
+    const taskCount = allTasks.tasks.length;
+    const completedCount = allTasks.tasks.filter(t => t.status === 'completed').length;
     logSuccess(`Project "${existingConfig.name}" is already initialized.`);
-    logInfo(`  jonggrang.json       ✓ valid`);
-    logInfo(`  jonggrang-tasks.json ✓ valid (${taskCount} tasks, ${completedCount} completed)`);
-    logInfo(`  progress.txt         ✓ valid`);
+    logInfo(`  jonggrang.json        ✓ valid`);
+    logInfo(`  task state            ✓ per-feature (${taskCount} tasks, ${completedCount} completed)`);
     logInfo('Use --force to re-initialize from scratch.');
     return;
   }
 
   if (!validation.allValid && !INIT_FORCE) {
-    // Some files exist — warn user before overwriting
-    const hasAny = validation.config.valid || validation.tasks.valid || validation.progress.valid;
-    if (hasAny) {
-      const statusLabel = (v) => v.valid ? '✓ valid' : `✗ ${v.reason}`;
-      logWarn('Existing project state detected:');
-      logInfo(`  jonggrang.json       ${statusLabel(validation.config)}`);
-      logInfo(`  jonggrang-tasks.json ${statusLabel(validation.tasks)}`);
-      logInfo(`  progress.txt         ${statusLabel(validation.progress)}`);
-
-      if (isInteractiveTTY) {
-        const overwrite = await confirm({
-          message: 'Re-initialize? Valid files will be preserved where possible.',
-          initialValue: false,
-        });
-        if (isCancel(overwrite) || !overwrite) {
-          cancel('Init cancelled.');
-          return;
-        }
-      } else {
-        logError('Project partially initialized. Use --force to overwrite.');
-        process.exit(1);
-      }
+    // Config exists but is corrupt — require --force to overwrite. A totally
+    // fresh dir (config missing) proceeds to init below without --force.
+    if (validation.config.valid) {
+      // Shouldn't reach here (allValid mirrors config.valid now), but guard anyway
+      logWarn('Project state issue detected. Use --force to re-initialize.');
+      if (!isInteractiveTTY) process.exit(1);
+    } else if (lib.fileExists(CONFIG_FILE)) {
+      // Config exists but is corrupt/invalid — don't silently overwrite.
+      logError('jonggrang.json is corrupt or invalid. Use --force to re-initialize.');
+      process.exit(1);
     }
+    // else: config missing (fresh dir) — fall through to init
   }
 
   // Auto-detect stack, type, testing, ci — no user input needed
@@ -1857,8 +1959,17 @@ async function cmdInit() {
   logSuccess('Installed .opencode/agents/ (lead, developer, reviewer, test-lead, tester)');
   logSuccess('Installed .opencode/SKILL.md');
 
-  logSuccess('Generated .jonggrang/jonggrang-tasks.json');
-  logSuccess('Generated .jonggrang/progress.txt');
+  // Task & progress state is per-feature now — report migration if it happened
+  if (result.migration && (result.migration.migratedTasks > 0 || result.migration.migratedProgress || result.migration.migratedDraft)) {
+    const m = result.migration;
+    const bits = [];
+    if (m.migratedTasks > 0) bits.push(`${m.migratedTasks} tasks${m.features.length ? ` across ${m.features.length} feature(s)` : ''}`);
+    if (m.migratedProgress) bits.push('progress.txt copied');
+    if (m.migratedDraft) bits.push(`pending plan.md → draft ${m.migratedDraft}`);
+    logSuccess(`Migrated legacy state → per-feature/per-session (${bits.join(', ')})`);
+  } else {
+    logInfo('Task & progress state: per-feature; plan drafts: per-session (created on demand at `jonggrang plan`)');
+  }
   logSuccess(`Copied ${result.skillCount} skill templates → .claude/skills, .opencode/skills, .jonggrang/skills`);
 
   // ── Install hooks for the selected tool ──────────────────────
@@ -1894,14 +2005,16 @@ async function cmdInit() {
   // NOTE: .jonggrang/.output/ stays TRACKED on purpose — plans + manifests are
   // committed and travel with each plan's branch on push.
   const gitignorePath = path.join(PROJECT_ROOT, '.gitignore');
-  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n.jonggrang/.worktree/\n`;
+  const jonggrangIgnoreBlock = `\n# Jonggrang ephemeral state\n.jonggrang/.ephemeral/\n.jonggrang/locks/\n.jonggrang/.worktree/\n.jonggrang/.drafts/\n`;
   try {
     let existing = lib.fileExists(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
     if (!existing.includes('.jonggrang/.ephemeral')) {
       fs.appendFileSync(gitignorePath, jonggrangIgnoreBlock);
-    } else if (!existing.includes('.jonggrang/.worktree')) {
-      // Block already present from an older init — append just the worktree line.
-      fs.appendFileSync(gitignorePath, `.jonggrang/.worktree/\n`);
+    } else {
+      // Append any missing lines individually (idempotent across init upgrades)
+      for (const line of ['.jonggrang/.worktree/', '.jonggrang/.drafts/']) {
+        if (!existing.includes(line)) fs.appendFileSync(gitignorePath, line + '\n');
+      }
     }
   } catch {}
 
@@ -2067,6 +2180,34 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
       logInfo('Resume with: jonggrang work --resume');
       orchestration.failPhase(manifestPath, phaseNum, 'Awaiting human input (brainstorming)');
       process.exit(0);
+    }
+
+    // ── Phase 8: Implementation — delegate to work loop when tasks exist ──
+    if (phaseNum === 8) {
+      const tasksFile = lib.tasksFileFor(PROJECT_ROOT, featureId);
+      const pendingCount = lib.fileExists(tasksFile) ? lib.countPending(tasksFile) : 0;
+
+      if (pendingCount > 0) {
+        logInfo(`Phase 8: delegating to work loop (${pendingCount} pending tasks)`);
+        const result = await runWorkLoop(tasksFile, {
+          maxIterations: 0,
+          worktreeMode: false,
+          dryRun: DRY_RUN,
+        });
+
+        if (result.completed) {
+          orchestration.completePhase(manifestPath, 8, { source: 'work-loop' });
+          logSuccess('Phase 8 complete (work loop finished all tasks)');
+        } else {
+          orchestration.failPhase(manifestPath, 8, `Work loop incomplete: ${result.reason}`);
+          logWarn(`Phase 8 incomplete: ${result.reason}`);
+        }
+        manifest = orchestration.readManifest(manifestPath);
+        continue;
+      }
+
+      // No pending tasks — fall through to generic phase agent (legacy behavior)
+      logInfo('Phase 8: no pending tasks — running generic implementation agent');
     }
 
     // ── Build phase prompt(s) ─────────────────────────────────────
@@ -2324,8 +2465,8 @@ async function cmdMenuClack() {
   let outroShown = false;
 
   while (running) {
-    const hasPendingPlan = lib.fileExists(PLAN_FILE);
-    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
+    const hasPendingPlan = !!lib.resolveActiveDraft(PROJECT_ROOT);
+    const hasArchivedPlans = listAvailablePlans(path.dirname(LEGACY_PLAN_FILE)).length > 0;
     const choice = await select({
       message: 'What do you want to do?',
       initialValue: hasPendingPlan ? 'approve' : 'plan',
@@ -2462,8 +2603,8 @@ async function cmdMenuClack() {
 // Pi TUI menu loop — rich keyboard-navigable interface
 async function cmdMenuTUI(runJonggrangTUI) {
   while (true) {
-    const hasPendingPlan = lib.fileExists(PLAN_FILE);
-    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
+    const hasPendingPlan = !!lib.resolveActiveDraft(PROJECT_ROOT);
+    const hasArchivedPlans = listAvailablePlans(path.dirname(LEGACY_PLAN_FILE)).length > 0;
 
     const items = [
       { value: 'init',     label: 'init',      description: 'Initialize project' },
@@ -2547,8 +2688,8 @@ async function cmdMenuTUI(runJonggrangTUI) {
 // Full-screen TUI menu — persistent session, plan input handled inline
 async function cmdMenuFull(runJonggrangApp) {
   while (true) {
-    const hasPendingPlan = lib.fileExists(PLAN_FILE);
-    const hasArchivedPlans = listAvailablePlans(path.dirname(PLAN_FILE)).length > 0;
+    const hasPendingPlan = !!lib.resolveActiveDraft(PROJECT_ROOT);
+    const hasArchivedPlans = listAvailablePlans(path.dirname(LEGACY_PLAN_FILE)).length > 0;
 
     const items = [
       { value: 'init',     label: 'init',    description: 'Initialize project' },
@@ -2563,7 +2704,7 @@ async function cmdMenuFull(runJonggrangApp) {
       { value: 'exit',     label: 'exit',    description: 'Exit Jonggrang' },
     ];
 
-    const result = await runJonggrangApp({ items, planFile: PLAN_FILE, tasksFile: TASKS_FILE });
+    const result = await runJonggrangApp({ items, projectRoot: PROJECT_ROOT });
     if (!result || !result.choice || result.choice === 'exit') break;
 
     try {
@@ -3022,6 +3163,7 @@ function cmdTask(args) {
     else if (subArgs[j] === '--blocked-by')                         { flags.blocked_by = subArgs[++j].split(','); }
     else if (subArgs[j] === '--files')                              { flags.files = subArgs[++j].split(','); }
     else if (subArgs[j] === '--reason')                             { flags.reason = subArgs[++j]; }
+    else if (subArgs[j] === '--feature')                            { flags.feature = subArgs[++j]; }
     else if (subArgs[j] === '--input')                              { flags.input = subArgs[++j]; }
     else if (subArgs[j] === '--pretty')                             { flags.pretty = true; }
     else if (subArgs[j] === '--json')                               { flags.json = true; }
@@ -3060,26 +3202,41 @@ function cmdTask(args) {
 
 // ── Task handlers ─────────────────────────────────────────────
 
+// Resolve the per-feature tasks file for a task command. Three resolution modes:
+//  - task-id commands (show/update/done/block/remove): auto-lookup the feature
+//    via findTaskFeature(taskId); --feature overrides.
+//  - no-task-id commands (add/import/next): --feature if given, else
+//    resolveActiveFeature (most-recent-incomplete).
+function resolveTasksFile(flags, taskId) {
+  return lib.tasksFileFor(PROJECT_ROOT, resolveFeatureId(flags, taskId));
+}
+function resolveFeatureId(flags, taskId) {
+  let fid = flags.feature;
+  if (!fid && taskId) fid = lib.findTaskFeature(PROJECT_ROOT, taskId);
+  if (!fid) fid = lib.resolveActiveFeature(PROJECT_ROOT);
+  if (!fid) throw new Error('No active feature found. Run `jonggrang plan` + `jonggrang approve` first, or pass --feature <id>.');
+  return fid;
+}
+
 function taskList(flags, positional, pretty) {
   safeCheckConfig();
-  const data = lib.getTasks(TASKS_FILE);
+  // Cross-feature view: merge all feature task files.
+  const data = lib.getAllTasks(PROJECT_ROOT);
   let tasks = data.tasks || [];
 
   const statusFilter = positional[0] || flags.status;
   if (statusFilter) tasks = tasks.filter(t => t.status === statusFilter);
 
   if (pretty) {
-    console.log(`\n${BOLD}Tasks: ${lib.countCompleted(TASKS_FILE)}/${lib.countTotal(TASKS_FILE)} completed${NC}\n`);
+    const completed = tasks.filter(t => t.status === 'completed').length;
+    console.log(`\n${BOLD}Tasks: ${completed}/${tasks.length} completed${NC}\n`);
     // Check if tasks span multiple features
     const featureIds = new Set(tasks.map(t => t.feature_id).filter(Boolean));
     const multiFeature = featureIds.size > 1;
     console.log(`${BOLD}${'ID'.padEnd(11)} ${'Status'.padEnd(12)} ${'Pri'.padEnd(4)} ${multiFeature ? 'Feature'.padEnd(22) : ''}Title${NC}`);
     console.log('-'.repeat(multiFeature ? 87 : 65));
     for (const task of tasks) {
-      let color = NC;
-      if (task.status === 'completed') color = GREEN;
-      else if (task.status === 'in_progress') color = YELLOW;
-      else if (task.status === 'blocked') color = RED;
+      const color = statusColor(task.status);
       const featureCol = multiFeature ? (task.feature_id || '').slice(0, 21).padEnd(22) : '';
       console.log(`${color}${(task.id || '').padEnd(11)} ${(task.status || '').padEnd(12)} ${String(task.priority || '-').padEnd(4)} ${featureCol}${task.title || ''}${NC}`);
     }
@@ -3093,7 +3250,8 @@ function taskShow(flags, positional, pretty) {
   safeCheckConfig();
   const taskId = positional[0];
   if (!taskId) throw new Error('Task ID required. Usage: jonggrang task show <task-id>');
-  const task = lib.getTask(TASKS_FILE, taskId);
+  const tasksFile = resolveTasksFile(flags, taskId);
+  const task = lib.getTask(tasksFile, taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
 
   if (pretty) {
@@ -3129,7 +3287,8 @@ function taskAdd(flags, positional, pretty) {
   const title = flags.title || positional[0];
   if (!title) throw new Error('Title required. Usage: jonggrang task add --title "..." or jonggrang task add "title"');
 
-  const task = lib.addTask(TASKS_FILE, {
+  const featureId = resolveFeatureId(flags);
+  const task = lib.addTask(PROJECT_ROOT, featureId, {
     title,
     description: flags.description || '',
     priority: flags.priority,
@@ -3170,7 +3329,8 @@ function taskImport(flags, positional, pretty) {
   if (!Array.isArray(taskDataArray)) throw new Error('Input must be a JSON array of tasks.');
   if (taskDataArray.length === 0) throw new Error('Task array is empty.');
 
-  const created = lib.addTasksBulk(TASKS_FILE, taskDataArray);
+  const featureId = resolveFeatureId(flags);
+  const created = lib.addTasksBulk(PROJECT_ROOT, featureId, taskDataArray);
 
   if (pretty) {
     logSuccess(`Imported ${created.length} task(s):`);
@@ -3196,7 +3356,8 @@ function taskUpdate(flags, positional, pretty) {
 
   if (Object.keys(updates).length === 0) throw new Error('No updates provided. Use flags like --status, --title, --priority, etc.');
 
-  const task = lib.updateTask(TASKS_FILE, taskId, updates);
+  const tasksFile = resolveTasksFile(flags, taskId);
+  const task = lib.updateTask(tasksFile, taskId, updates);
 
   if (pretty) {
     logSuccess(`Updated ${task.id}: ${task.title}`);
@@ -3210,8 +3371,9 @@ function taskDone(flags, positional, pretty) {
   const taskId = positional[0];
   if (!taskId) throw new Error('Task ID required. Usage: jonggrang task done <task-id>');
 
-  lib.markTaskDone(TASKS_FILE, taskId);
-  const task = lib.getTask(TASKS_FILE, taskId);
+  const tasksFile = resolveTasksFile(flags, taskId);
+  lib.markTaskDone(tasksFile, taskId);
+  const task = lib.getTask(tasksFile, taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
 
   if (pretty) {
@@ -3226,19 +3388,20 @@ function taskBlock(flags, positional, pretty) {
   const taskId = positional[0];
   if (!taskId) throw new Error('Task ID required. Usage: jonggrang task block <task-id> [--reason "..."]');
 
-  lib.updateTask(TASKS_FILE, taskId, { status: 'blocked' });
+  const tasksFile = resolveTasksFile(flags, taskId);
+  lib.updateTask(tasksFile, taskId, { status: 'blocked' });
 
   if (flags.reason) {
-    const data = lib.getTasks(TASKS_FILE);
+    const data = lib.getTasks(tasksFile);
     const t = data.tasks.find(x => x.id === taskId);
     if (t) {
       if (!t.error_log) t.error_log = [];
       t.error_log.push(`[${new Date().toISOString()}] Blocked: ${flags.reason}`);
-      lib.writeJSON(TASKS_FILE, data);
+      lib.writeJSON(tasksFile, data);
     }
   }
 
-  const task = lib.getTask(TASKS_FILE, taskId);
+  const task = lib.getTask(tasksFile, taskId);
   if (pretty) {
     logWarn(`Blocked ${task.id}: ${task.title}${flags.reason ? ' — ' + flags.reason : ''}`);
   } else {
@@ -3251,7 +3414,8 @@ function taskRemove(flags, positional, pretty) {
   const taskId = positional[0];
   if (!taskId) throw new Error('Task ID required. Usage: jonggrang task remove <task-id>');
 
-  const removed = lib.removeTask(TASKS_FILE, taskId);
+  const tasksFile = resolveTasksFile(flags, taskId);
+  const removed = lib.removeTask(tasksFile, taskId);
   if (pretty) {
     logSuccess(`Removed ${removed.id}: ${removed.title}`);
   } else {
@@ -3261,7 +3425,9 @@ function taskRemove(flags, positional, pretty) {
 
 function taskNext(flags, positional, pretty) {
   safeCheckConfig();
-  const nextId = lib.getNextTask(TASKS_FILE);
+  const featureId = resolveFeatureId(flags);
+  const tasksFile = lib.tasksFileFor(PROJECT_ROOT, featureId);
+  const nextId = lib.getNextTask(tasksFile);
   if (!nextId) {
     if (pretty) {
       logInfo('No eligible tasks (all completed or blocked).');
@@ -3270,7 +3436,7 @@ function taskNext(flags, positional, pretty) {
     }
     return;
   }
-  const task = lib.getTask(TASKS_FILE, nextId);
+  const task = lib.getTask(tasksFile, nextId);
   if (pretty) {
     console.log(`\nNext task: ${BOLD}${task.id}${NC} — ${task.title}`);
     console.log(`Priority: ${task.priority}  |  Status: ${task.status}`);
@@ -3643,10 +3809,11 @@ Usage: jonggrang <command> [options]
 
 Commands:
   init                    Setup project (interactive or with flags)
-  plan <description>      Phase 1 — generate human-readable .jonggrang/plan.md for review
+  plan <description>      Phase 1 — generate .jonggrang/.drafts/<session>/plan.md for review
   plan <description> --src <path>  Reference a source document path for the agent to read
   plan <description> --yes  Plan + auto-approve + decompose to tasks in one shot
-  approve                 Phase 2 — decompose approved plan.md into tasks (after review)
+  approve                 Phase 2 — decompose the most-recent draft into tasks
+  approve --session <id>  Phase 2 — decompose a specific draft session into tasks
   work [description]      Execute tasks — with description runs plan → approve → execute
   work --resume           Resume incomplete pipeline from last phase
   plan --update <desc>    Update existing plan (preserves completed tasks)
@@ -3881,6 +4048,7 @@ async function main() {
       case '--dry-run':       DRY_RUN = true; break;
       case '--worktree':     WORKTREE_MODE = true; break;
       case '--group-tasks':  GROUP_TASK_IDS = rest[++i].split(','); break;
+      case '--feature':      WORK_FEATURE_ID = rest[++i]; break;
       case '--name':          INIT_NAME = rest[++i]; break;
       case '--type':          INIT_TYPE = rest[++i]; break;
       case '--work-mode':     INIT_WORK_MODE = rest[++i]; break;

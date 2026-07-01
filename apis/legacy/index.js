@@ -42,18 +42,21 @@ module.exports = function register(app, io, ctx) {
 
     function readTasks() {
         try {
-            if (lib.fileExists(paths.tasksFile)) {
-                const data = lib.readJSON(paths.tasksFile);
-                if (data) { state.latestTasks = data; io.emit('tasks_update', state.latestTasks); }
-            }
+            const data = lib.getAllTasks(PROJECT_ROOT);
+            if (data) { state.latestTasks = data; io.emit('tasks_update', state.latestTasks); }
         } catch (err) { console.error('Error reading tasks:', err); }
     }
 
     function readProgress() {
         try {
-            if (lib.fileExists(paths.progressFile)) {
-                state.latestProgress = fs.readFileSync(paths.progressFile, 'utf8');
-                io.emit('progress_update', state.latestProgress);
+            // Progress is per-feature now; read the active feature's progress.txt
+            const fid = lib.resolveActiveFeature(PROJECT_ROOT);
+            if (fid) {
+                const progressPath = lib.progressFileFor(PROJECT_ROOT, fid);
+                if (lib.fileExists(progressPath)) {
+                    state.latestProgress = fs.readFileSync(progressPath, 'utf8');
+                    io.emit('progress_update', state.latestProgress);
+                }
             }
         } catch (err) { console.error('Error reading progress:', err); }
     }
@@ -69,9 +72,12 @@ module.exports = function register(app, io, ctx) {
 
     function emitPlanUpdate() {
         try {
-            if (lib.fileExists(paths.planFile)) {
-                const content = fs.readFileSync(paths.planFile, 'utf8');
-                io.emit('plan_update', { exists: true, content });
+            // Emit the most-recent draft session (pre-approval plans live per-session)
+            const sid = lib.resolveActiveDraft(PROJECT_ROOT);
+            if (sid) {
+                const draftFile = lib.draftFileFor(PROJECT_ROOT, sid);
+                const content = fs.readFileSync(draftFile, 'utf8');
+                io.emit('plan_update', { exists: true, content, sessionId: sid });
             } else {
                 io.emit('plan_update', { exists: false, content: '' });
             }
@@ -102,16 +108,23 @@ module.exports = function register(app, io, ctx) {
 
     // ── Watchers ─────────────────────────────────────────────────
 
+    const watchers = [];
     readTasks(); readProgress(); readConfigFile();
-    chokidar.watch(paths.tasksFile, { ignoreInitial: true }).on('all', () => readTasks());
-    chokidar.watch(paths.progressFile, { ignoreInitial: true }).on('all', () => readProgress());
-    chokidar.watch(paths.configFile, { ignoreInitial: true }).on('all', () => readConfigFile());
-    chokidar.watch(paths.planFile, { ignoreInitial: false }).on('all', emitPlanUpdate);
+    // Watch the features directory for per-feature task/progress changes.
+    // Create it first so fresh repos still receive updates after the first plan approval.
+    const featuresDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features');
+    fs.mkdirSync(featuresDir, { recursive: true });
+    watchers.push(chokidar.watch(featuresDir, { ignoreInitial: true })
+        .on('all', () => { readTasks(); readProgress(); }));
+    watchers.push(chokidar.watch(paths.configFile, { ignoreInitial: true }).on('all', () => readConfigFile()));
+    const draftsDir = path.join(PROJECT_ROOT, '.jonggrang', '.drafts');
+    fs.mkdirSync(draftsDir, { recursive: true });
+    watchers.push(chokidar.watch(draftsDir, { ignoreInitial: false }).on('all', emitPlanUpdate));
     const jonggrangDir = path.join(PROJECT_ROOT, '.jonggrang');
     fs.mkdirSync(jonggrangDir, { recursive: true });
-    chokidar.watch(jonggrangDir, { ignoreInitial: true, depth: 4 })
+    watchers.push(chokidar.watch(jonggrangDir, { ignoreInitial: true, depth: 4 })
         .on('add', emitManifestsUpdate)
-        .on('change', emitManifestsUpdate);
+        .on('change', emitManifestsUpdate));
 
     // ── Legacy socket connection ──────────────────────────────────
 
@@ -154,14 +167,13 @@ module.exports = function register(app, io, ctx) {
 
     // ── Cleanup ───────────────────────────────────────────────────
 
+    function killSafely(proc) {
+        if (proc && !proc.killed) { try { proc.kill('SIGKILL'); } catch {} }
+    }
+
     return function cleanup() {
-        if (state.jonggrangProcess && !state.jonggrangProcess.killed) {
-            try { state.jonggrangProcess.kill('SIGKILL'); } catch {}
-        }
-        for (const [, group] of groupProcesses) {
-            if (group.process && !group.process.killed) {
-                try { group.process.kill('SIGKILL'); } catch {}
-            }
-        }
+        killSafely(state.jonggrangProcess);
+        for (const [, group] of groupProcesses) killSafely(group.process);
+        for (const watcher of watchers) watcher.close().catch(() => {});
     };
 };

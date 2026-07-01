@@ -38,21 +38,21 @@ test('buildFeatureSection with both description and srcPath references the path'
 });
 
 test('buildDraftPlanPrompt with srcPath contains the path but not file content', () => {
-  const prompt = lib.buildDraftPlanPrompt('add login', null, null, CANONICAL_PATH);
+  const prompt = lib.buildDraftPlanPrompt('add login', null, null, 'plan.md', CANONICAL_PATH);
   assert.match(prompt, new RegExp(CANONICAL_PATH));
   assert.doesNotMatch(prompt, /secret content/);
   assert.doesNotMatch(prompt, /BRD/);
 });
 
 test('buildDeepPlanDiscoveryPrompt with srcPath contains the path', () => {
-  const prompt = lib.buildDeepPlanDiscoveryPrompt('add login', null, CANONICAL_PATH);
+  const prompt = lib.buildDeepPlanDiscoveryPrompt('add login', null, 'deep-plan-discovery.md', CANONICAL_PATH);
   assert.match(prompt, new RegExp(CANONICAL_PATH));
   assert.match(prompt, /Source Document/);
 });
 
 test('buildDeepPlanCondensePrompt with srcPath contains the path', () => {
   const prompt = lib.buildDeepPlanCondensePrompt(
-    'add login', 'discovery', 'analysis', null, null, CANONICAL_PATH
+    'add login', 'discovery', 'analysis', null, null, 'plan.md', CANONICAL_PATH
   );
   assert.match(prompt, new RegExp(CANONICAL_PATH));
   assert.match(prompt, /Source Document/);

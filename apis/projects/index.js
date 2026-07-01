@@ -1,6 +1,7 @@
 'use strict';
 
 const sandbox = require('../../lib/sandbox');
+const lib = require('../../lib/jonggrang');
 
 module.exports = function register(app, io, ctx) {
     const { JONGGRANG_HOME, webState, orchestration, server } = ctx;
@@ -108,21 +109,25 @@ module.exports = function register(app, io, ctx) {
 
         const emit = (changedPath) => {
             try {
-                const planPath = path.join(project.path, '.jonggrang', 'plan.md');
-                const tasksPath = path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
+                try { lib.migrateLegacyPlanDraft(project.path); } catch {}
+                const sid = lib.resolveActiveDraft(project.path);
+                const planPath = sid ? lib.draftFileFor(project.path, sid) : '';
                 const state = webState.deriveState(project.path);
                 io.to(`project:${project.id}`).emit('state', { project_id: project.id, state });
-                if (fs.existsSync(planPath)) {
+                if (planPath && fs.existsSync(planPath)) {
                     const content = fs.readFileSync(planPath, 'utf-8');
                     const mtime = fs.statSync(planPath).mtimeMs;
-                    io.to(`project:${project.id}`).emit('plan.content', { project_id: project.id, content, mtime });
+                    io.to(`project:${project.id}`).emit('plan.content', { project_id: project.id, sessionId: sid, content, mtime });
                 } else {
-                    io.to(`project:${project.id}`).emit('plan.deleted', { project_id: project.id });
+                    io.to(`project:${project.id}`).emit('plan.deleted', { project_id: project.id, sessionId: sid || null });
                 }
-                if (fs.existsSync(tasksPath)) {
-                    const data = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'));
-                    io.to(`project:${project.id}`).emit('tasks.update', { project_id: project.id, tasks: data.tasks || [] });
+                try {
+                    const allTasks = lib.getAllTasks(project.path);
+                    io.to(`project:${project.id}`).emit('tasks.update', { project_id: project.id, tasks: allTasks.tasks || [] });
+                } catch {
+                    console.log('Error reading tasks', project.path);
                 }
+                
                 if (changedPath && changedPath.endsWith('MANIFEST.yaml')) {
                     try {
                         const manifest = orchestration.readManifest(changedPath);
@@ -162,16 +167,16 @@ module.exports = function register(app, io, ctx) {
             try {
                 const project = webState.getProject(project_id);
                 if (!project) return;
+                try { lib.migrateLegacyPlanDraft(project.path); } catch {}
                 const state = webState.deriveState(project.path);
-                const tasksPath = path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
-                const planPath = path.join(project.path, '.jonggrang', 'plan.md');
+                const sid = lib.resolveActiveDraft(project.path);
+                const planPath = sid ? lib.draftFileFor(project.path, sid) : '';
+                // Tasks are per-feature under .output/features/<id>/; merge via getAllTasks.
                 let tasks = [];
-                if (fs.existsSync(tasksPath)) {
-                    try { tasks = JSON.parse(fs.readFileSync(tasksPath, 'utf-8')).tasks || []; } catch {}
-                }
+                try { tasks = lib.getAllTasks(project.path).tasks || []; } catch {}
                 let planContent = null;
                 let planMtime = null;
-                if (fs.existsSync(planPath)) {
+                if (planPath && fs.existsSync(planPath)) {
                     planContent = fs.readFileSync(planPath, 'utf-8');
                     planMtime = fs.statSync(planPath).mtimeMs;
                 }
@@ -183,6 +188,7 @@ module.exports = function register(app, io, ctx) {
                         state,
                         tasks,
                         plan_exists: !!planContent,
+                        plan_session_id: sid || null,
                         plan_content: planContent,
                         plan_mtime: planMtime,
                         process: running ? { command: 'work' } : null,
