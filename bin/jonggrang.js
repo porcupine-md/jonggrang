@@ -995,13 +995,19 @@ async function cmdReview() {
 
 /** Parse key: value pairs from YAML frontmatter of a plan.md */
 function parsePlanFrontmatter(content) {
-  const get = (key) => { const m = content.match(new RegExp(`^${key}:\\s*(.+)$`, 'm')); return m ? m[1].trim() : ''; };
+  // Strip surrounding matched quotes — platform-written scalars (base:, append_to:)
+  // are quoted so YAML-keyword-like values survive; the agent writes them bare.
+  const get = (key) => {
+    const m = content.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+    return m ? m[1].trim().replace(/^(["'])([\s\S]*)\1$/, '$2') : '';
+  };
   return {
     feature:     get('feature'),
     branch:      get('branch'),
     work_type:   get('work_type'),
     description: get('description'),
     created_at:  get('created_at'),
+    append_to:   get('append_to'),
   };
 }
 
@@ -1103,6 +1109,7 @@ async function cmdPlan(args, opts = {}) {
   let reviseMode = false;
   let baseBranch = '';
   let sessionId = '';
+  let appendTo = '';   // --append <featureId> : extend an existing approved plan
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -1111,6 +1118,7 @@ async function cmdPlan(args, opts = {}) {
     else if (arg === '--revise') reviseMode = true;
     else if (arg === '--base') baseBranch = args[++i] || '';
     else if (arg === '--session') sessionId = args[++i] || '';
+    else if (arg === '--append') appendTo = args[++i] || '';
     else if (!arg.startsWith('--')) description = arg;
   }
 
@@ -1120,6 +1128,25 @@ async function cmdPlan(args, opts = {}) {
   if (baseBranch && !lib.isSafeBranchName(baseBranch)) {
     logError(`Invalid --base "${baseBranch}": must be a plain branch name (letters, digits, . _ / -).`);
     process.exit(1);
+  }
+
+  // --append <featureId>: extend an existing approved plan. Validate the target
+  // exists before spending a generation; extension plans use standard (non-deep)
+  // generation and require a scope description.
+  let appendPlanPath = '';
+  if (appendTo) {
+    if (!lib.isSafeBranchName(appendTo)) {
+      logError(`Invalid --append feature id "${appendTo}".`);
+      process.exit(1);
+    }
+    appendPlanPath = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', appendTo, 'plan.md');
+    if (!fs.existsSync(appendPlanPath)) {
+      logError(`--append: feature "${appendTo}" not found (no approved plan at ${appendPlanPath}).`);
+      logInfo('Use "jonggrang status" to list features, or run "jonggrang plan <desc>" for a new one.');
+      process.exit(1);
+    }
+    // --append + --deep is supported: a deep discovery+analysis pre-pass enriches
+    // the extension plan (Affected Areas / Risks / Alternatives) before synthesis.
   }
 
   if (!await ensureInit()) return;
@@ -1225,7 +1252,54 @@ async function cmdPlan(args, opts = {}) {
     logInfo(`${existingDrafts.length} pending draft(s) already exist. This creates a new session (${sid}); 'jonggrang approve' defaults to the most recent, or use 'jonggrang approve --session <id>'.`);
   }
 
-  if (deepMode) {
+  if (appendTo) {
+    // ── Append mode: extend an existing approved plan ──────────
+    logHeader(deepMode ? 'JONGGRANG Plan — Extend Existing Plan (Deep)' : 'JONGGRANG Plan — Extend Existing Plan');
+    logInfo(`Feature:   ${appendTo}`);
+    logInfo(`Tool:      ${TOOL}`);
+    logInfo(`Session:   ${sid}`);
+    feedback.clearFeedbackState(PROJECT_ROOT);
+
+    const existingPlan = fs.readFileSync(appendPlanPath, 'utf8');
+    const existingTasks = (lib.getAllTasks(PROJECT_ROOT)?.tasks || []).filter(t => t.feature_id === appendTo);
+
+    // Deep pre-pass: discovery + analysis on the ADDITIONAL scope enrich the
+    // extension plan. Best-effort — if either step is skipped, synthesis still runs.
+    let deepCtx = null;
+    if (deepMode) {
+      const discoveryFile = path.join(draftDir, 'deep-plan-discovery.md');
+      const analysisFile = path.join(draftDir, 'deep-plan-analysis.md');
+      logInfo(`${BOLD}[1/3]${NC} Codebase discovery (for the additional scope)...`);
+      await lib.runAgent(lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile), TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      if (lib.fileExists(discoveryFile)) {
+        const discoveryContent = fs.readFileSync(discoveryFile, 'utf8');
+        logInfo(`${BOLD}[2/3]${NC} Complexity analysis & brainstorm...`);
+        await lib.runAgent(lib.buildDeepPlanAnalysisPrompt(description, discoveryContent, analysisFile), TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+        deepCtx = { discovery: discoveryContent, analysis: lib.fileExists(analysisFile) ? fs.readFileSync(analysisFile, 'utf8') : '' };
+      } else {
+        logWarn('Discovery step produced no output — falling back to standard extension synthesis.');
+      }
+      logInfo(`${BOLD}[3/3]${NC} Synthesizing enriched extension plan...`);
+    } else {
+      logInfo('Generating extension plan...');
+    }
+
+    const prompt = lib.buildAppendPlanPrompt(description, existingPlan, existingTasks, CONFIG_FILE, PROJECT_ROOT, draftFile, appendTo, { deep: deepCtx });
+    await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+    const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
+    if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+    if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
+    // Clean up deep intermediates (plan.md stays in the draft folder).
+    if (deepMode) {
+      try { fs.unlinkSync(path.join(draftDir, 'deep-plan-discovery.md')); } catch {}
+      try { fs.unlinkSync(path.join(draftDir, 'deep-plan-analysis.md')); } catch {}
+    }
+    // Stamp append_to deterministically (belt + suspenders vs the prompt) so
+    // approve routes this draft to the existing feature.
+    if (!lib.setPlanFrontmatterField(draftFile, 'append_to', appendTo)) {
+      logWarn(`Could not stamp append_to into the draft frontmatter — approve may treat this as a new feature.`);
+    }
+  } else if (deepMode) {
     // ── Deep mode: 3 sequential AI phases ──────────────────────
     // Discovery + analysis intermediates live in the draft session folder;
     // only plan.md promotes to features/<id>/ at approve.
@@ -1429,9 +1503,11 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts, sessionId) {
 async function cmdApprove(args, opts = {}) {
   // Resolve the draft to approve: --session override, else most-recent draft.
   let sessionId = opts.session || '';
-  // Allow --session as a CLI flag too
+  let featureFlag = opts.feature || '';   // --feature <id>: decompose into an existing feature (append)
+  // Allow --session / --feature as CLI flags too
   for (let i = 0; i < (args || []).length; i++) {
     if (args[i] === '--session') sessionId = args[++i] || '';
+    else if (args[i] === '--feature') featureFlag = args[++i] || '';
   }
   if (!sessionId) sessionId = lib.resolveActiveDraft(PROJECT_ROOT);
   if (!sessionId) {
@@ -1459,68 +1535,111 @@ async function cmdApprove(args, opts = {}) {
 
   // Parse YAML frontmatter fields
   const fm = parsePlanFrontmatter(planContent);
-  const featureName = fm.feature || 'work-session';
-  const workType    = fm.work_type || 'MEDIUM';
 
-  // Generate featureId BEFORE running the agent so we can create the feature
-  // directory + MANIFEST first. The decompose agent writes tasks via
-  // `jonggrang task import --feature <id>`, which needs the feature folder to
-  // exist (resolveActiveFeature won't find this feature until its MANIFEST exists).
-  const featureId = orchestration.generateFeatureId(featureName);
+  // Append target: explicit --feature wins, else the draft's `append_to` (written
+  // by `plan --append`). When set, we decompose ADDITIONAL tasks into an existing
+  // feature (numbering continues, completed tasks untouched) instead of minting one.
+  const appendTo = featureFlag || fm.append_to || '';
+  const isAppend = !!appendTo;
 
-  // Create the feature output directory + MANIFEST up front (before decompose).
-  // The plan.md is archived after the agent succeeds; only the folder + MANIFEST
-  // are created now so `task import --feature` has a home to write to.
-  const outputDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
-  fs.mkdirSync(outputDir, { recursive: true });
-  const manifestPath = path.join(outputDir, 'MANIFEST.yaml');
-  if (!fs.existsSync(manifestPath)) {
-    orchestration.createManifest(PROJECT_ROOT, featureId, featureName, workType);
+  let featureId, featureName, workType;
+  if (isAppend) {
+    featureId = appendTo;
   }
 
-  // Snapshot existing task IDs globally (across all features) so we can detect
-  // which tasks the agent created. With per-feature files there are no orphan
-  // `feature_id: null` tasks to purge — the feature file starts empty.
+  if (isAppend) {
+    const featurePlanPath = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId, 'plan.md');
+    if (!fs.existsSync(featurePlanPath)) {
+      logError(`Cannot append: feature "${featureId}" not found (no plan at ${featurePlanPath}).`);
+      process.exit(1);
+    }
+    const existingFm = parsePlanFrontmatter(fs.readFileSync(featurePlanPath, 'utf8'));
+    featureName = existingFm.feature || featureId;
+    workType    = existingFm.work_type || fm.work_type || 'MEDIUM';
+  } else {
+    featureName = fm.feature || 'work-session';
+    workType    = fm.work_type || 'MEDIUM';
+    // Generate featureId BEFORE running the agent so we can create the feature
+    // directory + MANIFEST first (the decompose agent writes via `task import --feature`).
+    featureId = orchestration.generateFeatureId(featureName);
+  }
+
+  const featureDir = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId);
+  const manifestPath = path.join(featureDir, 'MANIFEST.yaml');
+  if (!isAppend) {
+    fs.mkdirSync(featureDir, { recursive: true });
+    if (!fs.existsSync(manifestPath)) {
+      orchestration.createManifest(PROJECT_ROOT, featureId, featureName, workType);
+    }
+  }
+
+  // Snapshot existing task IDs IN THIS FEATURE so we can detect what the agent
+  // added (append continues this feature's own numbering; a new feature is empty).
   const existingTaskIds = new Set(
-    (lib.getAllTasks(PROJECT_ROOT)?.tasks || []).map(t => t.id)
+    (lib.getAllTasks(PROJECT_ROOT)?.tasks || [])
+      .filter(t => t.feature_id === featureId)
+      .map(t => t.id)
   );
 
   logInfo(`Feature:    ${featureName}`);
-  logInfo(`Feature ID: ${featureId}`);
+  logInfo(`Feature ID: ${featureId}${isAppend ? ' (append)' : ''}`);
   logInfo(`Work type:  ${workType}`);
-  logInfo('Decomposing plan into tasks...');
+  logInfo(isAppend ? 'Decomposing additional tasks into the existing plan...' : 'Decomposing plan into tasks...');
 
   const prompt = lib.buildTasksFromPlanPrompt(planContent, CONFIG_FILE, PROJECT_ROOT, featureId, SKILLS_DIR);
   await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
-  // No feature_id stamping needed — the agent wrote via `task import --feature`,
-  // which stamps feature_id and enforces global ID uniqueness in the lib layer.
-
-  // Only archive if the agent actually created new tasks
-  const newTasks = (lib.getAllTasks(PROJECT_ROOT)?.tasks || []).filter(t => !existingTaskIds.has(t.id));
+  // New tasks = tasks in THIS feature that weren't there before the decompose.
+  const newTasks = (lib.getAllTasks(PROJECT_ROOT)?.tasks || [])
+    .filter(t => t.feature_id === featureId && !existingTaskIds.has(t.id));
   if (newTasks.length === 0) {
     logError('Agent did not create any tasks. plan.md has been preserved — re-run "jonggrang approve" after fixing the issue.');
     process.exit(1);
   }
 
-  // Promote the draft plan into the feature folder (move, not copy). The draft
-  // session folder is discarded after — only plan.md persists in features/<id>/.
-  fs.copyFileSync(draftFile, path.join(outputDir, 'plan.md'));
+  const featurePlanPath = path.join(featureDir, 'plan.md');
+  if (isAppend) {
+    // Merge the extension into the existing plan.md as a dated section (single
+    // source of truth) — never overwrite the original plan or its history.
+    const stamp = new Date().toISOString();
+    const deltaBody = planContent.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
+    fs.appendFileSync(featurePlanPath, `\n\n<!-- jonggrang:appended ${stamp} -->\n## Appended ${stamp}\n\n${deltaBody}\n`);
+  } else {
+    // Promote the draft plan into the feature folder.
+    fs.copyFileSync(draftFile, featurePlanPath);
+  }
   try { fs.rmSync(lib.draftDirFor(PROJECT_ROOT, sessionId), { recursive: true, force: true }); } catch {}
 
-  // Mark all planning phases as done — they were completed by plan+approve.
-  // (MANIFEST was created above; here we just complete phases 1-7.)
+  // MANIFEST: new feature → complete planning phases 1-7. Append → planning is
+  // already done; re-open the EXECUTION phases (8 Implement + post-work gates) so
+  // `work` re-runs implementation for the newly appended tasks instead of seeing
+  // phase 8 "completed" and skipping straight to post-work. Planning phases stay done.
   if (fs.existsSync(manifestPath)) {
     const manifest = orchestration.readManifest(manifestPath);
     if (manifest) {
-      [1, 2, 3, 4, 5, 6, 7].forEach(n => {
-        if (manifest.active_phases.includes(n))
-          orchestration.completePhase(manifestPath, n, { source: 'approve' });
-      });
+      if (!isAppend) {
+        [1, 2, 3, 4, 5, 6, 7].forEach(n => {
+          if (manifest.active_phases.includes(n))
+            orchestration.completePhase(manifestPath, n, { source: 'approve' });
+        });
+      } else {
+        let changed = false;
+        for (const n of (manifest.active_phases || [])) {
+          if (n >= 8 && manifest.phases?.[n]?.status === 'completed') {
+            manifest.phases[n].status = 'pending';
+            changed = true;
+          }
+        }
+        if (changed || manifest.status === 'completed') {
+          manifest.status = 'in_progress';
+          manifest.updated_at = new Date().toISOString();
+          orchestration.writeManifest(manifestPath, manifest);
+        }
+      }
     }
   }
 
-  logSuccess('Plan approved.');
+  logSuccess(isAppend ? `Appended ${newTasks.length} task(s) to ${featureId}.` : 'Plan approved.');
   logInfo(`Feature ID:    ${featureId}`);
   logInfo(`Plan archived: .jonggrang/.output/features/${featureId}/plan.md`);
 
@@ -3197,7 +3316,14 @@ function resolveTasksFile(flags, taskId) {
 }
 function resolveFeatureId(flags, taskId) {
   let fid = flags.feature;
-  if (!fid && taskId) fid = lib.findTaskFeature(PROJECT_ROOT, taskId);
+  if (!fid && taskId) {
+    try {
+      fid = lib.findTaskFeature(PROJECT_ROOT, taskId, { featureId: flags.feature, throwOnAmbiguous: true });
+    } catch (e) {
+      if (e.code === 'AMBIGUOUS_TASK_ID') { logError(e.message); process.exit(1); }
+      throw e;
+    }
+  }
   if (!fid) fid = lib.resolveActiveFeature(PROJECT_ROOT);
   if (!fid) throw new Error('No active feature found. Run `jonggrang plan` + `jonggrang approve` first, or pass --feature <id>.');
   return fid;
@@ -3796,8 +3922,10 @@ Commands:
   init                    Setup project (interactive or with flags)
   plan <description>      Phase 1 — generate .jonggrang/.drafts/<session>/plan.md for review
   plan <description> --yes  Plan + auto-approve + decompose to tasks in one shot
+  plan --append <id> "x"  Extend an existing approved plan; appends tasks (numbering continues)
   approve                 Phase 2 — decompose the most-recent draft into tasks
   approve --session <id>  Phase 2 — decompose a specific draft session into tasks
+  approve --feature <id>  Phase 2 — decompose the draft into an EXISTING feature (append)
   work [description]      Execute tasks — with description runs plan → approve → execute
   work --resume           Resume incomplete pipeline from last phase
   plan --update <desc>    Update existing plan (preserves completed tasks)

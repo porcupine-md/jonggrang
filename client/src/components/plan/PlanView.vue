@@ -274,15 +274,31 @@
           <div class="plan-viewer-header">
             <span class="plan-viewer-title">{{ selectedPlan.title }}</span>
             <span class="plan-badge" :class="`plan-badge--${selectedPlan.status}`">{{ selectedPlan.status }}</span>
-            <RouterLink
-              v-if="selectedPlan.status !== 'draft'"
-              :to="`/projects/${projectId}/plans/${selectedPlan.id}/pipeline`"
-              style="margin-left:auto"
-            >
-              <Button>
-                Work Mode <i class="pi pi-arrow-right" />
+            <div v-if="selectedPlan.status !== 'draft'" style="margin-left:auto; display:flex; gap:8px;">
+              <Button severity="secondary" :disabled="generating" @click="toggleExtendForm">
+                <i class="pi pi-plus" /> Extend this plan
               </Button>
-            </RouterLink>
+              <RouterLink :to="`/projects/${projectId}/plans/${selectedPlan.id}/pipeline`">
+                <Button>
+                  Work Mode <i class="pi pi-arrow-right" />
+                </Button>
+              </RouterLink>
+            </div>
+          </div>
+          <div v-if="showExtendForm" class="plan-extend-form" style="display:flex; flex-direction:column; gap:8px; padding:10px 12px; border-bottom:1px solid var(--jg-border);">
+            <label style="font-size:12px; color:var(--jg-text-dim);">Additional scope to append (numbering continues from this plan's tasks)</label>
+            <textarea v-model="extendDescription" rows="3" class="plan-extend-input"
+              placeholder="e.g. also add rate limiting to the login endpoint"
+              style="width:100%; padding:6px 8px; border-radius:6px; background:var(--jg-bg); border:1px solid var(--jg-border); color:var(--jg-text); font-family:var(--font-mono); font-size:12px;" />
+            <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end;">
+              <label style="display:flex; align-items:center; gap:6px; margin-right:auto; font-size:12px; color:var(--jg-text-dim); cursor:pointer;">
+                <input type="checkbox" v-model="extendDeep" /> Deep analysis (discovery + risks for the added scope)
+              </label>
+              <Button severity="secondary" @click="showExtendForm = false">Cancel</Button>
+              <Button :disabled="!extendDescription.trim() || generating" @click="extendPlan">
+                <i class="pi pi-sparkles" /> Generate Extension
+              </Button>
+            </div>
           </div>
           <div class="plan-viewer-body">
             <div class="md-content" v-html="renderedContent" />
@@ -404,6 +420,11 @@ const approving = ref(false);
 const revising = ref(false);
 const genLog = ref('');
 const genError = ref('');
+
+// Extend-an-existing-plan (append) state
+const showExtendForm = ref(false);
+const extendDescription = ref('');
+const extendDeep = ref(false);
 
 // xterm for progress log
 const genLogStr = computed(() => genLog.value);
@@ -612,6 +633,40 @@ async function loadProjectTool() {
       if (tool) selectedTool.value = tool;
     }
   } catch {}
+}
+
+function toggleExtendForm() {
+  showExtendForm.value = !showExtendForm.value;
+  if (showExtendForm.value) { extendDescription.value = ''; extendDeep.value = false; }
+}
+
+// Extend the selected (approved/done) plan: generate an extension draft, which
+// the user then approves — the appended tasks continue this plan's numbering.
+async function extendPlan() {
+  if (!extendDescription.value.trim() || generating.value || !selectedPlan.value) return;
+  const featureId = selectedPlan.value.feature_id || selectedPlan.value.id;
+  genError.value = '';
+  genLog.value = '';
+  generating.value = true;
+  showExtendForm.value = false;
+  try {
+    const body = { description: extendDescription.value, deep: extendDeep.value };
+    if (selectedTool.value)   body.tool   = selectedTool.value;
+    if (selectedModel.value)  body.model  = selectedModel.value;
+    if (selectedEffort.value) body.effort = selectedEffort.value;
+    const res = await fetch(`/api/projects/${projectId.value}/plans/${featureId}/extend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error?.message || 'Failed');
+    }
+  } catch (e) {
+    genError.value = e.message;
+    generating.value = false;
+  }
 }
 
 async function generatePlan() {
