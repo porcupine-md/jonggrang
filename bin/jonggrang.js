@@ -45,10 +45,10 @@ const paths = lib.getProjectPaths(PROJECT_ROOT);
 const CONFIG_FILE   = process.env.JONGGRANG_CONFIG || paths.configFile;
 const TASKS_FILE    = paths.tasksFile;
 const LEGACY_PLAN_FILE = paths.legacyPlanFile;
-// Clarifying-questions sidecars (feature: plan ask). Durable, root-level — one
-// plan generation runs at a time per project, and they're cleared before Pass A.
-const QUESTIONS_FILE = paths.questionsFile;
-const ANSWERS_FILE  = paths.answersFile;
+// Clarifying-questions/answers sidecars (feature: plan ask) are PER-DRAFT: they
+// live in .drafts/<session>/ alongside plan.md, resolved via lib.questionsFileFor
+// / lib.answersFileFor. Per-draft placement keeps concurrent `plan` runs from
+// clobbering each other's Q&A. There is no root-level singleton anymore.
 const PROGRESS_FILE = paths.progressFile;
 const AGENTS_FILE   = paths.agentsFile;
 const SKILLS_DIR    = paths.skillsDir;
@@ -1143,7 +1143,17 @@ function cmdPlanAsk(subArgs) {
     try { payload = JSON.parse(raw); }
     catch (e) { throw new Error(`Invalid JSON: ${e.message}`); }
 
-    const saved = lib.savePlanQuestions(QUESTIONS_FILE, payload, flags.goal);
+    // `plan ask` runs as a subprocess of the planning agent, which has no
+    // session context of its own. cmdPlan exports the active draft session via
+    // JONGGRANG_DRAFT_SESSION before invoking the agent; fall back to the most
+    // recent existing draft for standalone/manual use.
+    const sid = process.env.JONGGRANG_DRAFT_SESSION || lib.resolveActiveDraft(PROJECT_ROOT);
+    if (!sid) {
+      throw new Error('No active draft session for questions. Run `jonggrang plan "<description>"` first (it sets the session).');
+    }
+    const questionsFile = lib.questionsFileFor(PROJECT_ROOT, sid);
+    fs.mkdirSync(path.dirname(questionsFile), { recursive: true });
+    const saved = lib.savePlanQuestions(questionsFile, payload, flags.goal);
 
     if (pretty) {
       logSuccess(`Submitted ${saved.questions.length} clarifying question(s):`);
@@ -1347,9 +1357,11 @@ async function cmdPlan(args, opts = {}) {
     logHeader('JONGGRANG Plan — Revise with AI');
     logInfo(`Session:     ${sid}`);
     logInfo(`Instruction: ${description}`);
+    // Any `plan ask` the revision agent runs resolves to THIS session.
+    process.env.JONGGRANG_DRAFT_SESSION = sid;
     const currentPlan = fs.readFileSync(draftFile, 'utf8');
     // Reuse any earlier clarifications so the revision respects prior decisions.
-    const priorAnswers = lib.getPlanAnswers(ANSWERS_FILE);
+    const priorAnswers = lib.getPlanAnswers(lib.answersFileFor(PROJECT_ROOT, sid));
     const clarifications = lib.formatClarifications(priorAnswers);
     const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description, draftFile, { clarifications });
     await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
@@ -1424,6 +1436,12 @@ async function cmdPlan(args, opts = {}) {
   const draftFile = lib.draftFileFor(PROJECT_ROOT, sid);
   fs.mkdirSync(draftDir, { recursive: true });
 
+  // Per-draft Q&A sidecars, colocated with plan.md under .drafts/<sid>/. Export
+  // the session so any `plan ask` the planning agent runs writes into THIS draft.
+  const questionsFile = lib.questionsFileFor(PROJECT_ROOT, sid);
+  const answersFile = lib.answersFileFor(PROJECT_ROOT, sid);
+  process.env.JONGGRANG_DRAFT_SESSION = sid;
+
   const existingDrafts = lib.getAllDrafts(PROJECT_ROOT).filter(d => d.sessionId !== sid);
   if (existingDrafts.length > 0 && !sessionId) {
     logInfo(`${existingDrafts.length} pending draft(s) already exist. This creates a new session (${sid}); 'jonggrang approve' defaults to the most recent, or use 'jonggrang approve --session <id>'.`);
@@ -1437,14 +1455,14 @@ async function cmdPlan(args, opts = {}) {
     // Fresh plan run: drop any stale answers from a previous plan so they can't
     // leak into this run (--no-ask / no-questions cases) or a later `--revise`.
     // Pass B (--answers/-inline) re-saves the current run's answers below.
-    lib.clearPlanAnswers(ANSWERS_FILE);
+    lib.clearPlanAnswers(answersFile);
     let answers = loadPreAnswers(answersInput, answersInline); // web/scripts: Pass B directly
     if (!answers && !noAsk && !autoApprove) {
-      lib.clearPlanQuestions(QUESTIONS_FILE);
+      lib.clearPlanQuestions(questionsFile);
       logInfo('Analyzing goal — the agent may ask clarifying questions first...');
       const qPrompt = lib.buildPlanQuestionsPrompt(description, CONFIG_FILE);
       await lib.runAgent(qPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
-      const q = lib.getPlanQuestions(QUESTIONS_FILE);
+      const q = lib.getPlanQuestions(questionsFile);
       if (q.questions && q.questions.length > 0) {
         if (isInteractiveTTY) {
           answers = await collectAnswersInteractive(q);
@@ -1452,7 +1470,8 @@ async function cmdPlan(args, opts = {}) {
         } else {
           // Headless (web/script): surface the questions and stop. The caller
           // answers, then re-runs with --answers / --answers-inline (Pass B).
-          emitSignal('plan_questions', { count: q.questions.length, file: QUESTIONS_FILE });
+          // Emit the session so the web can locate this draft's questions file.
+          emitSignal('plan_questions', { count: q.questions.length, session: sid, file: questionsFile });
           logInfo(`Agent submitted ${q.questions.length} clarifying question(s). Answer them, then re-run with --answers <file>.`);
           return;
         }
@@ -1461,7 +1480,10 @@ async function cmdPlan(args, opts = {}) {
       }
     }
     if (answers) {
-      lib.savePlanAnswers(ANSWERS_FILE, answers);
+      lib.savePlanAnswers(answersFile, answers);
+      // Questions are now answered — drop the pending-questions marker so the web
+      // (resolveActiveQuestionDraft) doesn't resurface this draft as unanswered.
+      lib.clearPlanQuestions(questionsFile);
       clarifications = lib.formatClarifications(answers);
     }
   }

@@ -22,6 +22,14 @@ TEST_REPO="${TEST_REPO:-$(mktemp -d /tmp/jg-plan-ask-smoke.XXXXXX)}"
 rm -rf "$JONGGRANG_HOME"
 mkdir -p "$TEST_REPO"
 
+# `plan ask` now persists Q&A PER-DRAFT under .drafts/<session>/ (not a root
+# singleton). In production cmdPlan exports JONGGRANG_DRAFT_SESSION before running
+# the planning agent; emulate that here so standalone `plan ask` targets a draft.
+export JONGGRANG_DRAFT_SESSION="draft-plan-ask-smoke"
+DRAFT_REL=".jonggrang/.drafts/$JONGGRANG_DRAFT_SESSION"
+export QFILE="$DRAFT_REL/plan-questions.json"
+export AFILE="$DRAFT_REL/plan-answers.json"
+
 pass() { printf '\033[0;32mPASS\033[0m %s\n' "$*"; }
 fail() { printf '\033[0;31mFAIL\033[0m %s\n' "$*" >&2; exit 1; }
 step() { printf '\n\033[0;36m==> %s\033[0m\n' "$*"; }
@@ -66,7 +74,7 @@ git commit -m "chore: setup plan ask smoke repo" >/dev/null
 pass "repo initialized"
 
 clean_plan() {
-  rm -f .jonggrang/plan.md .jonggrang/plan-questions.json .jonggrang/plan-answers.json
+  rm -f .jonggrang/plan.md "$QFILE" "$AFILE"
   rm -rf .jonggrang/.ephemeral
 }
 
@@ -87,10 +95,10 @@ clean_plan
   ]
 }' >/tmp/jg-plan-ask-smoke-valid.json
 
-test -f .jonggrang/plan-questions.json || fail "plan-questions.json missing"
+test -f "$QFILE" || fail "plan-questions.json missing (expected at $QFILE)"
 node - <<'NODE'
 const fs = require('fs');
-const q = JSON.parse(fs.readFileSync('.jonggrang/plan-questions.json', 'utf8'));
+const q = JSON.parse(fs.readFileSync(process.env.QFILE, 'utf8'));
 if (q.goal_analysis !== 'Need clarify') throw new Error('goal_analysis mismatch');
 if (!Array.isArray(q.questions) || q.questions.length !== 2) throw new Error('questions length mismatch');
 if (q.questions[0].id !== 'q1' || q.questions[1].id !== 'q2') throw new Error('auto ids missing');
@@ -104,7 +112,7 @@ printf '%s' '[{"question":"Pick one","type":"single_choice","options":[{"value":
   | "${JG[@]}" plan ask --json --goal "Override goal" >/tmp/jg-plan-ask-smoke-stdin.json
 node - <<'NODE'
 const fs = require('fs');
-const q = JSON.parse(fs.readFileSync('.jonggrang/plan-questions.json', 'utf8'));
+const q = JSON.parse(fs.readFileSync(process.env.QFILE, 'utf8'));
 if (q.goal_analysis !== 'Override goal') throw new Error('goal override failed');
 if (q.questions[0].question !== 'Pick one') throw new Error('stdin question not saved');
 NODE
@@ -125,7 +133,8 @@ const path = require('path');
 const fs = require('fs');
 const repo = process.argv[2];
 const lib = require(path.join(repo, 'lib/jonggrang'));
-const answersFile = path.join(process.cwd(), '.jonggrang', 'plan-answers.json');
+const answersFile = path.resolve(process.env.AFILE);
+fs.mkdirSync(path.dirname(answersFile), { recursive: true });
 lib.savePlanAnswers(answersFile, {
   goal_analysis: 'Goal',
   answers: [
@@ -140,7 +149,7 @@ if (!md.includes('**Which UI?** → Modal')) throw new Error('choice missing fro
 if (!md.includes('**Constraints?** → Keep MVP')) throw new Error('text missing from clarifications');
 fs.writeFileSync('/tmp/jg-plan-ask-smoke-clarifications.md', md);
 NODE
-test -f .jonggrang/plan-answers.json || fail "plan-answers.json missing"
+test -f "$AFILE" || fail "plan-answers.json missing (expected at $AFILE)"
 pass "answers persisted and formatted"
 
 step "Test 5: prompt builders include clarifications"

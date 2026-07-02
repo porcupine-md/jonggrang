@@ -298,11 +298,18 @@ module.exports = function(deps) {
     router.get('/:id/plan/questions', (req, res) => {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
-        const qPath = path.join(project.path, '.jonggrang', 'plan-questions.json');
+        // Questions live per-draft under .drafts/<session>/ — resolve the session
+        // (explicit override, else newest pending draft, else the active draft)
+        // instead of hardcoding the old root singleton.
+        const sid = requestedSession(req)
+            || lib.resolveActiveQuestionDraft(project.path)
+            || lib.resolveActiveDraft(project.path);
+        if (!sid) return res.json({ exists: false, goal_analysis: '', questions: [] });
+        const qPath = lib.questionsFileFor(project.path, sid);
         if (!fs.existsSync(qPath)) return res.json({ exists: false, goal_analysis: '', questions: [] });
         try {
             const data = JSON.parse(fs.readFileSync(qPath, 'utf-8'));
-            res.json({ exists: true, goal_analysis: data.goal_analysis || '', questions: data.questions || [] });
+            res.json({ exists: true, sessionId: sid, goal_analysis: data.goal_analysis || '', questions: data.questions || [] });
         } catch (err) {
             res.status(500).json({ error: { code: 'READ_ERROR', message: err.message } });
         }
@@ -352,7 +359,14 @@ module.exports = function(deps) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'answers payload too large' } });
         }
 
+        // Reuse the draft that already holds the pending questions (Pass A wrote
+        // them into .drafts/<sid>/). Passing --session makes Pass B generate
+        // plan.md into that same draft instead of minting a fresh one — so the
+        // questions-only draft becomes the real plan draft (no orphan folders).
+        const sid = requestedSession(req) || lib.resolveActiveQuestionDraft(project.path);
+
         const args = ['plan', description, ...(deep ? ['--deep'] : []), '--answers-inline', inline];
+        if (sid)    args.push('--session', sid);
         if (tool)   args.push('--tool', tool);
         if (model)  args.push('--model', model);
         if (effort) args.push('--effort', effort);

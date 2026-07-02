@@ -77,14 +77,19 @@ module.exports = function register(app, io, ctx) {
         io.to(`project:${projectId}`).emit('process.started', { project_id: projectId, command, pid: child.pid });
         let seq = 0;
         // Read the stored clarifying questions and relay them to the client so it
-        // can render an answer form (feature: plan ask).
-        const emitPlanQuestions = () => {
+        // can render an answer form (feature: plan ask). Questions live per-draft
+        // under .drafts/<session>/ — resolve the session from the signal (the CLI
+        // emits it) and fall back to scanning for the newest pending draft.
+        const emitPlanQuestions = (session) => {
             const project = webState.getProject(projectId);
-            const qPath = project && path.join(project.path, '.jonggrang', 'plan-questions.json');
-            if (!qPath || !fs.existsSync(qPath)) return;
+            if (!project) return;
+            const sid = session || lib.resolveActiveQuestionDraft(project.path);
+            if (!sid) return;
+            const qPath = lib.questionsFileFor(project.path, sid);
+            if (!fs.existsSync(qPath)) return;
             try {
                 const questions = JSON.parse(fs.readFileSync(qPath, 'utf-8'));
-                io.to(`project:${projectId}`).emit('plan.questions', { project_id: projectId, ...questions });
+                io.to(`project:${projectId}`).emit('plan.questions', { project_id: projectId, sessionId: sid, ...questions });
             } catch { /* unreadable store — ignore */ }
         };
 
@@ -96,7 +101,7 @@ module.exports = function register(app, io, ctx) {
             if (stream === 'stdout' && line.includes('"plan_questions"')) {
                 try {
                     const sig = JSON.parse(line.trim());
-                    if (sig && sig.type === 'plan_questions') emitPlanQuestions();
+                    if (sig && sig.type === 'plan_questions') emitPlanQuestions(sig.session);
                 } catch { /* not a signal line — ignore */ }
             }
         };
