@@ -399,7 +399,7 @@ test('cache: getOrGenerateCodemap returns fromCache: false on first call, true o
   fs.rmSync(proj, { recursive: true, force: true });
 });
 
-test('cache: modifying a file flips the result to stale: true', () => {
+test('cache: modifying a file causes auto-regeneration (fromCache: false, regenerated: true)', () => {
   const proj = makeProject((root) => {
     fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'demo', version: '0.0.1' }));
   });
@@ -407,8 +407,9 @@ test('cache: modifying a file flips the result to stale: true', () => {
   // Modify package.json → hash changes
   fs.writeFileSync(path.join(proj, 'package.json'), JSON.stringify({ name: 'demo', version: '0.0.2' }));
   const result = codemap.getOrGenerateCodemap(proj);
-  assert.strictEqual(result.fromCache, true,  `expected cached data to be returned`);
-  assert.strictEqual(result.stale, true,      `expected result to be marked stale`);
+  assert.strictEqual(result.fromCache, false,   `expected cache to be bypassed and regenerated`);
+  assert.strictEqual(result.regenerated, true,   `expected regenerated flag to be true`);
+  assert.strictEqual(result.stale, false,       `expected result to not be marked stale after successful regen`);
   // force: true bypasses staleness and regenerates
   const forced = codemap.getOrGenerateCodemap(proj, { force: true });
   assert.strictEqual(forced.fromCache, false, `expected force: true to bypass cache`);

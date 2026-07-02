@@ -1101,6 +1101,7 @@ async function cmdPlan(args, opts = {}) {
   let autoApprove = false;
   let deepMode = false;
   let reviseMode = false;
+  let filePath = null;
   let baseBranch = '';
   let sessionId = '';
 
@@ -1109,6 +1110,8 @@ async function cmdPlan(args, opts = {}) {
     if (arg === '--yes' || arg === '-y') autoApprove = true;
     else if (arg === '--deep') deepMode = true;
     else if (arg === '--revise') reviseMode = true;
+    else if (arg === '--src') { filePath = args[++i]; }
+    else if (arg.startsWith('--src=')) { filePath = arg.slice(6); }
     else if (arg === '--base') baseBranch = args[++i] || '';
     else if (arg === '--session') sessionId = args[++i] || '';
     else if (!arg.startsWith('--')) description = arg;
@@ -1161,10 +1164,22 @@ async function cmdPlan(args, opts = {}) {
   }
   resolveModelAndEffort();
 
+  // Reference a source document by canonical path if --src was given.
+  // The agent decides how to read it; we only tell it the path exists.
+  let srcPath = null;
+  if (filePath) {
+    srcPath = path.isAbsolute(filePath) ? filePath : path.resolve(PROJECT_ROOT, filePath);
+    if (!fs.existsSync(srcPath)) {
+      logError(`Source file not found: ${srcPath}`);
+      process.exit(1);
+    }
+    logInfo(`Source document referenced: ${srcPath}`);
+  }
+
   const isInteractiveTTY = process.stdin.isTTY && process.stdout.isTTY;
 
-  // Ask about deep mode when user hasn't specified --deep and a description was given
-  if (description && !deepMode && !autoApprove && isInteractiveTTY) {
+  // Ask about deep mode when user hasn't specified --deep and a description or source was given
+  if ((description || srcPath) && !deepMode && !autoApprove && isInteractiveTTY) {
     const useDeep = await confirm({
       message: 'Use deep mode? (3-phase analysis — richer plan for complex features)',
       initialValue: false,
@@ -1172,8 +1187,8 @@ async function cmdPlan(args, opts = {}) {
     if (!isCancel(useDeep)) deepMode = !!useDeep;
   }
 
-  // ── No description → pick from available plans ──────────────
-  if (!description) {
+  // ── No description and no file → pick from available plans ──────────────
+  if (!description && !srcPath) {
     const available = listAvailablePlans(path.dirname(LEGACY_PLAN_FILE));
     if (available.length === 0) {
       logError('No plans found.');
@@ -1238,19 +1253,19 @@ async function cmdPlan(args, opts = {}) {
     feedback.clearFeedbackState(PROJECT_ROOT);
 
     logHeader('JONGGRANG Plan — Deep Mode (3 phases)');
-    logInfo(`Feature: ${description}`);
+    logInfo(`Feature: ${description || (srcPath ? `[from ${srcPath}]` : '')}`);
     logInfo(`Tool:    ${TOOL}`);
     logInfo(`Session: ${sid}`);
 
     // Phase 1: Discovery
     logInfo(`${BOLD}[1/3]${NC} Codebase discovery...`);
-    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile);
+    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, srcPath);
     await lib.runAgent(discoveryPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (!lib.fileExists(discoveryFile)) {
       logError(`Discovery agent did not write ${discoveryFile}`);
       logInfo('Falling back to standard plan generation...');
-      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile);
+      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath);
       await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
       if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1259,13 +1274,13 @@ async function cmdPlan(args, opts = {}) {
       // Phase 2: Analysis
       logInfo(`${BOLD}[2/3]${NC} Complexity analysis & brainstorm...`);
       const discoveryContent = fs.readFileSync(discoveryFile, 'utf8');
-      const analysisPrompt = lib.buildDeepPlanAnalysisPrompt(description, discoveryContent, analysisFile);
+      const analysisPrompt = lib.buildDeepPlanAnalysisPrompt(description, discoveryContent, analysisFile, srcPath);
       await lib.runAgent(analysisPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
       if (!lib.fileExists(analysisFile)) {
         logError(`Analysis agent did not write ${analysisFile}`);
         logInfo('Falling back to standard plan generation using discovery only...');
-        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile);
+        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath);
         await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
         const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
         if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1275,7 +1290,7 @@ async function cmdPlan(args, opts = {}) {
         logInfo(`${BOLD}[3/3]${NC} Condensing into enriched plan.md...`);
         const analysisContent = fs.readFileSync(analysisFile, 'utf8');
         const condensePrompt = lib.buildDeepPlanCondensePrompt(
-          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile
+          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath
         );
         await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
         const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
@@ -1294,7 +1309,7 @@ async function cmdPlan(args, opts = {}) {
   } else {
     // ── Standard mode ─────────────────────────────────────────
     logHeader('JONGGRANG Plan — Phase 1');
-    logInfo(`Feature: ${description}`);
+    logInfo(`Feature: ${description || (srcPath ? `[from ${srcPath}]` : '')}`);
     logInfo(`Tool:    ${TOOL}`);
     logInfo(`Session: ${sid}`);
     logInfo('Generating draft plan...');
@@ -1302,7 +1317,7 @@ async function cmdPlan(args, opts = {}) {
     // Clear stale feedback-loop state — planning is read-only, must not be blocked.
     feedback.clearFeedbackState(PROJECT_ROOT);
 
-    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile);
+    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath);
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
     const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
     if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -3795,6 +3810,7 @@ Usage: jonggrang <command> [options]
 Commands:
   init                    Setup project (interactive or with flags)
   plan <description>      Phase 1 — generate .jonggrang/.drafts/<session>/plan.md for review
+  plan <description> --src <path>  Reference a source document path for the agent to read
   plan <description> --yes  Plan + auto-approve + decompose to tasks in one shot
   approve                 Phase 2 — decompose the most-recent draft into tasks
   approve --session <id>  Phase 2 — decompose a specific draft session into tasks
@@ -3850,6 +3866,7 @@ Work / Plan / Review flags:
   --dry-run               Preview prompts, no execution
   --debug                 Dump raw JSON from opencode/claude to stderr (diagnose stuck agents)
   --skip-gates            Skip quality gates even for MEDIUM/LARGE
+  --src <path>            Reference a source document path for the agent to read
 
 --model / --effort backend mapping:
   --tool claude:     --model opus|sonnet|haiku|best|<full-id>   --effort low|medium|high|max|xhigh
@@ -3861,6 +3878,7 @@ Resolution order: --model flag > JONGGRANG_MODEL env > tools.<tool>.model in jon
 Examples:
   jonggrang init
   jonggrang plan "add JWT auth"             # Phase 1: generate plan.md, review it
+  jonggrang plan "add JWT auth" --src docs/brd.md  # agent reads source document for context
   jonggrang plan "add JWT auth" --deep      # deep mode: 3-phase analysis → enriched plan
   jonggrang approve                         # Phase 2: decompose plan.md → tasks
   jonggrang work                            # execute tasks (after approve)

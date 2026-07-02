@@ -264,9 +264,11 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const { description, deep, tool, model, effort, base } = req.body || {};
-        if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
+        const { description, deep, tool, model, effort, fileContent, fileName, base } = req.body || {};
 
+        if (!description && !fileContent) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description or file required' } });
+        }
         if (tool && !VALID_PLAN_TOOL.includes(tool)) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `tool must be one of: ${VALID_PLAN_TOOL.join(', ')}` } });
         }
@@ -284,7 +286,31 @@ module.exports = function(deps) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'base must be a plain branch name (letters, digits, . _ / -)' } });
         }
 
-        const args = ['plan', description, ...(deep ? ['--deep'] : [])];
+        let tempFilePath = null;
+
+        if (fileContent && fileName) {
+            const ext = path.extname(fileName).toLowerCase();
+            // No extension allowlist — the coding agent decides how to read the source file.
+            // Write base64-encoded file to .jonggrang/.ephemeral/ in the project
+            const ephemeralDir = path.join(project.path, '.jonggrang', '.ephemeral');
+            fs.mkdirSync(ephemeralDir, { recursive: true });
+            const tempName = `brd-input-${Date.now()}${ext}`;
+            tempFilePath = path.join(ephemeralDir, tempName);
+            try {
+                fs.writeFileSync(tempFilePath, Buffer.from(fileContent, 'base64'));
+            } catch (err) {
+                return res.status(500).json({ error: { code: 'FILE_WRITE_ERROR', message: `Failed to save uploaded file: ${err.message}` } });
+            }
+        }
+
+        const args = ['plan'];
+        if (tempFilePath) {
+            args.push('--src', path.relative(project.path, tempFilePath));
+            if (description) args.push(description);
+        } else {
+            args.push(description);
+        }
+        if (deep)   args.push('--deep');
         if (tool)   args.push('--tool', tool);
         if (model)  args.push('--model', model);
         if (effort) args.push('--effort', effort);
