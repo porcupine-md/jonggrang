@@ -156,6 +156,7 @@ body {
 .p-inputtext::placeholder, .p-textarea::placeholder { color: var(--jg-text-faint) !important; }
 
 /* ── Select dropdown ── */
+.p-select-label { color: var(--jg-text) !important; }
 .p-select-overlay, .p-select-list-container {
   background: var(--jg-card) !important;
   border: 1px solid var(--jg-border) !important;

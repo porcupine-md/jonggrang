@@ -86,6 +86,7 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 # Quick flags
 jonggrang plan "feature" --yes       # Skip review, auto-approve
 jonggrang work "feature" --yes       # Full pipeline in one command
+jonggrang plan "feature" --src docs/brd.md  # Reference source document for the agent to read
 jonggrang plan "feature" --deep      # 3-phase deep analysis (risks, alternatives)
 jonggrang plan "feature" --base develop  # Cut the worktree from a chosen branch (fetched fresh from origin)
 jonggrang plan "feature" --no-ask    # Skip the agent's clarifying-questions step

@@ -159,10 +159,11 @@ const repo = process.argv[2];
 const lib = require(path.join(repo, 'lib/jonggrang'));
 const clarifications = '- **Which UI?** → Modal';
 const draftPath = '.jonggrang/.drafts/smoke/plan.md';
-const draft = lib.buildDraftPlanPrompt('feature', '.jonggrang/jonggrang.json', process.cwd(), draftPath, { clarifications });
+// Signatures take srcPath before the opts object (merged with the --src feature).
+const draft = lib.buildDraftPlanPrompt('feature', '.jonggrang/jonggrang.json', process.cwd(), draftPath, null, { clarifications });
 const revise = lib.buildRevisePlanPrompt('# Plan', 'revise', draftPath, { clarifications });
-const deep1 = lib.buildDeepPlanDiscoveryPrompt('feature', '.jonggrang/jonggrang.json', '.jonggrang/.drafts/smoke/discovery.md', { clarifications });
-const deep3 = lib.buildDeepPlanCondensePrompt('feature', 'discovery', 'analysis', '.jonggrang/jonggrang.json', process.cwd(), draftPath, { clarifications });
+const deep1 = lib.buildDeepPlanDiscoveryPrompt('feature', '.jonggrang/jonggrang.json', '.jonggrang/.drafts/smoke/discovery.md', null, { clarifications });
+const deep3 = lib.buildDeepPlanCondensePrompt('feature', 'discovery', 'analysis', '.jonggrang/jonggrang.json', process.cwd(), draftPath, null, { clarifications });
 for (const [name, text] of Object.entries({ draft, revise, deep1, deep3 })) {
   if (!text.includes(clarifications)) throw new Error(`${name} missing clarifications`);
 }
