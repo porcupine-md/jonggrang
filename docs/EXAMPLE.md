@@ -105,6 +105,12 @@ jonggrang plan "Todo REST API ..." --yes   # plan + approve in one shot
 jonggrang work "Todo REST API ..." --yes   # plan → approve → execute
 ```
 
+**Option D — plan from a BRD/PRD document:**
+
+```bash
+jonggrang plan "Todo REST API ..." --src docs/brd.md   # reference source document for the agent to read
+```
+
 ### Step 4: Check Task Board
 
 ```bash

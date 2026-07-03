@@ -376,6 +376,24 @@ The **Issues** menu (top app nav, beside `projects`) lists GitHub/GitLab issues 
 - **Detail drawer**: right-aligned overlay (reuses the Dialog/Drawer pattern in §6.7) — header `repo#number`, state badge, author/date, markdown body, comments, footer "Open original" + "Pickup → Plan".
 - **Pickup modal**: source chip + Existing/New project choice → routes to the target project's **pre-filled New Plan form** (plan-creation UX is unchanged; only the description arrives populated). Source link surfaces on the plan card as a "↗ repo#N" link.
 
+### Plan clarifying-questions form (feature: plan ask)
+
+After **Generate Plan**, if the planning agent decides the request is ambiguous it
+submits clarifying questions (relayed to the client over the `plan.questions`
+socket event). The Plan view opens a modal (Dialog §6.7) titled "A few questions
+before planning":
+
+- **Goal** line at top (the agent's restatement of intent).
+- One block per question: title + a muted "Why:" rationale line.
+- **single_choice** → radio options, each showing its label + rationale, plus a
+  "✎ Type my own" radio that reveals a text input.
+- **multi_choice** → checkboxes + an optional "✎ Add my own" text input.
+- **text** → a textarea.
+- Footer: **Cancel** (returns to the New Plan form) / **Generate Plan** (POSTs the
+  answers to `/api/projects/:id/plan/answers`, which runs plan generation with the
+  answers). The resulting plan streams back as usual and records a `## Clarifications`
+  section.
+
 ---
 
 ## 8. Pipeline Timeline
