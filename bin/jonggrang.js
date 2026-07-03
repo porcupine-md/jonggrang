@@ -9,7 +9,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync, execSync } = require('child_process');
 const readline = require('readline');
-const { intro, outro, select, confirm, text, isCancel, cancel, spinner } = require('@clack/prompts');
+const { intro, outro, select, multiselect, confirm, text, isCancel, cancel, spinner } = require('@clack/prompts');
 
 const lib = require('../lib/jonggrang');
 const orchestration = require('../lib/orchestration');
@@ -45,6 +45,10 @@ const paths = lib.getProjectPaths(PROJECT_ROOT);
 const CONFIG_FILE   = process.env.JONGGRANG_CONFIG || paths.configFile;
 const TASKS_FILE    = paths.tasksFile;
 const LEGACY_PLAN_FILE = paths.legacyPlanFile;
+// Clarifying-questions/answers sidecars (feature: plan ask) are PER-DRAFT: they
+// live in .drafts/<session>/ alongside plan.md, resolved via lib.questionsFileFor
+// / lib.answersFileFor. Per-draft placement keeps concurrent `plan` runs from
+// clobbering each other's Q&A. There is no root-level singleton anymore.
 const PROGRESS_FILE = paths.progressFile;
 const AGENTS_FILE   = paths.agentsFile;
 const SKILLS_DIR    = paths.skillsDir;
@@ -1096,7 +1100,208 @@ async function ensureInit() {
 
 // ── PHASE 1: Generate draft plan.md ───────────────────────────
 // opts.fromWork = true → suppress "run jonggrang work" tail (cmdWork will continue itself)
+// ============================================================
+// PLAN CLARIFYING QUESTIONS  (jonggrang plan ask)
+// ============================================================
+
+// Agent-facing intake: the planning agent SUBMITS clarifying questions here
+// instead of guessing. Mirrors `jonggrang task import` (flag / file / stdin).
+function cmdPlanAsk(subArgs) {
+  const flags = {};
+  const positional = [];
+  for (let j = 0; j < subArgs.length; j++) {
+    if (subArgs[j] === '--input')       { flags.input = subArgs[++j]; }
+    else if (subArgs[j] === '--goal')   { flags.goal = subArgs[++j]; }
+    else if (subArgs[j] === '--pretty') { flags.pretty = true; }
+    else if (subArgs[j] === '--json')   { flags.json = true; }
+    else if (subArgs[j] === 'help' || subArgs[j] === '--help') { flags.help = true; }
+    else { positional.push(subArgs[j]); }
+  }
+
+  if (flags.help) { cmdPlanAskHelp(); return; }
+
+  const isTTY = process.stdout.isTTY;
+  const pretty = flags.pretty || (isTTY && !flags.json);
+
+  try {
+    safeCheckConfig();
+
+    let raw;
+    if (flags.input) {
+      raw = flags.input;
+    } else if (positional[0]) {
+      const filePath = path.resolve(positional[0]);
+      if (!fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
+      raw = fs.readFileSync(filePath, 'utf8');
+    } else if (!process.stdin.isTTY) {
+      raw = fs.readFileSync('/dev/stdin', 'utf8');
+    } else {
+      throw new Error("Provide questions via --input '{...}', a file path, or stdin.");
+    }
+
+    let payload;
+    try { payload = JSON.parse(raw); }
+    catch (e) { throw new Error(`Invalid JSON: ${e.message}`); }
+
+    // `plan ask` runs as a subprocess of the planning agent, which has no
+    // session context of its own. cmdPlan exports the active draft session via
+    // JONGGRANG_DRAFT_SESSION before invoking the agent; fall back to the most
+    // recent existing draft for standalone/manual use.
+    const sid = process.env.JONGGRANG_DRAFT_SESSION || lib.resolveActiveDraft(PROJECT_ROOT);
+    if (!sid) {
+      throw new Error('No active draft session for questions. Run `jonggrang plan "<description>"` first (it sets the session).');
+    }
+    const questionsFile = lib.questionsFileFor(PROJECT_ROOT, sid);
+    fs.mkdirSync(path.dirname(questionsFile), { recursive: true });
+    const saved = lib.savePlanQuestions(questionsFile, payload, flags.goal);
+
+    if (pretty) {
+      logSuccess(`Submitted ${saved.questions.length} clarifying question(s):`);
+      if (saved.goal_analysis) console.log(`  ${DIM}Goal: ${saved.goal_analysis}${NC}`);
+      for (const q of saved.questions) console.log(`  ${q.id}: ${q.question} ${DIM}(${q.type})${NC}`);
+    } else {
+      console.log(JSON.stringify(saved));
+    }
+  } catch (err) {
+    if (pretty) logError(err.message);
+    else console.log(JSON.stringify({ error: err.message }));
+    process.exit(1);
+  }
+}
+
+function cmdPlanAskHelp() {
+  console.log(`
+${BOLD}jonggrang plan ask${NC} — submit clarifying questions (agent-facing intake)
+
+This command is used by the planning AGENT, not typically by you. During planning
+the agent calls it to ask the user questions instead of guessing.
+
+${BOLD}Usage:${NC}
+  jonggrang plan ask --input '<json>'
+  jonggrang plan ask questions.json
+  echo '<json>' | jonggrang plan ask
+
+${BOLD}Flags:${NC}
+  --input <json>   Questions JSON (object or array)
+  --goal "<text>"  Goal restatement (if not embedded in the JSON)
+  --pretty/--json  Force human / machine output
+
+${BOLD}JSON schema:${NC}
+  {
+    "goal_analysis": "what the user wants to achieve",
+    "questions": [
+      { "question": "Which X?", "rationale": "why", "type": "single_choice",
+        "options": [ {"value":"a","label":"A","rationale":"trade-off"},
+                     {"value":"b","label":"B","rationale":"trade-off"} ] },
+      { "question": "Any constraints?", "type": "text" }
+    ]
+  }
+  Types: single_choice | multi_choice | text. Max ${6} questions.
+`);
+}
+
+// Resolve pre-supplied answers (--answers <file|-> / --answers-inline <base64>).
+// Returns { goal_analysis, answers:[] } or null when none provided.
+function loadPreAnswers(answersInput, answersInline) {
+  let raw = '';
+  if (answersInline) {
+    try { raw = Buffer.from(answersInline, 'base64').toString('utf8'); }
+    catch { logError('--answers-inline must be base64-encoded JSON.'); process.exit(1); }
+  } else if (answersInput) {
+    if (answersInput === '-') {
+      raw = fs.readFileSync('/dev/stdin', 'utf8');
+    } else {
+      const fp = path.resolve(answersInput);
+      if (!fs.existsSync(fp)) { logError(`Answers file not found: ${fp}`); process.exit(1); }
+      raw = fs.readFileSync(fp, 'utf8');
+    }
+  } else {
+    return null;
+  }
+  let payload;
+  try { payload = JSON.parse(raw); }
+  catch (e) { logError(`Invalid answers JSON: ${e.message}`); process.exit(1); }
+  if (Array.isArray(payload)) return { goal_analysis: '', answers: payload };
+  if (payload && Array.isArray(payload.answers)) {
+    return { goal_analysis: payload.goal_analysis || '', answers: payload.answers };
+  }
+  logError('Answers must be a JSON array or an object with an "answers" array.');
+  process.exit(1);
+}
+
+// Present the agent's questions to the user via @clack and collect answers.
+// Returns { goal_analysis, answers:[] }, or null if the user cancels.
+async function collectAnswersInteractive(q) {
+  const FREETEXT = '__freetext__';
+  const answers = [];
+
+  if (q.goal_analysis) logInfo(`Goal: ${q.goal_analysis}`);
+  console.log(`\n${BOLD}The agent has ${q.questions.length} question(s) before planning:${NC}\n`);
+
+  for (let i = 0; i < q.questions.length; i++) {
+    const ques = q.questions[i];
+    if (ques.rationale) console.log(`  ${DIM}Why: ${ques.rationale}${NC}`);
+    const message = `(${i + 1}/${q.questions.length}) ${ques.question}`;
+
+    if (ques.type === 'single_choice' || ques.type === 'multi_choice') {
+      const options = (ques.options || []).map(o => ({
+        value: o.value, label: o.label, hint: o.rationale || undefined,
+      }));
+      if (ques.allow_freetext) options.push({ value: FREETEXT, label: '✎ Type my own answer…' });
+
+      if (ques.type === 'single_choice') {
+        const picked = await select({ message, options });
+        if (isCancel(picked)) return null;
+        if (picked === FREETEXT) {
+          const typed = await text({ message: 'Your answer:' });
+          if (isCancel(typed)) return null;
+          answers.push({ id: ques.id, question: ques.question, type: ques.type, value: FREETEXT, freetext: String(typed) });
+        } else {
+          const opt = (ques.options || []).find(o => o.value === picked);
+          answers.push({ id: ques.id, question: ques.question, type: ques.type, value: picked, label: opt ? opt.label : picked, freetext: null });
+        }
+      } else {
+        const picked = await multiselect({ message, options, required: false });
+        if (isCancel(picked)) return null;
+        const vals = Array.isArray(picked) ? picked : [];
+        let freetext = null;
+        if (vals.includes(FREETEXT)) {
+          const typed = await text({ message: 'Your additional answer:' });
+          if (isCancel(typed)) return null;
+          freetext = String(typed);
+        }
+        const chosen = vals.filter(v => v !== FREETEXT);
+        const labels = chosen.map(v => { const o = (ques.options || []).find(x => x.value === v); return o ? o.label : v; });
+        answers.push({ id: ques.id, question: ques.question, type: ques.type, value: chosen, label: labels.join(', '), freetext });
+      }
+    } else {
+      const typed = await text({ message, placeholder: ques.rationale || '' });
+      if (isCancel(typed)) return null;
+      answers.push({ id: ques.id, question: ques.question, type: 'text', value: String(typed), freetext: String(typed) });
+    }
+  }
+  return { goal_analysis: q.goal_analysis || '', answers };
+}
+
+// Append (idempotently) a human-visible Clarifications section to plan.md.
+function appendClarificationsToPlan(planFile, clarifications) {
+  const MARKER = '<!-- jonggrang:clarifications -->';
+  try {
+    let content = fs.readFileSync(planFile, 'utf8');
+    const idx = content.indexOf(MARKER);
+    if (idx !== -1) content = content.slice(0, idx);
+    content = content.replace(/\s*$/, '\n');
+    content += `\n${MARKER}\n## Clarifications\n_Captured from the planning Q&A:_\n\n${clarifications}\n`;
+    fs.writeFileSync(planFile, content);
+  } catch { /* non-fatal */ }
+}
+
 async function cmdPlan(args, opts = {}) {
+  // `plan ask` is the agent-facing question-intake command (sibling of `task
+  // import`). Intercept before positional parsing — otherwise "ask" is read as
+  // the plan description.
+  if (args[0] === 'ask') return cmdPlanAsk(args.slice(1));
+
   let description = '';
   let autoApprove = false;
   let deepMode = false;
@@ -1104,6 +1309,9 @@ async function cmdPlan(args, opts = {}) {
   let filePath = null;
   let baseBranch = '';
   let sessionId = '';
+  let answersInput = '';   // --answers <file|-> : run Pass B directly with these answers
+  let answersInline = '';  // --answers-inline <base64-json> : same, sandbox/web-safe
+  let noAsk = false;       // --no-ask : skip the clarification step entirely
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -1114,6 +1322,9 @@ async function cmdPlan(args, opts = {}) {
     else if (arg.startsWith('--src=')) { filePath = arg.slice(6); }
     else if (arg === '--base') baseBranch = args[++i] || '';
     else if (arg === '--session') sessionId = args[++i] || '';
+    else if (arg === '--answers') answersInput = args[++i] || '';
+    else if (arg === '--answers-inline') answersInline = args[++i] || '';
+    else if (arg === '--no-ask') noAsk = true;
     else if (!arg.startsWith('--')) description = arg;
   }
 
@@ -1149,8 +1360,13 @@ async function cmdPlan(args, opts = {}) {
     logHeader('JONGGRANG Plan — Revise with AI');
     logInfo(`Session:     ${sid}`);
     logInfo(`Instruction: ${description}`);
+    // Any `plan ask` the revision agent runs resolves to THIS session.
+    process.env.JONGGRANG_DRAFT_SESSION = sid;
     const currentPlan = fs.readFileSync(draftFile, 'utf8');
-    const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description, draftFile);
+    // Reuse any earlier clarifications so the revision respects prior decisions.
+    const priorAnswers = lib.getPlanAnswers(lib.answersFileFor(PROJECT_ROOT, sid));
+    const clarifications = lib.formatClarifications(priorAnswers);
+    const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description, draftFile, { clarifications });
     await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
     const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
     if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1235,9 +1451,56 @@ async function cmdPlan(args, opts = {}) {
   const draftFile = lib.draftFileFor(PROJECT_ROOT, sid);
   fs.mkdirSync(draftDir, { recursive: true });
 
+  // Per-draft Q&A sidecars, colocated with plan.md under .drafts/<sid>/. Export
+  // the session so any `plan ask` the planning agent runs writes into THIS draft.
+  const questionsFile = lib.questionsFileFor(PROJECT_ROOT, sid);
+  const answersFile = lib.answersFileFor(PROJECT_ROOT, sid);
+  process.env.JONGGRANG_DRAFT_SESSION = sid;
+
   const existingDrafts = lib.getAllDrafts(PROJECT_ROOT).filter(d => d.sessionId !== sid);
   if (existingDrafts.length > 0 && !sessionId) {
     logInfo(`${existingDrafts.length} pending draft(s) already exist. This creates a new session (${sid}); 'jonggrang approve' defaults to the most recent, or use 'jonggrang approve --session <id>'.`);
+  }
+
+  // ── Clarification step (Pass A) ─────────────────────────────
+  // The planning agent may submit questions via `jonggrang plan ask` instead of
+  // guessing. We collect the user's answers and feed them into generation (Pass B).
+  let clarifications = '';
+  {
+    // Fresh plan run: drop any stale answers from a previous plan so they can't
+    // leak into this run (--no-ask / no-questions cases) or a later `--revise`.
+    // Pass B (--answers/-inline) re-saves the current run's answers below.
+    lib.clearPlanAnswers(answersFile);
+    let answers = loadPreAnswers(answersInput, answersInline); // web/scripts: Pass B directly
+    if (!answers && !noAsk && !autoApprove) {
+      lib.clearPlanQuestions(questionsFile);
+      logInfo('Analyzing goal — the agent may ask clarifying questions first...');
+      const qPrompt = lib.buildPlanQuestionsPrompt(description, CONFIG_FILE, srcPath);
+      await lib.runAgent(qPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      const q = lib.getPlanQuestions(questionsFile);
+      if (q.questions && q.questions.length > 0) {
+        if (isInteractiveTTY) {
+          answers = await collectAnswersInteractive(q);
+          if (answers === null) { cancel('Cancelled — no plan generated.'); return; }
+        } else {
+          // Headless (web/script): surface the questions and stop. The caller
+          // answers, then re-runs with --answers / --answers-inline (Pass B).
+          // Emit the session so the web can locate this draft's questions file.
+          emitSignal('plan_questions', { count: q.questions.length, session: sid, file: questionsFile });
+          logInfo(`Agent submitted ${q.questions.length} clarifying question(s). Answer them, then re-run with --answers <file>.`);
+          return;
+        }
+      } else {
+        logInfo('No clarification needed — generating plan directly.');
+      }
+    }
+    if (answers) {
+      lib.savePlanAnswers(answersFile, answers);
+      // Questions are now answered — drop the pending-questions marker so the web
+      // (resolveActiveQuestionDraft) doesn't resurface this draft as unanswered.
+      lib.clearPlanQuestions(questionsFile);
+      clarifications = lib.formatClarifications(answers);
+    }
   }
 
   if (deepMode) {
@@ -1259,13 +1522,13 @@ async function cmdPlan(args, opts = {}) {
 
     // Phase 1: Discovery
     logInfo(`${BOLD}[1/3]${NC} Codebase discovery...`);
-    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, srcPath);
+    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, srcPath, { clarifications });
     await lib.runAgent(discoveryPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (!lib.fileExists(discoveryFile)) {
       logError(`Discovery agent did not write ${discoveryFile}`);
       logInfo('Falling back to standard plan generation...');
-      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath);
+      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications });
       await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
       if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1280,7 +1543,7 @@ async function cmdPlan(args, opts = {}) {
       if (!lib.fileExists(analysisFile)) {
         logError(`Analysis agent did not write ${analysisFile}`);
         logInfo('Falling back to standard plan generation using discovery only...');
-        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath);
+        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications });
         await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
         const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
         if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1290,7 +1553,7 @@ async function cmdPlan(args, opts = {}) {
         logInfo(`${BOLD}[3/3]${NC} Condensing into enriched plan.md...`);
         const analysisContent = fs.readFileSync(analysisFile, 'utf8');
         const condensePrompt = lib.buildDeepPlanCondensePrompt(
-          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath
+          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications }
         );
         await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
         const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
@@ -1317,11 +1580,17 @@ async function cmdPlan(args, opts = {}) {
     // Clear stale feedback-loop state — planning is read-only, must not be blocked.
     feedback.clearFeedbackState(PROJECT_ROOT);
 
-    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath);
+    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications });
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
     const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
     if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
     if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
+  }
+
+  // Record the clarifications into plan.md so the decisions are human-visible and
+  // travel with the plan (the JSON sidecar remains the machine-readable source).
+  if (clarifications && lib.fileExists(draftFile)) {
+    appendClarificationsToPlan(draftFile, clarifications);
   }
 
   // The base branch (worktree start-point) is a deterministic user choice, so
@@ -3812,6 +4081,8 @@ Commands:
   plan <description>      Phase 1 — generate .jonggrang/.drafts/<session>/plan.md for review
   plan <description> --src <path>  Reference a source document path for the agent to read
   plan <description> --yes  Plan + auto-approve + decompose to tasks in one shot
+  plan <description> --no-ask   Skip the agent's clarifying-questions step
+  plan ask --input '<json>'     (agent-facing) submit clarifying questions, like task import
   approve                 Phase 2 — decompose the most-recent draft into tasks
   approve --session <id>  Phase 2 — decompose a specific draft session into tasks
   work [description]      Execute tasks — with description runs plan → approve → execute
