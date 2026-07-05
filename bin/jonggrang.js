@@ -290,11 +290,13 @@ function emitSignal(type, data) {
 
 // In worktree mode emit a JSON signal; otherwise write directly to the active feature's tasks file
 function updateTaskMode(tasksFile, taskId, status, worktreeMode = false) {
-  if (worktreeMode) {
-    emitSignal('task_status', { taskId, status });
-  } else {
-    lib.updateTaskStatus(tasksFile, taskId, status);
-  }
+  // Always write the tasks file. In worktree mode `tasksFile` (WORK_TASKS_FILE)
+  // IS the worktree's own per-feature copy under <worktree>/.jonggrang/.output/
+  // features/<fid>/ — now the single source of truth the dashboard reads directly.
+  // A signal is still emitted so the host can refresh the live UI (read-only), but
+  // the host no longer writes the main copy (no dual-writer revert).
+  try { lib.updateTaskStatus(tasksFile, taskId, status); } catch { /* file may not exist yet */ }
+  if (worktreeMode) emitSignal('task_status', { taskId, status });
 }
 
 const TEST_RETRY_LIMIT = 3;
@@ -1931,6 +1933,15 @@ async function cmdApprove(args, opts = {}) {
       }
     }
   }
+
+  // Keep the remote base branch CLEAN: auto-push ONLY this feature's plan.md,
+  // rebased on origin. tasks/manifest/progress/code travel with the per-feature
+  // work-mode branch, not main. No-op when there's no remote.
+  try {
+    const r = await lib.pushBaseState(PROJECT_ROOT, `chore: plan ${featureId}`);
+    if (r.skipped) logInfo('No remote — plan.md kept local (push when a remote is configured).');
+    else logSuccess(`Pushed plan.md → ${r.branch}${r.rebased ? ' (rebased on origin)' : ''}.`);
+  } catch (e) { logWarn(`Could not push plan.md to base branch: ${e.message}`); }
 
   logSuccess(isAppend ? `Appended ${newTasks.length} task(s) to ${featureId}.` : 'Plan approved.');
   logInfo(`Feature ID:    ${featureId}`);

@@ -3,6 +3,7 @@
 const { Router } = require('express');
 
 const lib = require('../../lib/jonggrang');
+const sandbox = require('../../lib/sandbox');
 const { STATIC_EFFORTS } = require('../models');
 
 const VALID_PLAN_TOOL   = ['claude', 'opencode', 'codex', 'jonggrang'];
@@ -105,15 +106,16 @@ module.exports = function(deps) {
                 for (const g of (view?.groups || [])) runGroups[g.feature_id] = g;
             } catch {}
 
-            // Tasks grouped by feature_id — authoritative for the web work-loop,
-            // which advances task status but NOT the MANIFEST phase machine.
-            let tasksByFeature = {};
-            try {
-                const allTasks = lib.getAllTasks(project.path);
-                for (const t of allTasks.tasks || []) {
-                    (tasksByFeature[t.feature_id] = tasksByFeature[t.feature_id] || []).push(t.status);
-                }
-            } catch {}
+            // Read a feature's task statuses from its LIVE source: the isolated
+            // work-mode worktree while a run is active there, else the main snapshot
+            // (sandbox.featureOutputDir resolves which). Keeps the plan list badges
+            // live during a run without mirroring worktree state into main.
+            const taskStatusesFor = (name) => {
+                try {
+                    const tf = path.join(sandbox.featureOutputDir(project, name), 'jonggrang-tasks.json');
+                    return (JSON.parse(fs.readFileSync(tf, 'utf-8')).tasks || []).map(t => t.status);
+                } catch { return []; }
+            };
 
             try {
                 const entries = fs.readdirSync(featuresDir)
@@ -129,7 +131,7 @@ module.exports = function(deps) {
                     let status = 'approved';
                     let work_type = null;
                     try {
-                        const mPath = path.join(featuresDir, name, 'MANIFEST.yaml');
+                        const mPath = path.join(sandbox.featureOutputDir(project, name), 'MANIFEST.yaml');
                         if (fs.existsSync(mPath)) {
                             const manifest = orchestration.readManifest(mPath);
                             work_type = manifest?.work_type || null;
@@ -144,7 +146,7 @@ module.exports = function(deps) {
                     // machine, so the manifest can read "running" long after the
                     // work finished. When this plan has tasks, derive status from
                     // them — keeping Plan Mode consistent with Work Mode.
-                    const taskStatuses = tasksByFeature[name];
+                    const taskStatuses = taskStatusesFor(name);
                     if (taskStatuses && taskStatuses.length) {
                         const done = (s) => s === 'completed' || s === 'skipped';
                         const rs = runGroups[name]?.status;
