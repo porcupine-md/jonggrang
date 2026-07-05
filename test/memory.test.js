@@ -160,6 +160,7 @@ test('recall is bounded, scoped, structured, ranked by query, and empty-safe', (
     assert.equal(projectOnly.count <= memory.RECALL_MAX_SNIPPETS, true);
     assert.equal(projectOnly.snippets.every(s => s.scope === 'project'), true);
     assert.equal(projectOnly.snippets[0].heading, 'Project Needle Winner');
+    assert.equal(projectOnly.snippets[0].text.startsWith('## Project Needle Winner'), false);
 
     const scoped = memory.recall(root, { phase: 'work', query: 'needle', featureId: 'feat-a', taskId: 'task-001' });
     assert.equal(scoped.count <= memory.RECALL_MAX_SNIPPETS, true);
@@ -195,6 +196,7 @@ test('compact writes feature memory atomically, archives fragments, releases loc
     });
 
     assert.equal(result.skipped, false);
+    assert.equal(result.staleArchivesRemoved, 0);
     assert.equal(fs.readFileSync(memory.featureMemoryFile(root, 'feat-a'), 'utf8'), fakeText);
     assert.deepEqual(memory.listFragments(root, 'feat-a'), []);
     assert.equal(fs.existsSync(path.join(memory.archiveDir(root, 'feat-a'), path.basename(fragment))), true);
@@ -218,6 +220,26 @@ test('compact writes feature memory atomically, archives fragments, releases loc
     assert.deepEqual(lockFiles(failRoot), []);
   } finally {
     cleanup(failRoot);
+  }
+
+  const secretRoot = tempProject();
+  try {
+    createFeature(secretRoot, 'feat-a');
+    const source = writeFile(path.join(secretRoot, 'fragment.md'), '## Lessons\ncontains secret source\n');
+    const fragment = memory.addFragment(secretRoot, 'feat-a', 'task-001', source);
+
+    await assert.rejects(
+      () => memory.compact(secretRoot, 'feat-a', {
+        agentFn: async () => ({ code: 0, text: '---\nfeature_id: feat-a\n---\n## Context\nleaked token\n' }),
+        secretScanFn: () => ({ leaked: true, findings: '{"Source":"test"}' }),
+      }),
+      /secret detected in memory output/
+    );
+    assert.equal(fs.existsSync(fragment), true);
+    assert.equal(fs.existsSync(memory.featureMemoryFile(secretRoot, 'feat-a')), false);
+    assert.deepEqual(lockFiles(secretRoot), []);
+  } finally {
+    cleanup(secretRoot);
   }
 
   const skipRoot = tempProject();
@@ -257,6 +279,7 @@ test('promote requires feature memory, writes project memory atomically, preserv
     });
 
     assert.equal(result.skipped, false);
+    assert.equal(result.staleArchivesRemoved, 0);
     assert.equal(fs.readFileSync(memory.projectMemoryFile(root), 'utf8'), projectText);
     assert.equal(fs.readFileSync(memory.featureMemoryFile(root, 'feat-a'), 'utf8'), featureText);
     assert.deepEqual(lockFiles(root), []);
@@ -279,6 +302,26 @@ test('promote requires feature memory, writes project memory atomically, preserv
     assert.deepEqual(lockFiles(failRoot), []);
   } finally {
     cleanup(failRoot);
+  }
+
+  const secretRoot = tempProject();
+  try {
+    createFeature(secretRoot, 'feat-a');
+    const featureText = '---\nfeature_id: feat-a\n---\n## Context\nfeature memory\n';
+    writeFile(memory.featureMemoryFile(secretRoot, 'feat-a'), featureText);
+
+    await assert.rejects(
+      () => memory.promote(secretRoot, 'feat-a', {
+        agentFn: async () => ({ code: 0, text: '---\nscope: project\n---\n## Conventions\nleaked token\n' }),
+        secretScanFn: () => ({ leaked: true, findings: '{"Source":"test"}' }),
+      }),
+      /secret detected in memory output/
+    );
+    assert.equal(fs.readFileSync(memory.featureMemoryFile(secretRoot, 'feat-a'), 'utf8'), featureText);
+    assert.equal(fs.existsSync(memory.projectMemoryFile(secretRoot)), false);
+    assert.deepEqual(lockFiles(secretRoot), []);
+  } finally {
+    cleanup(secretRoot);
   }
 });
 
@@ -308,6 +351,12 @@ test('renderIndex renders project memory and generated feature index without mod
   } finally {
     cleanup(root);
   }
+});
+
+test('buildMemoryPolicyPrompt renders concrete work recall when feature/task are known', () => {
+  const prompt = memory.buildMemoryPolicyPrompt('work', { featureId: 'feat-a', taskId: 'task-001' });
+  assert.match(prompt, /jonggrang memory recall --phase work --feature feat-a --task task-001 --query "<task goal>"/);
+  assert.doesNotMatch(prompt, /<feature_id>|<task_id>/);
 });
 
 test('validateFeatureExists / validateTaskExists reject invalid ids and missing state', () => {

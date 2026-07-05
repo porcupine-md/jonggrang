@@ -31,8 +31,8 @@ section() { printf "\n${B}=== %s ===${N}\n" "$1"; }
 # ── AUTO TIER ──────────────────────────────────────────────────
 
 section "A1: lib/memory.js loads + syntax"
-node -c "$REPO/lib/memory.js"; assert "lib/memory.js syntax OK" "true"
-node -e "require('$REPO/lib/memory.js')"; assert "lib/memory.js requires OK" "true"
+assert "lib/memory.js syntax OK" "node -c '$REPO/lib/memory.js'"
+assert "lib/memory.js requires OK" "node -e 'require(process.argv[1])' '$REPO/lib/memory.js'"
 
 section "A2: policy prompt injected in all 6 builders"
 node -e '
@@ -97,9 +97,9 @@ assert "fragment path IS ignored"                        "[ $? -eq 0 ]"
 
 cd "$REPO"; rm -rf "$T"
 
-section "A5: jong-code unit tests (7/7)"
-node --test "$REPO/test/memory.test.js" 2>&1 | grep -q "^# pass 7"
-assert "test/memory.test.js 7/7 pass"                    "[ $? -eq 0 ]"
+section "A5: memory unit tests (8/8)"
+node --test "$REPO/test/memory.test.js" 2>&1 | grep -q "^# pass 8"
+assert "test/memory.test.js 8/8 pass"                    "[ $? -eq 0 ]"
 
 # ── SUMMARY ───────────────────────────────────────────────────
 echo ""

@@ -3571,6 +3571,13 @@ async function cmdMemory(args) {
     return;
   }
 
+  // Read tool from config (compact/promote need the agent backend). The memory
+  // command dispatches before the global flag parser, so TOOL is still the
+  // default — read it here like cmdWork/cmdPlan do.
+  if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
+  }
+
   // Parse flags common across memory subcommands
   const flags = {};
   const positional = [];

@@ -131,7 +131,7 @@ Agent reads these files at start of every iteration:
 
 ```
 AGENTS.md                                          --> Project conventions, gotchas, patterns
-jonggrang memory recall --phase work --feature <id> [--task <id>]  --> Bounded curated memory (max 5 snippets / 2000 chars)
+jonggrang memory recall --phase work --feature <id> [--task <id>] --query <task goal>  --> Bounded curated memory (max 5 snippets / 2000 chars)
 .jonggrang/.output/features/<id>/progress.txt      --> Raw learnings from previous iterations
 .jonggrang/.output/features/<id>/jonggrang-tasks.json  --> Current task state
 git log --oneline -20                              --> Recent changes for context
@@ -148,8 +148,8 @@ Before an agent acts, Jonggrang asks it to recall repo memory for the current ph
 |---------------|-----------------|
 | `jonggrang plan` | `jonggrang memory recall --phase plan --query <goal>` |
 | `jonggrang approve` | `jonggrang memory recall --phase approve --query <draft summary>` |
-| `jonggrang work` | `jonggrang memory recall --phase work --feature <id> --task <task-id>` |
-| `jonggrang review` / reviewer phases | `jonggrang memory recall --phase review --feature <id>` |
+| `jonggrang work` | `jonggrang memory recall --phase work --feature <id> --task <task-id> --query <task goal>` |
+| `jonggrang review` / reviewer phases | `jonggrang memory recall --phase review --feature <id> --query <review focus>` |
 
 Recall is **mandatory but bounded**: at most 5 snippets and 2000 characters enter the prompt. Memory is context, not instruction. If memory conflicts with current code, `AGENTS.md`, or the user's request, the current source wins. Canonical `MEMORY.md` files are updated only by `memory compact` / `memory promote` under locks; task agents add fragments instead of editing canonical memory directly.
 
