@@ -88,7 +88,7 @@ Optionally override `model` and `effort` for a specific backend. These take prec
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_iterations` | number | 10 | Max loop iterations per session |
+| `max_iterations` | number | 0 | Max loop iterations per session (`0` = unlimited — run until all tasks complete) |
 | `retry_limit` | number | 2 | Retries before skipping failed task |
 | `kill_after_fails` | number | 3 | Consecutive fails before BLOCKED exit |
 | `branch_prefix` | string | `feat/` | Prefix for auto-created branches |
@@ -238,7 +238,7 @@ All four fields are read at orchestrate start (`createManifest`) and carried on 
     "autonomy": "balanced"
   },
   "work": {
-    "max_iterations": 10,
+    "max_iterations": 0,
     "retry_limit": 2,
     "kill_after_fails": 3,
     "branch_prefix": "feat/",
@@ -285,9 +285,11 @@ All four fields are read at orchestrate start (`createManifest`) and carried on 
 
 ---
 
-## .jonggrang/jonggrang-tasks.json
+## .jonggrang/.output/features/<feature-id>/jonggrang-tasks.json
 
-Task board state file used by the **work loop**.
+Task board state file used by the **work loop**. Tasks and progress are **per-feature**, colocated with the feature's `plan.md` and `MANIFEST.yaml`. There is no global/root tasks file — each feature owns its own `jonggrang-tasks.json`.
+
+Task IDs are **globally unique** across all features (so `jonggrang task done task-005` resolves to one task without a `--feature` flag). The CLI scans all feature files via `getAllTasks()` to continue numbering and resolve task-id commands.
 
 ```json
 {
@@ -301,6 +303,7 @@ Task board state file used by the **work loop**.
       "description": "Detailed description",
       "priority": 1,
       "status": "pending | in_progress | completed | blocked | skipped",
+      "feature_id": "feat-20260411-abc123",
       "role": "developer | tester | reviewer | lead | null",
       "owner": "member-name | null",
       "skill": "skill-name | null",

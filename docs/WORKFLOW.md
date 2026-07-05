@@ -13,7 +13,18 @@ Before the work loop can run, a plan must exist and be approved. This is a **two
 ```
 Phase 1 — jonggrang plan "description"
     │
-    ├─ AI writes .jonggrang/plan.md  (high-level, human-editable)
+    ├─ Pass A — Clarify: the agent analyzes the goal first. If anything is
+    │   ambiguous it SUBMITS clarifying questions via `jonggrang plan ask`
+    │   (an agent-facing intake command, the sibling of `task import`) instead of
+    │   guessing. You answer each — pick an option (every option carries its
+    │   rationale) or type your own. Skipped when the request is unambiguous, or
+    │   with `--no-ask`. Q&A is stored in .jonggrang/plan-questions.json +
+    │   plan-answers.json (durable — reused on `plan --revise`).
+    │
+    ├─ Pass B — AI writes .jonggrang/.drafts/<session>/plan.md  (high-level,
+    │   human-editable), honoring the answers and recording them in a
+    │   `## Clarifications` section. Each plan call gets its own session-id —
+    │   concurrent planning is safe.
     │   frontmatter: feature, branch, work_type, description, created_at
     │   optional `base:` (set via `--base` / the web base picker) — the branch the
     │   worktree is cut from; fetched fresh from origin at run time. Default: main/master.
@@ -21,15 +32,16 @@ Phase 1 — jonggrang plan "description"
     ├─ Interactive prompt:
     │   > Approve (immediately run Phase 2)
     │   > Edit plan in $EDITOR, then approve
-    │   > Save for later (exit, plan.md stays on disk)
-    │   > Abort (discard plan.md)
+    │   > Save for later (exit, draft stays on disk)
+    │   > Abort (discard draft)
     │
-Phase 2 — jonggrang approve   (or auto-triggered by --yes)
+Phase 2 — jonggrang approve   (or `jonggrang approve --session <id>` / auto-triggered by --yes)
     │
-    ├─ AI reads .jonggrang/plan.md
-    ├─ Decomposes into atomic tasks → .jonggrang/jonggrang-tasks.json
-    └─ Archives plan → .jonggrang/.output/features/<id>/plan.md
-       Deletes .jonggrang/plan.md
+    ├─ Resolves the draft (most-recent, or --session <id>)
+    ├─ AI reads the draft plan.md
+    ├─ Decomposes into atomic tasks → .jonggrang/.output/features/<id>/jonggrang-tasks.json
+    └─ Promotes plan → .jonggrang/.output/features/<id>/plan.md
+       Discards the draft session folder
 ```
 
 **Interactive options after `jonggrang plan`:**
@@ -37,10 +49,10 @@ Phase 2 — jonggrang approve   (or auto-triggered by --yes)
 | Option | Action |
 |--------|--------|
 | Approve | Run Phase 2 immediately |
-| Edit with AI | Describe changes → AI revises plan.md in-place → loop back |
+| Edit with AI | Describe changes → AI revises the draft in-place → loop back |
 | Edit in $EDITOR | Open editor → loop back to options |
-| Save draft | Save plan.md, exit — run `jonggrang approve` later |
-| Abort | Delete plan.md, exit |
+| Save draft | Keep the draft, exit — run `jonggrang approve` later |
+| Abort | Delete the draft, exit |
 
 **Shorthand options:**
 
@@ -52,7 +64,8 @@ Phase 2 — jonggrang approve   (or auto-triggered by --yes)
 | `jonggrang plan` | No description → picker: list all pending + archived plans |
 | `jonggrang work "feat" --yes` | Full pipeline: plan → approve → execute |
 | `jonggrang work --ignore-plan` | Skip pending plan warning, run existing tasks |
-| `jonggrang approve` | Manual Phase 2 only (after editing saved plan.md) |
+| `jonggrang approve` | Manual Phase 2 only; defaults to the most-recent draft |
+| `jonggrang approve --session <id>` | Approve a specific pending draft session |
 
 **Deep planning (`--deep`):**
 
@@ -92,11 +105,19 @@ jonggrang plan        # no description → shows list of pending + archived plan
 
 | Situation | Command |
 |-----------|---------|
-| Add new scope on top of done work | `jonggrang plan "also add rate limiting"` |
-| Change remaining pending work | `jonggrang plan "use Passport.js instead"` |
+| Add new scope to an approved plan | `jonggrang plan --append <featureId> "also add rate limiting"` then `jonggrang approve --feature <featureId>` (or `--yes` for one shot) |
+| Change remaining pending work | `jonggrang plan "use Passport.js instead"` (a new plan / new feature) |
 | Undo completed tasks | Not supported — create new tasks to override |
 
 > **Rule: completed tasks are immutable.** They reflect real code. Any correction must be a new task.
+>
+> **Per-plan task numbering.** Each plan numbers its own tasks from `task-001`. An
+> append continues from that plan's current max (e.g. `task-006` after `task-001..005`)
+> and never renumbers or modifies existing/completed tasks. A bare `task-NNN` can
+> therefore recur across plans; task-id commands resolve it within a feature scope
+> (`--feature <id>`, else the active feature, else a single global match for legacy
+> ids), and error with `AMBIGUOUS_TASK_ID` when genuinely ambiguous. Existing
+> projects keep their current ids — no renumber, no migration.
 
 ---
 
@@ -109,11 +130,11 @@ Each iteration is **stateless** — a fresh context window. This prevents accumu
 Agent reads these files at start of every iteration:
 
 ```
-AGENTS.md                        --> Project conventions, gotchas, patterns
-.jonggrang/progress.txt          --> Learnings from previous iterations
-.jonggrang/jonggrang-tasks.json  --> Current task state
-git log --oneline -20            --> Recent changes for context
-.jonggrang/jonggrang.json        --> Project config
+AGENTS.md                                          --> Project conventions, gotchas, patterns
+.jonggrang/.output/features/<id>/progress.txt      --> Learnings from previous iterations
+.jonggrang/.output/features/<id>/jonggrang-tasks.json  --> Current task state
+git log --oneline -20                              --> Recent changes for context
+.jonggrang/jonggrang.json                          --> Project config
 ```
 
 Total context budget: ~30% of window for context, ~70% for work.
@@ -167,8 +188,8 @@ Skill: scaffold-api
 #### Step 7: Update State
 
 ```
-.jonggrang/jonggrang-tasks.json  --> task.status = "completed"
-.jonggrang/progress.txt          --> append session learnings
+.jonggrang/.output/features/<id>/jonggrang-tasks.json  --> task.status = "completed"
+.jonggrang/.output/features/<id>/progress.txt          --> append session learnings
 AGENTS.md                        --> propose update if new pattern found (human approval required)
 ```
 
@@ -231,6 +252,28 @@ Last test output:
   ✗ add(2, 3) === 5: expected 5, got -1
   ...
 ```
+
+#### Project Context: Codemap (LLM-free)
+
+Every fresh-context agent — work-loop tasks, plan/approve, deep-plan discovery, orchestration phase agents, and the Pi TUI session — receives a **deterministic codebase map** (codemap) at the top of its prompt under `## Project Context (codemap)`. The codemap is:
+
+- **LLM-free** — built by reading the filesystem (no model call, no extra latency, no extra cost).
+- **Cached** — stored at `.jonggrang/codemap/codemap.json` and invalidated by a SHA-256 content hash over `package.json`, lockfiles, `tsconfig.json`, and the top-level directory layout.
+- **Truncated** — capped at ~3000 chars per prompt to keep the context budget honest.
+- **Stale-aware** — if the project changed since the cache was written, a warning banner is prepended and the agent can `jonggrang codemap --refresh` to update.
+
+What the codemap surfaces: project name + version, packages, detected frameworks (React, Next, Express, …), entry points, npm/Make scripts, test framework, conventions (TypeScript, ESLint, Prettier, Docker, CI), key files (AGENTS.md, CLAUDE.md, README, …), and a depth-limited directory tree.
+
+The CLI:
+
+```bash
+jonggrang codemap                 # print markdown (cache-aware)
+jonggrang codemap --refresh       # force regen
+jonggrang codemap --stats         # one-line summary
+jonggrang codemap --json | jq .   # machine-readable
+```
+
+This mirrors **pi-compass** (the Pi extension of the same name): deterministic, hash-validated, and integrated into all the same surface area.
 
 #### Step 9: Loop Decision
 
@@ -301,7 +344,7 @@ The orchestrate command runs a deterministic 17-phase pipeline. Each phase is ex
 | 14 | Test | Tester | Execute test plan, run all tests | — |
 | 15 | Coverage | Tester | Enforce coverage thresholds | — |
 | 16 | TestQuality | Reviewer | Test quality review → REVIEW_COMPLETE | — |
-| 17 | Complete | Lead | Final summary, update `.jonggrang/progress.txt`, MANIFEST → done | — |
+| 17 | Complete | Lead | Final summary, update `.jonggrang/.output/features/{id}/progress.txt`, MANIFEST → done | — |
 
 ### Phase Skipping by Work Type
 

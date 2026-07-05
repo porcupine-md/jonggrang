@@ -30,8 +30,6 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // silently skips entries that don't exist.
 const COPY_INTO_WORKTREE = [
     '.jonggrang/jonggrang.json',
-    '.jonggrang/jonggrang-tasks.json',
-    '.jonggrang/progress.txt',
     '.jonggrang/.output',
     '.jonggrang/skills',
     '.jonggrang/lib',
@@ -338,7 +336,6 @@ module.exports = function(deps) {
         return true;
     }
 
-    const tasksFileOf  = (project) => path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
     const snapshotPath = (project) => path.join(project.path, '.jonggrang', '.ephemeral', 'orchestration-run.json');
 
     function emit(projectId, event, payload) {
@@ -438,8 +435,11 @@ module.exports = function(deps) {
     // pipeline (`--resume`) instead of the default all-group-tasks run.
     function spawnGroupWorker(project, ctx, group) {
         const secretVars = webState.getProjectSecretVars(project.id);
+        // Pass the group's featureId explicitly so the worker resolves its feature
+        // deterministically instead of guessing from a bare task id (per-feature
+        // numbering makes task-001 recur across features).
         const workerArgs = group.workerArgs
-            || ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--branch', group.branch];
+            || ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--branch', group.branch, '--feature', group.featureId];
 
         if (ctx.mode === 'container') {
             const envFlags = [];
@@ -481,13 +481,31 @@ module.exports = function(deps) {
         if (group.logTail.length > LOG_TAIL_MAX) group.logTail.shift();
     }
 
-    function applySignal(project, signal) {
+    function applySignal(project, signal, group) {
         if (signal.type !== 'task_status' || !signal.taskId) return;
-        const mainTasks = tasksFileOf(project);
         try {
-            if (signal.status === 'completed') lib.markTaskDone(mainTasks, signal.taskId);
-            else lib.updateTaskStatus(mainTasks, signal.taskId, signal.status);
+            // Scope resolution to the emitting group's feature. Per-feature numbering
+            // means a bare id (task-001) recurs across features, so without this hint
+            // findTaskFeature could resolve to the wrong feature (active/first-match)
+            // and mark done a task in a different plan.
+            const featureId = lib.findTaskFeature(project.path, signal.taskId, { featureId: group?.featureId });
+            if (!featureId) {
+                console.error('orchestration applySignal error: task feature not found', signal.taskId);
+                return;
+            }
+            const tasksFile = lib.tasksFileFor(project.path, featureId);
+            if (signal.status === 'completed') lib.markTaskDone(tasksFile, signal.taskId);
+            else lib.updateTaskStatus(tasksFile, signal.taskId, signal.status);
+            // The host write succeeded, so applySignal is the LIVE writer of main
+            // tasks.json for this group. Tell the periodic mirror to leave tasks.json
+            // alone — otherwise it copies the worktree's stale copy (the worker emits
+            // signals but never updates its own tasks.json mid-task) back over these
+            // updates, reverting in_progress/completed → pending during the run.
+            if (group) group._tasksLiveWritten = true;
         } catch (err) {
+            // Host write failed (e.g. sandbox-Linux root-owned main → EACCES). Leave
+            // _tasksLiveWritten unset so syncTasks mirrors the worktree copy as the
+            // fallback path. Single writer either way — never both at once.
             console.error('orchestration applySignal error:', err.message);
         }
     }
@@ -537,16 +555,30 @@ module.exports = function(deps) {
             path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml'), 'syncManifest');
     }
     function syncProgress(project, ctx, group) {
-        mirrorFromWorktree(project, ctx, group, path.join('.jonggrang', 'progress.txt'), 'syncProgress');
+        mirrorFromWorktree(project, ctx, group,
+            path.join('.jonggrang', '.output', 'features', group.featureId, 'progress.txt'), 'syncProgress');
+    }
+    // Mirror the worktree's per-feature task board back to main. The host-side
+    // applySignal write fails under sandbox (main tasks.json is root-owned by the
+    // in-container approve → host EACCES), so mirror the file via the container.
+    function syncTasks(project, ctx, group) {
+        // If applySignal is successfully writing main tasks.json (host / macOS bind
+        // mount), it is the single live writer — mirroring the worktree's stale copy
+        // here would revert its in_progress/completed updates back to pending. Only
+        // mirror when applySignal's host write can't land (sandbox-Linux root-owned).
+        if (group._tasksLiveWritten) return;
+        mirrorFromWorktree(project, ctx, group,
+            path.join('.jonggrang', '.output', 'features', group.featureId, 'jonggrang-tasks.json'), 'syncTasks');
     }
 
     function wireWorker(project, ctx, run, group) {
         const child = group.child;
         group.pid = child.pid;
-        // Live-mirror the worktree manifest + progress log → main project while the worker runs.
+        // Live-mirror the worktree manifest + progress log + task board → main while the worker runs.
         group.manifestSync = setInterval(() => {
             syncManifest(project, ctx, group);
             syncProgress(project, ctx, group);
+            syncTasks(project, ctx, group);
         }, 1500);
         let buf = '';
         const onData = (stream) => (data) => {
@@ -562,7 +594,7 @@ module.exports = function(deps) {
                     try { signal = JSON.parse(trimmed); } catch { /* not JSON */ }
                 }
                 if (signal && signal.type === 'task_status') {
-                    applySignal(project, signal);
+                    applySignal(project, signal, group);
                     continue;
                 }
                 pushLog(group, trimmed);
@@ -578,6 +610,7 @@ module.exports = function(deps) {
             if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
             syncManifest(project, ctx, group); // final state (e.g. completed) → main project
             syncProgress(project, ctx, group); // final progress log → main project
+            syncTasks(project, ctx, group);    // final task board → main project
             if (code === 0) {
                 try {
                     group.committed = commitWorktreeCtx(ctx, group.worktreePath, `feat(${group.featureId}): ${group.title}`);
@@ -695,7 +728,7 @@ module.exports = function(deps) {
 
         let groups;
         try {
-            groups = lib.groupPlans(tasksFileOf(project), project.path);
+            groups = lib.groupPlansAll(project.path);
         } catch (err) {
             return res.status(500).json({ error: { code: 'GROUP_ERROR', message: err.message } });
         }
@@ -802,7 +835,7 @@ module.exports = function(deps) {
 
         let groups;
         try {
-            groups = lib.groupPlans(tasksFileOf(project), project.path);
+            groups = lib.groupPlansAll(project.path);
         } catch (err) {
             return res.status(500).json({ error: { code: 'GROUP_ERROR', message: err.message } });
         }

@@ -6,6 +6,7 @@
 // Events used:
 //   session_start        → session role init (claim pending role from queue)
 //   resources_discover   → redirect skill/prompt discovery to .jonggrang/
+//   before_agent_start   → inject codemap into system prompt (first turn only)
 //   tool_call            → file protection + secret command block + agent-first + compaction gate + task role claim
 //   tool_result          → track modifications (dirty bit) + output sanitization
 //   agent_end            → secret final check + feedback loop gate + quality gate + output enforcement
@@ -15,6 +16,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const path = require("path") as typeof import("path");
 const fs = require("fs") as typeof import("fs");
 const { execSync, execFileSync } = require("child_process") as typeof import("child_process");
+
+// Per-session state: cached codemap markdown (loaded on session_start, injected on first turn).
+const MAX_CODEMAP_INJECTION_CHARS = 4500;
 
 // ── Sensitive file check — mirrors block-sensitive-files.sh ──────────────────
 function isSensitiveFile(filePath: string, projectRoot: string): boolean {
@@ -108,16 +112,40 @@ export default function (pi: ExtensionAPI) {
   // Do NOT use __dirname — the extension is loaded via --extension flag, not from a fixed install path.
   const projectRoot = process.cwd();
   const jonggrangLib = (() => {
-    // Try npm package first, then fall back to co-located lib/
+    // 1. Try npm package (project-local or globally installed)
     try {
       return path.dirname(require.resolve("jonggrang/lib/jonggrang.js"));
-    } catch {
-      return path.join(projectRoot, "node_modules", "jonggrang", "lib");
-    }
+    } catch {}
+    // 2. Co-located lib/ relative to this extension file (handles global
+    //    install via symlink, npx, or --extension flag from repo clone)
+    try {
+      const coLocated = path.join(__dirname, '..', '..', 'lib');
+      if (fs.existsSync(path.join(coLocated, 'codemap.js'))) return coLocated;
+    } catch {}
+    // 3. Last resort: project-local node_modules
+    return path.join(projectRoot, "node_modules", "jonggrang", "lib");
   })();
 
   function loadLib(name: string) {
     return require(path.join(jonggrangLib, name));
+  }
+
+  // ── Codemap (LLM-free project context) — loaded once on session_start ──
+  // Mirrors pi-compass: pre-compute markdown, inject on first turn only.
+  let codemapInjected = false;
+  let codemapMarkdown: string | null = null;
+  let codemapStale = false;
+  function loadCodemap() {
+    try {
+      const codemap = loadLib("codemap.js");
+      const result = codemap.getOrGenerateCodemap(projectRoot);
+      if (result && result.codemap) {
+        codemapMarkdown = codemap.formatCodemapMarkdown(result.codemap, { maxChars: MAX_CODEMAP_INJECTION_CHARS });
+        codemapStale = !!result.stale;
+      }
+    } catch (e: any) {
+      console.error("[jonggrang] codemap load failed:", e?.message || e);
+    }
   }
 
   function detectDomain(filePath: string): string {
@@ -176,6 +204,22 @@ export default function (pi: ExtensionAPI) {
       promptPaths: fs.existsSync(promptsPath) ? [promptsPath] : [],
       themePaths:  [],
     };
+  });
+
+  // ── LAYER 1.5: before_agent_start → inject codemap (first turn only) ──────
+  // Mirrors pi-compass: deterministic, cached codebase map prepended to the
+  // system prompt once per session. Avoids spending tool calls on `ls`/`find`.
+  // Subsequent turns do NOT re-inject (mirrors pi-compass behavior).
+  if (!codemapMarkdown) loadCodemap();
+  pi.on("before_agent_start", (event) => {
+    if (codemapInjected) return {};
+    if (!codemapMarkdown) return {};
+    codemapInjected = true;
+    const banner = codemapStale
+      ? `\n\n> ⚠️ Codemap may be outdated. Run \`jonggrang codemap --refresh\` to update.`
+      : "";
+    const section = `\n\n## Codebase Map (LLM-free, cached)\n\n${codemapMarkdown}${banner}`;
+    return { systemPrompt: section + event.systemPrompt };
   });
 
   // ── LAYER 2: tool_call → fileProtection + secretCommandBlock + agentFirst + compactionGate + taskRoleClaim ─

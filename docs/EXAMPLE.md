@@ -58,8 +58,7 @@ Expected output:
 ```
 [jonggrang] Generated .jonggrang/jonggrang.json
 [jonggrang] Generated AGENTS.md
-[jonggrang] Generated .jonggrang/jonggrang-tasks.json
-[jonggrang] Generated .jonggrang/progress.txt
+[jonggrang] Task & progress state: per-feature (created on demand at `jonggrang approve`)
 [jonggrang] Copied skills (core + library)
 [jonggrang] Installed Claude Code hooks → .claude/settings.json
 [jonggrang] Installed OpenCode plugin  → .opencode/plugins/jonggrang.js
@@ -76,7 +75,7 @@ Planning is a two-phase process. Phase 1 generates a human-readable draft that y
 
 ```bash
 jonggrang plan "Todo REST API with Express. CRUD endpoints for todos (list, get, create, update, delete) using in-memory storage. TypeScript, Vitest tests, supertest for integration testing."
-# AI writes .jonggrang/plan.md
+# AI writes .jonggrang/.drafts/<session>/plan.md
 # Interactive prompt:
 #   ◆ What would you like to do?
 #   ● Approve — decompose into tasks now
@@ -89,7 +88,8 @@ Once approved (or after editing), run Phase 2:
 
 ```bash
 jonggrang approve
-# Reads plan.md → writes jonggrang-tasks.json
+# Reads the most-recent draft plan.md → writes jonggrang-tasks.json
+# Use: jonggrang approve --session <id> when multiple drafts are pending
 # Archives plan.md to .jonggrang/.output/features/<id>/plan.md
 ```
 
@@ -103,6 +103,20 @@ jonggrang plan "Todo REST API ..." --yes   # plan + approve in one shot
 
 ```bash
 jonggrang work "Todo REST API ..." --yes   # plan → approve → execute
+```
+
+**Option D — plan from a BRD/PRD document:**
+
+```bash
+jonggrang plan "Todo REST API ..." --src docs/brd.md   # reference source document for the agent to read
+```
+
+**Option E — extend an approved plan (append):**
+
+```bash
+jonggrang plan --append feat-abc123 "also add input validation to the todo endpoints" --yes
+# generates an extension draft, approves it into the existing feature (task-006, task-007, ...),
+# and re-opens the execution phases so `jonggrang work` runs the new tasks.
 ```
 
 ### Step 4: Check Task Board
@@ -246,7 +260,7 @@ Expected output (first few phases):
 [jonggrang] MANIFEST: .jonggrang/.output/features/feat-20260411-d4e5f6/MANIFEST.yaml
 
 [jonggrang] Phase 1/16: Setup (Lead)
-  ✓ Read AGENTS.md, .jonggrang/progress.txt, git log
+  ✓ Read AGENTS.md, .jonggrang/.output/features/<id>/progress.txt, git log
   ✓ Context loaded
 
 [jonggrang] Phase 2/16: Triage (Lead)
@@ -313,7 +327,7 @@ Continuing:
   ✓ REVIEW_COMPLETE
 
 [jonggrang] Phase 16/16: Complete (Lead)
-  ✓ .jonggrang/progress.txt updated
+  ✓ .jonggrang/.output/features/<id>/progress.txt updated
   ✓ MANIFEST status: completed
 
 [jonggrang] Orchestration complete! Feature: feat-20260411-d4e5f6
