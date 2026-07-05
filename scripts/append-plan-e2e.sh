@@ -10,9 +10,14 @@
 #   bash scripts/append-plan-e2e.sh
 #   JONGGRANG_BIN=./bin/jonggrang.js bash scripts/append-plan-e2e.sh
 #   SKIP_WORK=1 bash scripts/append-plan-e2e.sh   # skip the heavy `work` step
+#   JG_MODEL=deepseek-v4-pro bash scripts/append-plan-e2e.sh  # use a different model
 #
 # Preflight: needs `jonggrang` on PATH (or JONGGRANG_BIN) + a working agent
-# backend (the `jonggrang` tool uses the Pi SDK in-process, no external dep).
+# backend. The `jonggrang` tool uses the Pi SDK in-process. Set up once:
+#   jonggrang login        # writes ~/.jonggrang/agent/auth.json (API key)
+# The script sets provider+model in the test project's jonggrang.json
+# automatically (defaults: opencode-go / deepseek-v4-flash). Override with
+# JG_PROVIDER=... JG_MODEL=...
 set -uo pipefail
 
 # Always test the CURRENT branch's code, not a globally-installed jonggrang
@@ -21,6 +26,11 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JG="${JONGGRANG_BIN:-$REPO_ROOT/bin/jonggrang.js}"
 TMP="$(mktemp -d /tmp/jg-append-e2e.XXXXXX)"
 SKIP_WORK="${SKIP_WORK:-0}"
+# Pi SDK needs a provider+model in jonggrang.json. Defaults use the opencode-go
+# provider (key lives in ~/.jonggrang/agent/auth.json from `jonggrang login`).
+# Override with JG_PROVIDER=... JG_MODEL=... for a different backend.
+JG_PROVIDER="${JG_PROVIDER:-opencode-go}"
+JG_MODEL="${JG_MODEL:-deepseek-v4-flash}"
 
 PASS=0; FAIL=0; STEP=0
 ok()   { echo "  ✅ $1"; PASS=$((PASS+1)); }
@@ -52,11 +62,42 @@ echo "============================================="
 echo "  testing : $JG"
 echo "  (override with JONGGRANG_BIN=...; skip the heavy work step with SKIP_WORK=1)"
 
+# Pi SDK (tool=jonggrang) needs (a) a populated auth.json and (b) a model set
+# per-project. Fail early with a clear hint instead of a confusing "Agent did
+# not write the plan" midway through.
+AUTH_FILE="$HOME/.jonggrang/agent/auth.json"
+if [ ! -f "$AUTH_FILE" ] || [ "$(wc -c < "$AUTH_FILE" | tr -d ' ')" -le 5 ]; then
+  die "auth.json missing or empty ($AUTH_FILE). Run 'jonggrang login' first."
+fi
+if ! node -e "const a=require('$AUTH_FILE'); const hasKey=Object.values(a).some(v=>v&&(v.key||v.api_key||v.token)); process.exit(hasKey?0:1)" 2>/dev/null; then
+  die "No API key found in $AUTH_FILE. Run 'jonggrang login' first."
+fi
+
+# The Pi extension must parse (see issue #76 / PR #77). A parse error here
+# breaks 'jonggrang agent' AND every runAgent path that loads the extension.
+if ! node --experimental-strip-types -e "import('$REPO_ROOT/hooks/pi/jonggrang-extension.ts').then(()=>process.exit(0)).catch(e=>{console.error(e.message.split(String.fromCharCode(10))[0]);process.exit(1)})" 2>/dev/null; then
+  die "hooks/pi/jonggrang-extension.ts does not parse (issue #76). Apply PR #77 first, or cherry-pick it onto this branch."
+fi
+ok "preflight: auth.json has a key + Pi extension parses"
+
 # --- setup -----------------------------------------------------------------
-step "Setup: non-interactive init"
+step "Setup: non-interactive init + set Pi SDK model"
 ( cd "$TMP" && git init -q && "$JG" init --name jg-append-e2e --tool jonggrang --autonomy autonomous --force ) \
   || die "init failed"
 [ -f "$TMP/.jonggrang/jonggrang.json" ] && ok "project initialized" || bad "no jonggrang.json after init"
+
+# Patch provider+model into the project config (cmdModel is interactive TUI,
+# so we write the fields directly). Without this, Pi SDK has no model and the
+# agent silently fails to write the plan.
+node -e "
+const fs=require('fs');
+const p=process.argv[1];
+const cfg=JSON.parse(fs.readFileSync(p,'utf8'));
+cfg.provider=process.argv[2];
+cfg.model=process.argv[3];
+fs.writeFileSync(p, JSON.stringify(cfg,null,2));
+" "$TMP/.jonggrang/jonggrang.json" "$JG_PROVIDER" "$JG_MODEL"
+echo "  Pi SDK model: $JG_PROVIDER/$JG_MODEL"
 
 # --- 1. first plan → task-001, task-002 ------------------------------------
 step "Plan feature A → expect task-001, task-002"
@@ -90,12 +131,12 @@ rm -f /tmp/jg-e2e-ambiguous.log
 
 # --- 4. --feature disambiguates --------------------------------------------
 step "task done task-001 --feature A → expect success"
-if ( cd "$TMP" && "$JG" task done task-001 --feature "$FEATURE_A" ) >/tmp/jg-e2e-done.log 2>&1; then
+# Don't swallow stderr — if the agent/model errors here, we want to see it.
+if ( cd "$TMP" && "$JG" task done task-001 --feature "$FEATURE_A" ); then
   ok "disambiguated via --feature"
 else
-  bad "task done --feature failed (check /tmp/jg-e2e-done.log)"
+  bad "task done --feature failed (see output above)"
 fi
-rm -f /tmp/jg-e2e-done.log
 
 # --- 5. append → numbering continues ---------------------------------------
 step "Append to A → expect task-003, task-004 (completed tasks untouched)"
