@@ -435,8 +435,11 @@ module.exports = function(deps) {
     // pipeline (`--resume`) instead of the default all-group-tasks run.
     function spawnGroupWorker(project, ctx, group) {
         const secretVars = webState.getProjectSecretVars(project.id);
+        // Pass the group's featureId explicitly so the worker resolves its feature
+        // deterministically instead of guessing from a bare task id (per-feature
+        // numbering makes task-001 recur across features).
         const workerArgs = group.workerArgs
-            || ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--branch', group.branch];
+            || ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--branch', group.branch, '--feature', group.featureId];
 
         if (ctx.mode === 'container') {
             const envFlags = [];
@@ -478,10 +481,14 @@ module.exports = function(deps) {
         if (group.logTail.length > LOG_TAIL_MAX) group.logTail.shift();
     }
 
-    function applySignal(project, signal) {
+    function applySignal(project, signal, groupFeatureId) {
         if (signal.type !== 'task_status' || !signal.taskId) return;
         try {
-            const featureId = lib.findTaskFeature(project.path, signal.taskId);
+            // Scope resolution to the emitting group's feature. Per-feature numbering
+            // means a bare id (task-001) recurs across features, so without this hint
+            // findTaskFeature could resolve to the wrong feature (active/first-match)
+            // and mark done a task in a different plan.
+            const featureId = lib.findTaskFeature(project.path, signal.taskId, { featureId: groupFeatureId });
             if (!featureId) {
                 console.error('orchestration applySignal error: task feature not found', signal.taskId);
                 return;
@@ -573,7 +580,7 @@ module.exports = function(deps) {
                     try { signal = JSON.parse(trimmed); } catch { /* not JSON */ }
                 }
                 if (signal && signal.type === 'task_status') {
-                    applySignal(project, signal);
+                    applySignal(project, signal, group.featureId);
                     continue;
                 }
                 pushLog(group, trimmed);

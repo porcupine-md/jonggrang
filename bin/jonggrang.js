@@ -676,11 +676,14 @@ async function cmdWork(descriptionParts = []) {
     // this worktree. Tracking the manifest here is what lets the post-work
     // phases (Simplify → … → Complete) run in worktree mode instead of the
     // pipeline stalling at Implement.
-    const firstGroupId = GROUP_TASK_IDS.find(id => lib.findTaskFeature(PROJECT_ROOT, id));
-    const fid = firstGroupId ? lib.findTaskFeature(PROJECT_ROOT, firstGroupId) : null;
+    // Prefer the featureId the pipeline passed via --feature (deterministic).
+    // Fall back to resolving from a group task id — scoped to WORK_FEATURE_ID
+    // when present so per-feature task-001 collisions can't pick the wrong plan.
+    const fid = WORK_FEATURE_ID
+      || GROUP_TASK_IDS.map(id => lib.findTaskFeature(PROJECT_ROOT, id, { featureId: WORK_FEATURE_ID })).find(Boolean)
+      || null;
     if (fid) {
       WORK_TASKS_FILE = lib.tasksFileFor(PROJECT_ROOT, fid);
-      const firstTask = lib.getTask(WORK_TASKS_FILE, firstGroupId);
       const mPath = orchestration.getManifestPath(PROJECT_ROOT, fid);
       const m = orchestration.readManifest(mPath);
       if (m) {
@@ -1838,9 +1841,6 @@ async function cmdApprove(args, opts = {}) {
   let featureId, featureName, workType;
   if (isAppend) {
     featureId = appendTo;
-  }
-
-  if (isAppend) {
     const featurePlanPath = path.join(PROJECT_ROOT, '.jonggrang', '.output', 'features', featureId, 'plan.md');
     if (!fs.existsSync(featurePlanPath)) {
       logError(`Cannot append: feature "${featureId}" not found (no plan at ${featurePlanPath}).`);

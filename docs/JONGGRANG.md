@@ -670,7 +670,7 @@ Append-only log written after each task (per-feature):
   },
 
   "work": {
-    "max_iterations": 10,
+    "max_iterations": 0,
     "retry_limit": 2,
     "kill_after_fails": 3,
     "branch_prefix": "feat/",

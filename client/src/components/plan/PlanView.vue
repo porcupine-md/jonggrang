@@ -294,13 +294,12 @@
               </RouterLink>
             </div>
           </div>
-          <div v-if="showExtendForm" class="plan-extend-form" style="display:flex; flex-direction:column; gap:8px; padding:10px 12px; border-bottom:1px solid var(--jg-border);">
-            <label style="font-size:12px; color:var(--jg-text-dim);">Additional scope to append (numbering continues from this plan's tasks)</label>
+          <div v-if="showExtendForm" class="plan-extend-form">
+            <label class="plan-extend-label">Additional scope to append (numbering continues from this plan's tasks)</label>
             <textarea v-model="extendDescription" rows="3" class="plan-extend-input"
-              placeholder="e.g. also add rate limiting to the login endpoint"
-              style="width:100%; padding:6px 8px; border-radius:6px; background:var(--jg-bg); border:1px solid var(--jg-border); color:var(--jg-text); font-family:var(--font-mono); font-size:12px;" />
-            <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end;">
-              <label style="display:flex; align-items:center; gap:6px; margin-right:auto; font-size:12px; color:var(--jg-text-dim); cursor:pointer;">
+              placeholder="e.g. also add rate limiting to the login endpoint" />
+            <div class="plan-extend-actions">
+              <label class="plan-extend-deep">
                 <input type="checkbox" v-model="extendDeep" /> Deep analysis (discovery + risks for the added scope)
               </label>
               <Button severity="secondary" @click="showExtendForm = false">Cancel</Button>
@@ -1065,6 +1064,17 @@ onUnmounted(() => {
 }
 .btn-new-plan:hover { background: color-mix(in oklch, var(--jg-green) 12%, transparent); }
 .plan-list-items { flex: 1; overflow-y: auto; padding: 4px; }
+
+/* Extend-this-plan (append) form */
+.plan-extend-form { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--jg-border); }
+.plan-extend-label { font-size: 12px; color: var(--jg-text-dim); }
+.plan-extend-input {
+  width: 100%; padding: 6px 8px; border-radius: 6px;
+  background: var(--jg-bg); border: 1px solid var(--jg-border); color: var(--jg-text);
+  font-family: var(--font-mono); font-size: 12px;
+}
+.plan-extend-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.plan-extend-deep { display: flex; align-items: center; gap: 6px; margin-right: auto; font-size: 12px; color: var(--jg-text-dim); cursor: pointer; }
 
 .plan-item {
   padding: 8px 10px; cursor: pointer; border: 1px solid transparent;

@@ -127,7 +127,7 @@ jonggrang work --feature feat-abc123 # Target a specific approved feature (multi
 {
   "tool": "opencode",          // opencode | claude | jonggrang | codex
   "mode": { "autonomy": "balanced" },
-  "work": { "max_iterations": 10 }
+  "work": { "max_iterations": 0 }   // 0 = unlimited (run until all tasks complete)
 }
 ```
 

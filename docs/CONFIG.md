@@ -88,7 +88,7 @@ Optionally override `model` and `effort` for a specific backend. These take prec
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_iterations` | number | 10 | Max loop iterations per session |
+| `max_iterations` | number | 0 | Max loop iterations per session (`0` = unlimited — run until all tasks complete) |
 | `retry_limit` | number | 2 | Retries before skipping failed task |
 | `kill_after_fails` | number | 3 | Consecutive fails before BLOCKED exit |
 | `branch_prefix` | string | `feat/` | Prefix for auto-created branches |
@@ -212,7 +212,7 @@ Example:
     "autonomy": "balanced"
   },
   "work": {
-    "max_iterations": 10,
+    "max_iterations": 0,
     "retry_limit": 2,
     "kill_after_fails": 3,
     "branch_prefix": "feat/",
