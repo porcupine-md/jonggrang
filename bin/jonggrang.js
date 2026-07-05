@@ -290,11 +290,13 @@ function emitSignal(type, data) {
 
 // In worktree mode emit a JSON signal; otherwise write directly to the active feature's tasks file
 function updateTaskMode(tasksFile, taskId, status, worktreeMode = false) {
-  if (worktreeMode) {
-    emitSignal('task_status', { taskId, status });
-  } else {
-    lib.updateTaskStatus(tasksFile, taskId, status);
-  }
+  // Always write the tasks file. In worktree mode `tasksFile` (WORK_TASKS_FILE)
+  // IS the worktree's own per-feature copy under <worktree>/.jonggrang/.output/
+  // features/<fid>/ — now the single source of truth the dashboard reads directly.
+  // A signal is still emitted so the host can refresh the live UI (read-only), but
+  // the host no longer writes the main copy (no dual-writer revert).
+  try { lib.updateTaskStatus(tasksFile, taskId, status); } catch { /* file may not exist yet */ }
+  if (worktreeMode) emitSignal('task_status', { taskId, status });
 }
 
 const TEST_RETRY_LIMIT = 3;
@@ -750,9 +752,11 @@ async function cmdWork(descriptionParts = []) {
     // Resolve the per-feature tasks file for this work session.
     WORK_TASKS_FILE = lib.tasksFileFor(PROJECT_ROOT, workFeatureId);
 
-    // Guard: if phase 8 already completed (e.g. by a prior orchestration
-    // resume that ran the work loop), skip straight to post-work phases.
-    if (workManifest.phases?.[8]?.status === 'completed') {
+    // Guard: if phase 8 already completed AND there is no pending work, skip
+    // straight to post-work phases. When pending tasks exist (e.g. added by
+    // `plan --append` or `bug convert` after the feature completed), DON'T skip —
+    // fall through so phase 8 is re-opened (below) and the new tasks run.
+    if (workManifest.phases?.[8]?.status === 'completed' && lib.countPending(WORK_TASKS_FILE) === 0) {
       logInfo('Phase 8 (Implement) already completed — skipping to post-work phases');
       if (!SKIP_GATES) {
         const gateWorkType = workManifest?.work_type || workType;
@@ -1932,6 +1936,15 @@ async function cmdApprove(args, opts = {}) {
     }
   }
 
+  // Keep the remote base branch CLEAN: auto-push ONLY this feature's plan.md,
+  // rebased on origin. tasks/manifest/progress/code travel with the per-feature
+  // work-mode branch, not main. No-op when there's no remote.
+  try {
+    const r = await lib.pushBaseState(PROJECT_ROOT, `chore: plan ${featureId}`);
+    if (r.skipped) logInfo('No remote — plan.md kept local (push when a remote is configured).');
+    else logSuccess(`Pushed plan.md → ${r.branch}${r.rebased ? ' (rebased on origin)' : ''}.`);
+  } catch (e) { logWarn(`Could not push plan.md to base branch: ${e.message}`); }
+
   logSuccess(isAppend ? `Appended ${newTasks.length} task(s) to ${featureId}.` : 'Plan approved.');
   logInfo(`Feature ID:    ${featureId}`);
   logInfo(`Plan archived: .jonggrang/.output/features/${featureId}/plan.md`);
@@ -2144,6 +2157,14 @@ async function cmdBug(args) {
         markBugConverted(feat.bugsPath, openBugs[i].bugId, newTasks[i].id);
         logSuccess(`${openBugs[i].bugId} → ${newTasks[i].id}: ${newTasks[i].title}`);
       }
+      // The feature may already be completed — re-open its execution phases so
+      // `work` runs these new fix tasks (parity with `plan --append`), instead of
+      // seeing phase 8 "completed" and skipping to post-work.
+      try {
+        const mPath = orchestration.getManifestPath(PROJECT_ROOT, feat.featureId);
+        if (orchestration.reopenExecutionPhases(mPath)) logInfo('Re-opened execution phases for the fix tasks.');
+      } catch { /* no manifest — nothing to reopen */ }
+      logInfo('Run "jonggrang work" to execute the fix task(s).');
     } else {
       logWarn('No new tasks were created by the agent. Check agent output above.');
     }

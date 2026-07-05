@@ -14,8 +14,8 @@
         <div v-if="workBranch" class="work-branch"><i class="pi pi-code-branch" /> {{ workBranch }}</div>
         <div class="work-run-row">
           <span class="work-status" :class="`ws--${groupStatus}`">{{ groupStatus }}</span>
-          <button v-if="!groupRunning" class="work-run-btn" :disabled="runBusy || worktreeStatus === 'creating'" @click="startRun">
-            <i class="pi pi-play" /> {{ runBusy ? 'Starting…' : 'Run' }}
+          <button v-if="!groupRunning" class="work-run-btn" :class="{ 'work-run-btn--failed': manifestFailed }" :disabled="runBusy || worktreeStatus === 'creating'" @click="startRun">
+            <i :class="manifestFailed ? 'pi pi-refresh' : 'pi pi-play'" /> {{ runBusy ? 'Starting…' : (manifestFailed ? 'Resume' : 'Run') }}
           </button>
           <button v-else class="work-run-btn work-run-btn--stop" @click="cancelRun">
             <i class="pi pi-stop" /> Cancel
@@ -176,6 +176,9 @@ const runError = ref('');
 
 const group = computed(() => featureId.value ? orchestration.groups[featureId.value] : null);
 const groupRunning = computed(() => ['running', 'queued'].includes(group.value?.status));
+// A failed pipeline must be resumed (`jonggrang work --resume`) rather than
+// re-started from scratch — the manifest carries the phase it died on.
+const manifestFailed = computed(() => manifest.data?.status === 'failed');
 const groupStatus = computed(() => group.value?.status || 'idle');
 const workPlanTitle = computed(() => workPlan.value?.title || featureId.value || '');
 const workBranch = computed(() => group.value?.branch || workPlan.value?.branch || '');
@@ -248,7 +251,9 @@ async function startRun() {
   runBusy.value = true;
   runError.value = '';
   try {
-    const res = await fetch(`/api/projects/${id.value}/orchestration/groups/${featureId.value}/start`, { method: 'POST' });
+    // Failed pipeline → resume (jonggrang work --resume) instead of a fresh start.
+    const action = manifestFailed.value ? 'resume' : 'start';
+    const res = await fetch(`/api/projects/${id.value}/orchestration/groups/${featureId.value}/${action}`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || 'Failed to start run');
     if (data.run) orchestration.onStarted(data.run);
@@ -389,6 +394,7 @@ async function onInitDone() {
 }
 .work-run-btn:hover:not(:disabled) { opacity: 0.85; }
 .work-run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.work-run-btn--failed { background: var(--jg-red); border-color: var(--jg-red); color: #fff; }
 .work-run-btn--stop { background: transparent; color: var(--jg-red); border-color: var(--jg-red); }
 .work-run-btn--stop:hover { background: color-mix(in oklch, var(--jg-red) 12%, transparent); opacity: 1; }
 .work-wt-note {
