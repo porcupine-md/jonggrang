@@ -111,6 +111,14 @@ jonggrang work "Todo REST API ..." --yes   # plan → approve → execute
 jonggrang plan "Todo REST API ..." --src docs/brd.md   # reference source document for the agent to read
 ```
 
+**Option E — extend an approved plan (append):**
+
+```bash
+jonggrang plan --append feat-abc123 "also add input validation to the todo endpoints" --yes
+# generates an extension draft, approves it into the existing feature (task-006, task-007, ...),
+# and re-opens the execution phases so `jonggrang work` runs the new tasks.
+```
+
 ### Step 4: Check Task Board
 
 ```bash

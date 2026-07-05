@@ -402,6 +402,48 @@ module.exports = function(deps) {
         res.status(202).json({ job_id: project.id });
     });
 
+    // Extend an EXISTING approved plan with additional scope. Generates an
+    // extension draft (frontmatter `append_to: <featureId>`); the existing
+    // `POST /:id/approve` then decomposes it as ADDITIONAL tasks appended to the
+    // feature (numbering continues, completed tasks preserved).
+    router.post('/:id/plans/:featureId/extend', (req, res) => {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
+
+        const featureId = req.params.featureId;
+        if (!lib.isSafeBranchName(featureId)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'invalid featureId' } });
+        }
+        const featurePlan = path.join(project.path, '.jonggrang', '.output', 'features', featureId, 'plan.md');
+        if (!fs.existsSync(featurePlan)) {
+            return res.status(404).json({ error: { code: 'FEATURE_NOT_FOUND', message: `Feature "${featureId}" has no approved plan.` } });
+        }
+
+        const { description, tool, model, effort, deep } = req.body || {};
+        if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
+        if (tool && !VALID_PLAN_TOOL.includes(tool)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `tool must be one of: ${VALID_PLAN_TOOL.join(', ')}` } });
+        }
+        if (model && typeof model === 'string' && model.length > MAX_STRING_LEN) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'model must be under 100 characters' } });
+        }
+        if (effort) {
+            const allowed = tool ? (STATIC_EFFORTS[tool] || []) : ALL_EFFORTS;
+            if (!allowed.includes(effort)) {
+                const expected = allowed.length ? allowed.join(', ') : '(this backend takes no effort level)';
+                return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `effort must be one of: ${expected}` } });
+            }
+        }
+
+        const args = ['plan', '--append', featureId, description, ...(deep ? ['--deep'] : [])];
+        if (tool)   args.push('--tool', tool);
+        if (model)  args.push('--model', model);
+        if (effort) args.push('--effort', effort);
+        const child = spawnForProject(project, args);
+        wireProjectProcess(project.id, child, 'plan-extend');
+        res.status(202).json({ job_id: project.id });
+    });
+
     router.put('/:id/plan', (req, res) => {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });

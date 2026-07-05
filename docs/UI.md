@@ -376,6 +376,22 @@ The **Issues** menu (top app nav, beside `projects`) lists GitHub/GitLab issues 
 - **Detail drawer**: right-aligned overlay (reuses the Dialog/Drawer pattern in §6.7) — header `repo#number`, state badge, author/date, markdown body, comments, footer "Open original" + "Pickup → Plan".
 - **Pickup modal**: source chip + Existing/New project choice → routes to the target project's **pre-filled New Plan form** (plan-creation UX is unchanged; only the description arrives populated). Source link surfaces on the plan card as a "↗ repo#N" link.
 
+### Extend an approved plan (feature: append)
+
+On an approved/done plan in the Plan view, the header shows an **"Extend this plan"**
+secondary button (beside **Work Mode**). Clicking it reveals an inline form:
+
+- a **textarea** for the additional scope (placeholder: "e.g. also add rate limiting to the login endpoint"), mono font, `var(--jg-bg)` surface.
+- a **Deep analysis** checkbox (toggles `--deep` on the generated extension: discovery + risks for the added scope).
+- **Cancel** (secondary) / **Generate Extension** (primary, disabled until the textarea has content).
+
+The form POSTs to `POST /api/projects/:id/plans/:featureId/extend`, which spawns
+`jonggrang plan --append <featureId> "<desc>"`. The generated extension draft carries
+`append_to: <featureId>` in its frontmatter; the user then approves it (the existing
+`POST /:id/approve` detects `append_to` and decomposes the new tasks into the existing
+feature, numbering continued, completed tasks untouched). Appended tasks land in the
+same plan's kanban automatically (the board filters by `feature_id`).
+
 ### Plan clarifying-questions form (feature: plan ask)
 
 After **Generate Plan**, if the planning agent decides the request is ambiguous it

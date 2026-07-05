@@ -58,14 +58,6 @@
           <span class="plan-list-title">Plans</span>
           <div class="plan-list-actions">
             <button
-              class="btn-rebase"
-              :disabled="rebasing || !base.has_remote"
-              :title="base.has_remote ? `Pull origin/${base.branch || 'main'} into local (no commit)` : 'No remote configured'"
-              @click="rebaseBase"
-            >
-              <i :class="rebasing ? 'pi pi-spin pi-spinner' : 'pi pi-cloud-download'" /> Rebase
-            </button>
-            <button
               v-if="canAddNewPlan && !showNewPlanForm && !generating"
               class="btn-new-plan"
               @click="openNewPlanForm"
@@ -291,15 +283,30 @@
           <div class="plan-viewer-header">
             <span class="plan-viewer-title">{{ selectedPlan.title }}</span>
             <span class="plan-badge" :class="`plan-badge--${selectedPlan.status}`">{{ selectedPlan.status }}</span>
-            <RouterLink
-              v-if="selectedPlan.status !== 'draft'"
-              :to="`/projects/${projectId}/plans/${selectedPlan.id}/pipeline`"
-              style="margin-left:auto"
-            >
-              <Button>
-                Work Mode <i class="pi pi-arrow-right" />
+            <div v-if="selectedPlan.status !== 'draft'" style="margin-left:auto; display:flex; gap:8px;">
+              <Button severity="secondary" :disabled="generating" @click="toggleExtendForm">
+                <i class="pi pi-plus" /> Extend this plan
               </Button>
-            </RouterLink>
+              <RouterLink :to="`/projects/${projectId}/plans/${selectedPlan.id}/pipeline`">
+                <Button>
+                  Work Mode <i class="pi pi-arrow-right" />
+                </Button>
+              </RouterLink>
+            </div>
+          </div>
+          <div v-if="showExtendForm" class="plan-extend-form">
+            <label class="plan-extend-label">Additional scope to append (numbering continues from this plan's tasks)</label>
+            <textarea v-model="extendDescription" rows="3" class="plan-extend-input"
+              placeholder="e.g. also add rate limiting to the login endpoint" />
+            <div class="plan-extend-actions">
+              <label class="plan-extend-deep">
+                <input type="checkbox" v-model="extendDeep" /> Deep analysis (discovery + risks for the added scope)
+              </label>
+              <Button severity="secondary" @click="showExtendForm = false">Cancel</Button>
+              <Button :disabled="!extendDescription.trim() || generating" @click="extendPlan">
+                <i class="pi pi-sparkles" /> Generate Extension
+              </Button>
+            </div>
           </div>
           <div class="plan-viewer-body">
             <div class="md-content" v-html="renderedContent" />
@@ -482,6 +489,11 @@ const revising = ref(false);
 const genLog = ref('');
 const genError = ref('');
 
+// Extend-an-existing-plan (append) state
+const showExtendForm = ref(false);
+const extendDescription = ref('');
+const extendDeep = ref(false);
+
 // xterm for progress log
 const genLogStr = computed(() => genLog.value);
 const { logContainerRef: genLogRef } = useLogTerminal(genLogStr);
@@ -548,7 +560,6 @@ const base = reactive({ branch: 'main', has_remote: false, dirty: false });
 const pushingBase = ref(false);
 const baseNotice = ref('');
 const baseError = ref('');
-const rebasing = ref(false);
 
 async function loadBase() {
   try {
@@ -583,25 +594,6 @@ async function pushBase() {
     baseError.value = e.message;
   } finally {
     pushingBase.value = false;
-  }
-}
-
-// Pull remote base branch into local (fetch + rebase, no commit).
-async function rebaseBase() {
-  rebasing.value = true; baseNotice.value = ''; baseError.value = '';
-  try {
-    const res = await fetch(`/api/projects/${projectId.value}/base/pull`, { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || 'Rebase failed');
-    baseNotice.value = data.updated
-      ? `Rebased local ${data.branch} onto origin/${data.branch}`
-      : `${data.branch} already up to date with origin`;
-    loadBase();
-    loadPlans();
-  } catch (e) {
-    baseError.value = e.message;
-  } finally {
-    rebasing.value = false;
   }
 }
 
@@ -689,6 +681,40 @@ async function loadProjectTool() {
       if (tool) selectedTool.value = tool;
     }
   } catch {}
+}
+
+function toggleExtendForm() {
+  showExtendForm.value = !showExtendForm.value;
+  if (showExtendForm.value) { extendDescription.value = ''; extendDeep.value = false; }
+}
+
+// Extend the selected (approved/done) plan: generate an extension draft, which
+// the user then approves — the appended tasks continue this plan's numbering.
+async function extendPlan() {
+  if (!extendDescription.value.trim() || generating.value || !selectedPlan.value) return;
+  const featureId = selectedPlan.value.feature_id || selectedPlan.value.id;
+  genError.value = '';
+  genLog.value = '';
+  generating.value = true;
+  showExtendForm.value = false;
+  try {
+    const body = { description: extendDescription.value, deep: extendDeep.value };
+    if (selectedTool.value)   body.tool   = selectedTool.value;
+    if (selectedModel.value)  body.model  = selectedModel.value;
+    if (selectedEffort.value) body.effort = selectedEffort.value;
+    const res = await fetch(`/api/projects/${projectId.value}/plans/${featureId}/extend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error?.message || 'Failed');
+    }
+  } catch (e) {
+    genError.value = e.message;
+    generating.value = false;
+  }
 }
 
 function triggerFileInput() {
@@ -1037,16 +1063,18 @@ onUnmounted(() => {
   padding: 2px 8px; cursor: pointer; transition: background 0.12s;
 }
 .btn-new-plan:hover { background: color-mix(in oklch, var(--jg-green) 12%, transparent); }
-.btn-rebase {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
-  color: var(--jg-text-muted); background: transparent; border: 1px solid var(--jg-border);
-  padding: 2px 8px; cursor: pointer; transition: all 0.12s;
-}
-.btn-rebase:hover:not(:disabled) { color: var(--jg-cyan); border-color: var(--jg-cyan); }
-.btn-rebase:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-rebase .pi { font-size: 10px; }
 .plan-list-items { flex: 1; overflow-y: auto; padding: 4px; }
+
+/* Extend-this-plan (append) form */
+.plan-extend-form { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--jg-border); }
+.plan-extend-label { font-size: 12px; color: var(--jg-text-dim); }
+.plan-extend-input {
+  width: 100%; padding: 6px 8px; border-radius: 6px;
+  background: var(--jg-bg); border: 1px solid var(--jg-border); color: var(--jg-text);
+  font-family: var(--font-mono); font-size: 12px;
+}
+.plan-extend-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.plan-extend-deep { display: flex; align-items: center; gap: 6px; margin-right: auto; font-size: 12px; color: var(--jg-text-dim); cursor: pointer; }
 
 .plan-item {
   padding: 8px 10px; cursor: pointer; border: 1px solid transparent;
