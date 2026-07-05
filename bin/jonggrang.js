@@ -3535,6 +3535,158 @@ async function cmdModel() {
 }
 
 // ============================================================
+// MEMORY CLI (#79)
+// ============================================================
+
+function cmdMemoryHelp() {
+  console.log(`Jonggrang Memory — repo-tracked compounding memory (#79)
+
+Usage: jonggrang memory <subcommand> [options]
+
+Subcommands:
+  read                              Show project memory + generated feature index (read-only)
+  read --feature <id>               Show one feature's memory detail (read-only)
+  recall --phase <p> --query "..."  Bounded recall for agent context (read-only)
+                    [--feature <id>] [--task <id>]
+  fragment add --feature <id> --task <id> --file <path>
+                                    Stage a raw task fragment (ephemeral, never edits canonical)
+  compact --feature <id>            Merge fragments + progress + tasks → feature MEMORY.md (single-writer)
+  promote --feature <id>            Distill stable lessons → project MEMORY.md (single-writer, conservative)
+
+Principles:
+  - Memory is context, not instruction. If it conflicts with current code,
+    AGENTS.md, or latest user instruction, trust the more current source.
+  - Canonical files (.jonggrang/MEMORY.md, .output/features/<id>/MEMORY.md)
+    are written ONLY by compact/promote. Task agents submit fragments.
+  - Recall is bounded (max ${require('../lib/memory').RECALL_MAX_SNIPPETS} snippets / ${require('../lib/memory').RECALL_MAX_CHARS} chars).
+`);
+}
+
+async function cmdMemory(args) {
+  const subcommand = args[0];
+  const subArgs = args.slice(1);
+
+  if (!subcommand || subcommand === 'help' || subcommand === '--help') {
+    cmdMemoryHelp();
+    return;
+  }
+
+  // Parse flags common across memory subcommands
+  const flags = {};
+  const positional = [];
+  let j = 0;
+  while (j < subArgs.length) {
+    if (subArgs[j] === '--feature')         { flags.feature = subArgs[++j]; }
+    else if (subArgs[j] === '--task')       { flags.task = subArgs[++j]; }
+    else if (subArgs[j] === '--phase')      { flags.phase = subArgs[++j]; }
+    else if (subArgs[j] === '--query')      { flags.query = subArgs[++j]; }
+    else if (subArgs[j] === '--file')       { flags.file = subArgs[++j]; }
+    else { positional.push(subArgs[j]); }
+    j++;
+  }
+
+  const mem = require('../lib/memory');
+  const projectRoot = process.cwd();
+
+  try {
+    switch (subcommand) {
+      case 'read': {
+        if (flags.feature) {
+          const content = mem.readFeature(projectRoot, flags.feature);
+          if (content === null) {
+            logWarn(`No feature memory for ${flags.feature}.`);
+            logInfo(`Run \`jonggrang memory compact --feature ${flags.feature}\` to build it.`);
+            process.exit(1);
+          }
+          console.log(content);
+        } else {
+          // No flag → project memory + generated feature index (read-only)
+          console.log(mem.renderIndex(projectRoot));
+        }
+        break;
+      }
+
+      case 'recall': {
+        if (!flags.phase) {
+          logError('--phase <plan|approve|work|review|simplify|test> is required.');
+          process.exit(1);
+        }
+        const result = mem.recall(projectRoot, {
+          phase: flags.phase,
+          query: flags.query || '',
+          featureId: flags.feature,
+          taskId: flags.task,
+        });
+        console.log(mem.formatRecall(result));
+        break;
+      }
+
+      case 'fragment': {
+        const action = positional[0];
+        if (action !== 'add') {
+          logError(`Unknown fragment action: ${action || '(none)'}. Use: jonggrang memory fragment add ...`);
+          process.exit(1);
+        }
+        if (!flags.feature || !flags.task || !flags.file) {
+          logError('fragment add requires --feature <id> --task <id> --file <path>');
+          process.exit(1);
+        }
+        const dest = mem.addFragment(projectRoot, flags.feature, flags.task, flags.file);
+        logInfo(`Fragment staged: ${path.relative(projectRoot, dest)}`);
+        logInfo('Run `jonggrang memory compact --feature ' + flags.feature + '` to merge into feature memory.');
+        break;
+      }
+
+      case 'compact': {
+        if (!flags.feature) {
+          logError('compact requires --feature <id>');
+          process.exit(1);
+        }
+        logInfo(`Compacting memory for feature: ${flags.feature}...`);
+        const result = await mem.compact(projectRoot, flags.feature, {
+          tool: TOOL,
+          permMode: MODE,
+        });
+        if (result.skipped) {
+          logWarn(`Skipped: ${result.reason}`);
+        } else {
+          logInfo(`Feature memory updated: ${path.relative(projectRoot, result.memoryFile)}`);
+          if (result.fragmentsArchived > 0) {
+            logInfo(`Archived ${result.fragmentsArchived} fragment(s) to .ephemeral/memory/archive/`);
+          }
+        }
+        break;
+      }
+
+      case 'promote': {
+        if (!flags.feature) {
+          logError('promote requires --feature <id>');
+          process.exit(1);
+        }
+        logInfo(`Promoting stable lessons from feature ${flags.feature} to project memory...`);
+        const result = await mem.promote(projectRoot, flags.feature, {
+          tool: TOOL,
+          permMode: MODE,
+        });
+        if (result.skipped) {
+          logWarn(`Skipped: ${result.reason}`);
+        } else {
+          logInfo(`Project memory updated: ${path.relative(projectRoot, result.projectMemoryFile)}`);
+        }
+        break;
+      }
+
+      default:
+        logError(`Unknown memory subcommand: ${subcommand}`);
+        console.log("Run 'jonggrang memory help' for usage.");
+        process.exit(1);
+    }
+  } catch (err) {
+    logError(err.message);
+    process.exit(1);
+  }
+}
+
 // TASK CLI
 // ============================================================
 
@@ -4231,6 +4383,7 @@ Commands:
   status                  Show pipeline state + task board
   review                  Run code review
   task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
+  memory <subcommand>     Repo-tracked memory (read, recall, fragment add, compact, promote) (#79)
   manifest [sub]          Inspect output-file manifests (list, show, add)
   codemap [opts]          Show/refresh deterministic codebase map (LLM-free)
   agent                   Start interactive chat with the AI agent (Pi TUI)
@@ -4411,6 +4564,11 @@ async function main() {
   // Subcommands that handle their own flags — bypass global parser
   if (command === 'task') {
     cmdTask(rest);
+    return;
+  }
+
+  if (command === 'memory') {
+    cmdMemory(rest);
     return;
   }
 
