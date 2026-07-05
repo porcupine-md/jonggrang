@@ -7,11 +7,12 @@
         <button
           v-if="featureId && !pipelineComplete"
           class="phase-run-btn"
+          :class="{ 'phase-run-btn--failed': isFailed }"
           :disabled="running"
           :title="'Run remaining phases (Simplify → … → Completion) via jonggrang work --resume'"
           @click="runPhase"
         >
-          <i :class="running ? 'pi pi-spin pi-spinner' : 'pi pi-play'" /> Run Phase
+          <i :class="running ? 'pi pi-spin pi-spinner' : (isFailed ? 'pi pi-refresh' : 'pi pi-play')" /> {{ isFailed ? 'Resume' : 'Run Phase' }}
         </button>
       </div>
     </div>
@@ -36,6 +37,7 @@ const manifest = useManifestStore();
 const doneCount = computed(() => manifest.phases.filter(p => p.status === 'completed').length);
 const activeCount = computed(() => manifest.phases.filter(p => p.status !== 'skipped').length);
 const pipelineComplete = computed(() => activeCount.value > 0 && doneCount.value >= activeCount.value);
+const isFailed = computed(() => manifest.data?.status === 'failed');
 
 const running = ref(false);
 const phaseError = ref('');
@@ -82,6 +84,7 @@ watch([projectId, featureId], ([id, fid]) => { if (id) manifest.fetch(id, fid); 
   background: var(--jg-green); color: #000; border: 1px solid var(--jg-green);
   border-radius: var(--radius); transition: opacity 0.15s;
 }
+.phase-run-btn--failed { background: var(--jg-red); border-color: var(--jg-red); color: #fff; }
 .phase-run-btn:hover:not(:disabled) { opacity: 0.85; }
 .phase-run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .phase-run-btn .pi { font-size: 10px; }

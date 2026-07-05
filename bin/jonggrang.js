@@ -752,9 +752,11 @@ async function cmdWork(descriptionParts = []) {
     // Resolve the per-feature tasks file for this work session.
     WORK_TASKS_FILE = lib.tasksFileFor(PROJECT_ROOT, workFeatureId);
 
-    // Guard: if phase 8 already completed (e.g. by a prior orchestration
-    // resume that ran the work loop), skip straight to post-work phases.
-    if (workManifest.phases?.[8]?.status === 'completed') {
+    // Guard: if phase 8 already completed AND there is no pending work, skip
+    // straight to post-work phases. When pending tasks exist (e.g. added by
+    // `plan --append` or `bug convert` after the feature completed), DON'T skip —
+    // fall through so phase 8 is re-opened (below) and the new tasks run.
+    if (workManifest.phases?.[8]?.status === 'completed' && lib.countPending(WORK_TASKS_FILE) === 0) {
       logInfo('Phase 8 (Implement) already completed — skipping to post-work phases');
       if (!SKIP_GATES) {
         const gateWorkType = workManifest?.work_type || workType;
@@ -2155,6 +2157,14 @@ async function cmdBug(args) {
         markBugConverted(feat.bugsPath, openBugs[i].bugId, newTasks[i].id);
         logSuccess(`${openBugs[i].bugId} → ${newTasks[i].id}: ${newTasks[i].title}`);
       }
+      // The feature may already be completed — re-open its execution phases so
+      // `work` runs these new fix tasks (parity with `plan --append`), instead of
+      // seeing phase 8 "completed" and skipping to post-work.
+      try {
+        const mPath = orchestration.getManifestPath(PROJECT_ROOT, feat.featureId);
+        if (orchestration.reopenExecutionPhases(mPath)) logInfo('Re-opened execution phases for the fix tasks.');
+      } catch { /* no manifest — nothing to reopen */ }
+      logInfo('Run "jonggrang work" to execute the fix task(s).');
     } else {
       logWarn('No new tasks were created by the agent. Check agent output above.');
     }
