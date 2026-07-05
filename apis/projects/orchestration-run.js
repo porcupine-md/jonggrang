@@ -481,14 +481,14 @@ module.exports = function(deps) {
         if (group.logTail.length > LOG_TAIL_MAX) group.logTail.shift();
     }
 
-    function applySignal(project, signal, groupFeatureId) {
+    function applySignal(project, signal, group) {
         if (signal.type !== 'task_status' || !signal.taskId) return;
         try {
             // Scope resolution to the emitting group's feature. Per-feature numbering
             // means a bare id (task-001) recurs across features, so without this hint
             // findTaskFeature could resolve to the wrong feature (active/first-match)
             // and mark done a task in a different plan.
-            const featureId = lib.findTaskFeature(project.path, signal.taskId, { featureId: groupFeatureId });
+            const featureId = lib.findTaskFeature(project.path, signal.taskId, { featureId: group?.featureId });
             if (!featureId) {
                 console.error('orchestration applySignal error: task feature not found', signal.taskId);
                 return;
@@ -496,7 +496,16 @@ module.exports = function(deps) {
             const tasksFile = lib.tasksFileFor(project.path, featureId);
             if (signal.status === 'completed') lib.markTaskDone(tasksFile, signal.taskId);
             else lib.updateTaskStatus(tasksFile, signal.taskId, signal.status);
+            // The host write succeeded, so applySignal is the LIVE writer of main
+            // tasks.json for this group. Tell the periodic mirror to leave tasks.json
+            // alone — otherwise it copies the worktree's stale copy (the worker emits
+            // signals but never updates its own tasks.json mid-task) back over these
+            // updates, reverting in_progress/completed → pending during the run.
+            if (group) group._tasksLiveWritten = true;
         } catch (err) {
+            // Host write failed (e.g. sandbox-Linux root-owned main → EACCES). Leave
+            // _tasksLiveWritten unset so syncTasks mirrors the worktree copy as the
+            // fallback path. Single writer either way — never both at once.
             console.error('orchestration applySignal error:', err.message);
         }
     }
@@ -553,6 +562,11 @@ module.exports = function(deps) {
     // applySignal write fails under sandbox (main tasks.json is root-owned by the
     // in-container approve → host EACCES), so mirror the file via the container.
     function syncTasks(project, ctx, group) {
+        // If applySignal is successfully writing main tasks.json (host / macOS bind
+        // mount), it is the single live writer — mirroring the worktree's stale copy
+        // here would revert its in_progress/completed updates back to pending. Only
+        // mirror when applySignal's host write can't land (sandbox-Linux root-owned).
+        if (group._tasksLiveWritten) return;
         mirrorFromWorktree(project, ctx, group,
             path.join('.jonggrang', '.output', 'features', group.featureId, 'jonggrang-tasks.json'), 'syncTasks');
     }
@@ -580,7 +594,7 @@ module.exports = function(deps) {
                     try { signal = JSON.parse(trimmed); } catch { /* not JSON */ }
                 }
                 if (signal && signal.type === 'task_status') {
-                    applySignal(project, signal, group.featureId);
+                    applySignal(project, signal, group);
                     continue;
                 }
                 pushLog(group, trimmed);
