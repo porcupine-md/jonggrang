@@ -355,6 +355,30 @@ async function runWorkLoop(tasksFile, options) {
       logSuccess('All tasks completed!');
       logInfo(`Completed: ${lib.countCompleted(tasksFile)} / ${lib.countTotal(tasksFile)}`);
       console.log('');
+
+      // Memory compact: merge task fragments → feature MEMORY.md (#79)
+      // Synchronous (block here) but failure-isolated (compact fail ≠ work fail).
+      // Fragments stay in .ephemeral/ on failure — retryable manually.
+      // featureId derived from tasksFile path (.../features/<fid>/jonggrang-tasks.json)
+      // so this works in both cmdWork and orchestrate call sites.
+      try {
+        const mem = require('../lib/memory');
+        const fid = path.basename(path.dirname(tasksFile));
+        logInfo('Compacting memory (fragments → feature MEMORY.md)...');
+        const result = await mem.compact(PROJECT_ROOT, fid, { tool: TOOL, permMode: MODE });
+        if (result.skipped) {
+          logInfo(`Memory compact skipped: ${result.reason}`);
+        } else {
+          logSuccess(`Feature memory updated: ${path.relative(PROJECT_ROOT, result.memoryFile)}`);
+          if (result.fragmentsArchived > 0) {
+            logInfo(`Archived ${result.fragmentsArchived} fragment(s) to .ephemeral/memory/archive/`);
+          }
+        }
+      } catch (e) {
+        logWarn(`Memory compact failed (non-blocking): ${e.message}`);
+        logInfo(`Fragments preserved — run \`jonggrang memory compact --feature <id>\` manually.`);
+      }
+
       return { completed: true, reason: 'all_done', stats: { completed: lib.countCompleted(tasksFile), total: lib.countTotal(tasksFile) } };
     }
 
@@ -1002,6 +1026,29 @@ async function cmdReview() {
 
   logInfo('Running comprehensive review...');
   await lib.runAgent(reviewPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+
+  // Memory promote: distill feature lessons → project MEMORY.md (#79)
+  // Synchronous but failure-isolated (promote fail ≠ review fail).
+  // Feature memory stays canonical on failure — retryable manually.
+  try {
+    const mem = require('../lib/memory');
+    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    const fid = WORK_FEATURE_ID || (existing && existing.featureId);
+    if (fid) {
+      logInfo('Promoting stable lessons (feature → project MEMORY.md)...');
+      const result = await mem.promote(PROJECT_ROOT, fid, { tool: TOOL, permMode: MODE });
+      if (result.skipped) {
+        logInfo(`Memory promote skipped: ${result.reason}`);
+      } else {
+        logSuccess(`Project memory updated: ${path.relative(PROJECT_ROOT, result.projectMemoryFile)}`);
+      }
+    } else {
+      logInfo('Memory promote skipped: no active feature found.');
+    }
+  } catch (e) {
+    logWarn(`Memory promote failed (non-blocking): ${e.message}`);
+    logInfo('Feature memory intact — run `jonggrang memory promote --feature <id>` manually.');
+  }
 
   logSuccess('Review complete. Check jonggrang-log/ for report.');
 }
