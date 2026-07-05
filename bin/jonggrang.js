@@ -4575,7 +4575,7 @@ async function main() {
   }
 
   if (command === 'memory') {
-    cmdMemory(rest);
+    await cmdMemory(rest);
     return;
   }
 
