@@ -816,6 +816,16 @@ async function cmdWork(descriptionParts = []) {
     dryRun: DRY_RUN,
   });
 
+  // Boundary guard: when the loop exhausts max_iterations at the exact moment the
+  // last task completes, it returns reason:'max_iterations' (completed:false) even
+  // though every task is actually done. Treat that as done so the MANIFEST gets
+  // finalized (phase 8 + post-work gates → status:completed) in this run, instead
+  // of staying 'running' until the user invokes `jonggrang work` again.
+  if (!result.completed && lib.countTotal(WORK_TASKS_FILE) > 0 &&
+      lib.countCompleted(WORK_TASKS_FILE) === lib.countTotal(WORK_TASKS_FILE)) {
+    result.completed = true;
+  }
+
   if (result.completed) {
     // Complete phase 8 (Implement) now that all tasks are done
     if (workManifestPath && workManifest?.active_phases?.includes(8)) {
