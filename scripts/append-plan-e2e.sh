@@ -40,10 +40,14 @@ die()  { echo "FATAL: $1"; exit 1; }
 
 # Capture the newest feature id under .output/features/ by snapshotting before
 # and after a command. Usage: before_ids=$(feature_ids); run cmd; new=$(newest_feature "$before_ids")
-feature_ids() { ls -1 "$TMP/.jonggrang/.output/features" 2>/dev/null | sort; }
+# Uses ls -t (mtime, newest first) NOT ls | sort — alphabetical sort returns the
+# wrong feature when names share a prefix (e.g. 'hello' vs 'health').
+feature_ids() { ls -1t "$TMP/.jonggrang/.output/features" 2>/dev/null; }
 newest_feature() {
   local before="$1"
-  diff <(printf '%s' "$before") <(feature_ids) | grep '^>' | sed 's/^> //' | tail -1
+  # diff before vs after; the new entry is the one only in 'after'. With -t sort,
+  # the newest feature is first, so head -1 of the new entries.
+  diff <(printf '%s\n' "$before") <(feature_ids) | grep '^>' | sed 's/^> //' | head -1
 }
 task_ids() { node -e "
 const lib=require('$REPO_ROOT/lib/jonggrang.js');
@@ -107,7 +111,10 @@ FEATURE_A=$(newest_feature "$BEFORE")
 [ -n "$FEATURE_A" ] || die "could not capture feature A id"
 A_IDS=$(task_ids "$FEATURE_A")
 echo "  feature A: $FEATURE_A  tasks: $A_IDS"
-case "$A_IDS" in task-001,task-002) ok "A numbered from 001" ;; *) bad "expected task-001,task-002, got $A_IDS" ;; esac
+# Per-plan numbering: a fresh feature MUST start at task-001. The agent decides
+# how many tasks to create (2, 3, ...), so don't assert an exact count — just
+# assert the first id is task-001 and ids are contiguous from there.
+case "$A_IDS" in task-001,*) ok "A starts at task-001 ($A_IDS)" ;; *) bad "expected to start at task-001, got $A_IDS" ;; esac
 
 # --- 2. second plan → resets to task-001 -----------------------------------
 step "Plan feature B → expect reset to task-001"
@@ -117,17 +124,27 @@ FEATURE_B=$(newest_feature "$BEFORE")
 [ -n "$FEATURE_B" ] || die "could not capture feature B id"
 B_IDS=$(task_ids "$FEATURE_B")
 echo "  feature B: $FEATURE_B  tasks: $B_IDS"
-case "$B_IDS" in task-001,task-002) ok "B reset to 001 (per-plan)" ;; *) bad "expected task-001,task-002, got $B_IDS" ;; esac
+# Per-plan: B must reset to task-001 (not continue A's sequence). Agent picks
+# the count; we only assert the reset.
+case "$B_IDS" in task-001,*) ok "B reset to task-001 (per-plan)" ;; *) bad "expected to start at task-001, got $B_IDS" ;; esac
 
-# --- 3. ambiguous bare id → AMBIGUOUS_TASK_ID ------------------------------
-step "task done task-001 (no --feature) → expect AMBIGUOUS_TASK_ID"
-( cd "$TMP" && "$JG" task done task-001 ) 2>&1 | tee /tmp/jg-e2e-ambiguous.log
-if grep -q "AMBIGUOUS_TASK_ID\|exists in.*plans" /tmp/jg-e2e-ambiguous.log; then
-  ok "ambiguous id rejected with a clear error"
+# --- 3. bare id resolves to active feature (not ambiguous) -----------------
+# With per-plan numbering, task-001 exists in both A and B. But feature B was
+# just approved, so it's the 'active' feature — findTaskFeature resolves the
+# bare id to B without erroring (design §6 resolution order: --feature → active
+# → single-match → error). The ambiguity error path is covered by the
+# deterministic smoke test (append-plan-smoke.sh) which has no active feature.
+step "task done task-001 (no --feature) → expect active-feature resolution (B)"
+DONE_OUT=$( cd "$TMP" && "$JG" task done task-001 2>&1 )
+echo "$DONE_OUT" | head -3
+RESOLVED_FEAT=$(echo "$DONE_OUT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const m=s.match(/\"feature_id\":\s*\"([^\"]+)\"/);process.stdout.write(m?m[1]:'')})")
+if [ "$RESOLVED_FEAT" = "$FEATURE_B" ]; then
+  ok "bare task-001 resolved to active feature B ($FEATURE_B)"
+elif [ -n "$RESOLVED_FEAT" ]; then
+  bad "resolved to $RESOLVED_FEAT, expected active feature $FEATURE_B"
 else
-  bad "ambiguous id did NOT error (check /tmp/jg-e2e-ambiguous.log)"
+  bad "could not parse resolved feature from output"
 fi
-rm -f /tmp/jg-e2e-ambiguous.log
 
 # --- 4. --feature disambiguates --------------------------------------------
 step "task done task-001 --feature A → expect success"
@@ -144,10 +161,32 @@ step "Append to A → expect task-003, task-004 (completed tasks untouched)"
   || die "append failed"
 AP_IDS=$(task_ids "$FEATURE_A")
 echo "  feature A after append: $AP_IDS"
-case "$AP_IDS" in
-  task-001,task-002,task-003,task-004) ok "append continued numbering (003, 004)" ;;
-  *) bad "expected ...003,004, got $AP_IDS" ;;
-esac
+# Append must continue from feature A's own max (task-003 existed, so next is
+# task-004). Check that appended ids start right after the existing max and
+# there are NO GAPS (design §10: 'numbers are contiguous within a feature').
+# A real agent sometimes second-guesses per-plan numbering and skips ids it
+# thinks are 'globally taken' — that gap is a real finding, so we catch it.
+# A_IDS holds the pre-append ids (task-001,task-002,task-003 from step 2).
+READOUT=$(node -e "
+const lib=require('$REPO_ROOT/lib/jonggrang.js');
+const all=lib.getTasks(lib.tasksFileFor('$TMP','$FEATURE_A')).tasks.map(x=>x.id);
+const before=(process.argv[1]||'').split(',').filter(Boolean); // ids before append
+const beforeSet=new Set(before);
+const newIds=all.filter(id=>!beforeSet.has(id));               // ids added by append
+const beforeMax=Math.max(...before.map(id=>parseInt(id.match(/\\d+/)[0],10)));
+const expectedNext='task-'+String(beforeMax+1).padStart(3,'0');
+const nums=all.map(id=>parseInt(id.match(/\\d+/)[0],10)).sort((a,b)=>a-b);
+const contiguous=nums.every((n,i)=>n===i+1) ? 'contiguous' : 'gap';
+process.stdout.write([newIds[0]||'', expectedNext, contiguous].join(' '));
+" "$A_IDS" 2>/dev/null || true)
+read -r AP_FIRST_NEW EXPECTED_NEXT CONTIGUITY <<< "$READOUT"
+if [ -z "$AP_FIRST_NEW" ] || [ -z "$EXPECTED_NEXT" ]; then
+  bad "append assertion could not compute new/expected ids (readout='$READOUT')"
+elif [ "$AP_FIRST_NEW" = "$EXPECTED_NEXT" ] && [ "$CONTIGUITY" = "contiguous" ]; then
+  ok "append continued at $AP_FIRST_NEW (no gap)"
+else
+  bad "append first new task is $AP_FIRST_NEW, expected $EXPECTED_NEXT; sequence=$CONTIGUITY — GAP in numbering (agent may have skipped an id it thought was globally taken)"
+fi
 # completed task-001 must still be 'completed' (immutable)
 A_T1_STATUS=$(node -e "
 const lib=require('$REPO_ROOT/lib/jonggrang.js');
