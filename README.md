@@ -81,6 +81,7 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 | `jonggrang issues list` | List GitHub/GitLab issues from configured sources (or `--repo owner/repo`) |
 | `jonggrang issues pickup <p> <repo> <n>` | Generate a plan in this project from a GitHub/GitLab issue |
 | `jonggrang manifest` | Inspect output files tracked per phase (`list`, `show [id]`, `add`) |
+| `jonggrang memory` | Read, recall, stage fragments, compact feature memory, and promote stable project lessons |
 | `jonggrang codemap` | Show/refresh deterministic codebase map (LLM-free, cached at `.jonggrang/codemap/codemap.json`) |
 
 ```bash

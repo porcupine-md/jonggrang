@@ -26,5 +26,4 @@ dist-ssr
 .vscode
 .claude
 .jonggrang/.ephemeral/
-.jonggrang/.output/
 .jonggrang/codemap/
