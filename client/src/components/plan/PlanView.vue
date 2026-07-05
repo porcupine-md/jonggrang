@@ -58,14 +58,6 @@
           <span class="plan-list-title">Plans</span>
           <div class="plan-list-actions">
             <button
-              class="btn-rebase"
-              :disabled="rebasing || !base.has_remote"
-              :title="base.has_remote ? `Pull origin/${base.branch || 'main'} into local (no commit)` : 'No remote configured'"
-              @click="rebaseBase"
-            >
-              <i :class="rebasing ? 'pi pi-spin pi-spinner' : 'pi pi-cloud-download'" /> Rebase
-            </button>
-            <button
               v-if="canAddNewPlan && !showNewPlanForm && !generating"
               class="btn-new-plan"
               @click="openNewPlanForm"
@@ -569,7 +561,6 @@ const base = reactive({ branch: 'main', has_remote: false, dirty: false });
 const pushingBase = ref(false);
 const baseNotice = ref('');
 const baseError = ref('');
-const rebasing = ref(false);
 
 async function loadBase() {
   try {
@@ -604,25 +595,6 @@ async function pushBase() {
     baseError.value = e.message;
   } finally {
     pushingBase.value = false;
-  }
-}
-
-// Pull remote base branch into local (fetch + rebase, no commit).
-async function rebaseBase() {
-  rebasing.value = true; baseNotice.value = ''; baseError.value = '';
-  try {
-    const res = await fetch(`/api/projects/${projectId.value}/base/pull`, { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || 'Rebase failed');
-    baseNotice.value = data.updated
-      ? `Rebased local ${data.branch} onto origin/${data.branch}`
-      : `${data.branch} already up to date with origin`;
-    loadBase();
-    loadPlans();
-  } catch (e) {
-    baseError.value = e.message;
-  } finally {
-    rebasing.value = false;
   }
 }
 
@@ -1092,15 +1064,6 @@ onUnmounted(() => {
   padding: 2px 8px; cursor: pointer; transition: background 0.12s;
 }
 .btn-new-plan:hover { background: color-mix(in oklch, var(--jg-green) 12%, transparent); }
-.btn-rebase {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
-  color: var(--jg-text-muted); background: transparent; border: 1px solid var(--jg-border);
-  padding: 2px 8px; cursor: pointer; transition: all 0.12s;
-}
-.btn-rebase:hover:not(:disabled) { color: var(--jg-cyan); border-color: var(--jg-cyan); }
-.btn-rebase:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-rebase .pi { font-size: 10px; }
 .plan-list-items { flex: 1; overflow-y: auto; padding: 4px; }
 
 .plan-item {
