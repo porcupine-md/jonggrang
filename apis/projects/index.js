@@ -1,6 +1,7 @@
 'use strict';
 
 const sandbox = require('../../lib/sandbox');
+const lib = require('../../lib/jonggrang');
 
 module.exports = function register(app, io, ctx) {
     const { JONGGRANG_HOME, webState, orchestration, server } = ctx;
@@ -75,15 +76,56 @@ module.exports = function register(app, io, ctx) {
     function wireProjectProcess(projectId, child, command) {
         io.to(`project:${projectId}`).emit('process.started', { project_id: projectId, command, pid: child.pid });
         let seq = 0;
-        const logLine = (stream) => (data) => {
-            const lines = data.toString().split(/\r?\n/).filter(l => l.trim());
-            for (const line of lines) {
-                io.to(`project:${projectId}`).emit('process.log', { project_id: projectId, stream, line, raw: line, seq: seq++ });
+        // Read the stored clarifying questions and relay them to the client so it
+        // can render an answer form (feature: plan ask). Questions live per-draft
+        // under .drafts/<session>/ — resolve the session from the signal (the CLI
+        // emits it) and fall back to scanning for the newest pending draft.
+        const emitPlanQuestions = (session) => {
+            const project = webState.getProject(projectId);
+            if (!project) return;
+            const sid = session || lib.resolveActiveQuestionDraft(project.path);
+            if (!sid) return;
+            const qPath = lib.questionsFileFor(project.path, sid);
+            if (!fs.existsSync(qPath)) return;
+            try {
+                const questions = JSON.parse(fs.readFileSync(qPath, 'utf-8'));
+                io.to(`project:${projectId}`).emit('plan.questions', { project_id: projectId, sessionId: sid, ...questions });
+            } catch { /* unreadable store — ignore */ }
+        };
+
+        const handleLine = (stream, line) => {
+            if (!line.trim()) return;
+            io.to(`project:${projectId}`).emit('process.log', { project_id: projectId, stream, line, raw: line, seq: seq++ });
+            // The planning agent surfaces clarifying questions via a JSON signal
+            // line (`{"type":"plan_questions",...}`). Parse the *complete* line.
+            if (stream === 'stdout' && line.includes('"plan_questions"')) {
+                try {
+                    const sig = JSON.parse(line.trim());
+                    if (sig && sig.type === 'plan_questions') emitPlanQuestions(sig.session);
+                } catch { /* not a signal line — ignore */ }
             }
         };
-        child.stdout.on('data', logLine('stdout'));
-        child.stderr.on('data', logLine('stderr'));
+
+        // `stdout`/`stderr` 'data' events do NOT guarantee whole lines — a JSON
+        // signal line can be split across chunks. Buffer per stream and only
+        // handle a line once its terminating newline has arrived.
+        const buffers = { stdout: '', stderr: '' };
+        const onData = (stream) => (data) => {
+            buffers[stream] += data.toString();
+            let nl;
+            while ((nl = buffers[stream].indexOf('\n')) !== -1) {
+                const line = buffers[stream].slice(0, nl).replace(/\r$/, '');
+                buffers[stream] = buffers[stream].slice(nl + 1);
+                handleLine(stream, line);
+            }
+        };
+        child.stdout.on('data', onData('stdout'));
+        child.stderr.on('data', onData('stderr'));
         child.on('close', (code, signal) => {
+            // Flush any trailing partial line (output not terminated by a newline).
+            for (const stream of ['stdout', 'stderr']) {
+                if (buffers[stream]) { handleLine(stream, buffers[stream].replace(/\r$/, '')); buffers[stream] = ''; }
+            }
             io.to(`project:${projectId}`).emit('process.exited', { project_id: projectId, code, signal });
             try {
                 const project = webState.getProject(projectId);
@@ -108,21 +150,25 @@ module.exports = function register(app, io, ctx) {
 
         const emit = (changedPath) => {
             try {
-                const planPath = path.join(project.path, '.jonggrang', 'plan.md');
-                const tasksPath = path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
+                try { lib.migrateLegacyPlanDraft(project.path); } catch {}
+                const sid = lib.resolveActiveDraft(project.path);
+                const planPath = sid ? lib.draftFileFor(project.path, sid) : '';
                 const state = webState.deriveState(project.path);
                 io.to(`project:${project.id}`).emit('state', { project_id: project.id, state });
-                if (fs.existsSync(planPath)) {
+                if (planPath && fs.existsSync(planPath)) {
                     const content = fs.readFileSync(planPath, 'utf-8');
                     const mtime = fs.statSync(planPath).mtimeMs;
-                    io.to(`project:${project.id}`).emit('plan.content', { project_id: project.id, content, mtime });
+                    io.to(`project:${project.id}`).emit('plan.content', { project_id: project.id, sessionId: sid, content, mtime });
                 } else {
-                    io.to(`project:${project.id}`).emit('plan.deleted', { project_id: project.id });
+                    io.to(`project:${project.id}`).emit('plan.deleted', { project_id: project.id, sessionId: sid || null });
                 }
-                if (fs.existsSync(tasksPath)) {
-                    const data = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'));
-                    io.to(`project:${project.id}`).emit('tasks.update', { project_id: project.id, tasks: data.tasks || [] });
+                try {
+                    const allTasks = lib.getAllTasks(project.path);
+                    io.to(`project:${project.id}`).emit('tasks.update', { project_id: project.id, tasks: allTasks.tasks || [] });
+                } catch {
+                    console.log('Error reading tasks', project.path);
                 }
+                
                 if (changedPath && changedPath.endsWith('MANIFEST.yaml')) {
                     try {
                         const manifest = orchestration.readManifest(changedPath);
@@ -162,16 +208,16 @@ module.exports = function register(app, io, ctx) {
             try {
                 const project = webState.getProject(project_id);
                 if (!project) return;
+                try { lib.migrateLegacyPlanDraft(project.path); } catch {}
                 const state = webState.deriveState(project.path);
-                const tasksPath = path.join(project.path, '.jonggrang', 'jonggrang-tasks.json');
-                const planPath = path.join(project.path, '.jonggrang', 'plan.md');
+                const sid = lib.resolveActiveDraft(project.path);
+                const planPath = sid ? lib.draftFileFor(project.path, sid) : '';
+                // Tasks are per-feature under .output/features/<id>/; merge via getAllTasks.
                 let tasks = [];
-                if (fs.existsSync(tasksPath)) {
-                    try { tasks = JSON.parse(fs.readFileSync(tasksPath, 'utf-8')).tasks || []; } catch {}
-                }
+                try { tasks = lib.getAllTasks(project.path).tasks || []; } catch {}
                 let planContent = null;
                 let planMtime = null;
-                if (fs.existsSync(planPath)) {
+                if (planPath && fs.existsSync(planPath)) {
                     planContent = fs.readFileSync(planPath, 'utf-8');
                     planMtime = fs.statSync(planPath).mtimeMs;
                 }
@@ -183,6 +229,7 @@ module.exports = function register(app, io, ctx) {
                         state,
                         tasks,
                         plan_exists: !!planContent,
+                        plan_session_id: sid || null,
                         plan_content: planContent,
                         plan_mtime: planMtime,
                         process: running ? { command: 'work' } : null,

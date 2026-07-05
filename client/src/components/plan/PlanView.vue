@@ -7,9 +7,14 @@
       <div class="plan-empty-title">No active plan</div>
       <div class="plan-empty-desc">Describe the feature you want to build</div>
       <div class="plan-form">
+        <div v-if="uploadedFile" class="file-badge">
+          <i class="pi pi-file" />
+          <span>{{ uploadedFile.name }}</span>
+          <button class="file-badge-clear" @click="clearFile" title="Remove file"><i class="pi pi-times" /></button>
+        </div>
         <Textarea
           v-model="description"
-          placeholder="e.g. Add user authentication with JWT tokens and refresh token rotation"
+          :placeholder="uploadedFile ? 'Additional context (optional)...' : 'e.g. Add user authentication with JWT tokens and refresh token rotation'"
           rows="3"
           fluid
           @keydown.ctrl.enter="generatePlan"
@@ -26,13 +31,17 @@
                     placeholder="base branch" class="base-select" />
           </label>
           <div style="flex:1" />
+          <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD source file">
+            <i class="pi pi-upload" /> BRD/PRD
+          </button>
+          <input ref="fileInputRef" type="file" style="display:none" @change="onFileChange" />
           <button class="tool-config-btn" @click="openToolModal">
             <span>{{ TOOLS.find(t => t.value === selectedTool)?.label || 'Configure' }}</span>
             <span v-if="selectedModel" class="tool-config-extra">· {{ selectedModel }}</span>
             <span v-if="selectedEffort" class="tool-config-extra">· {{ selectedEffort }}</span>
             <i class="pi pi-cog" />
           </button>
-          <Button :disabled="!description.trim() || generating" @click="generatePlan">
+          <Button :disabled="(!description.trim() && !uploadedFile) || generating" @click="generatePlan">
             <i class="pi pi-sparkles" /> {{ generating ? 'Generating...' : 'Generate Plan' }}
           </Button>
         </div>
@@ -48,14 +57,6 @@
         <div class="plan-list-header">
           <span class="plan-list-title">Plans</span>
           <div class="plan-list-actions">
-            <button
-              class="btn-rebase"
-              :disabled="rebasing || !base.has_remote"
-              :title="base.has_remote ? `Pull origin/${base.branch || 'main'} into local (no commit)` : 'No remote configured'"
-              @click="rebaseBase"
-            >
-              <i :class="rebasing ? 'pi pi-spin pi-spinner' : 'pi pi-cloud-download'" /> Rebase
-            </button>
             <button
               v-if="canAddNewPlan && !showNewPlanForm && !generating"
               class="btn-new-plan"
@@ -85,6 +86,7 @@
             <div class="plan-item-title">{{ plan.title }}</div>
             <div class="plan-item-badges">
               <span class="plan-badge" :class="`plan-badge--${plan.status}`">{{ plan.status }}</span>
+              <span v-if="plan.status === 'draft' && plan.mtime" class="plan-age">{{ relativeTime(plan.mtime) }}</span>
               <span
                 v-if="runBadgeOf(plan)"
                 class="plan-badge"
@@ -142,9 +144,14 @@
                 <i class="pi pi-cog" />
               </button>
             </div>
+            <div v-if="uploadedFile" class="file-badge">
+              <i class="pi pi-file" />
+              <span>{{ uploadedFile.name }}</span>
+              <button class="file-badge-clear" @click="clearFile" title="Remove file"><i class="pi pi-times" /></button>
+            </div>
             <Textarea
               v-model="description"
-              placeholder="Describe the next feature to build..."
+              :placeholder="uploadedFile ? 'Additional context (optional)...' : 'Describe the next feature to build...'"
               rows="3"
               fluid
               @keydown.ctrl.enter="generatePlan"
@@ -162,8 +169,11 @@
               </label>
               <div style="flex:1" />
               <div style="display:flex;gap:8px">
+                <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD source file">
+                  <i class="pi pi-upload" /> BRD/PRD
+                </button>
                 <Button severity="secondary" @click="cancelNewPlan">Cancel</Button>
-                <Button :disabled="!description.trim()" @click="generatePlan">
+                <Button :disabled="!description.trim() && !uploadedFile" @click="generatePlan">
                   <i class="pi pi-sparkles" /> Generate Plan
                 </Button>
               </div>
@@ -273,15 +283,30 @@
           <div class="plan-viewer-header">
             <span class="plan-viewer-title">{{ selectedPlan.title }}</span>
             <span class="plan-badge" :class="`plan-badge--${selectedPlan.status}`">{{ selectedPlan.status }}</span>
-            <RouterLink
-              v-if="selectedPlan.id !== 'draft'"
-              :to="`/projects/${projectId}/plans/${selectedPlan.id}/pipeline`"
-              style="margin-left:auto"
-            >
-              <Button>
-                Work Mode <i class="pi pi-arrow-right" />
+            <div v-if="selectedPlan.status !== 'draft'" style="margin-left:auto; display:flex; gap:8px;">
+              <Button severity="secondary" :disabled="generating" @click="toggleExtendForm">
+                <i class="pi pi-plus" /> Extend this plan
               </Button>
-            </RouterLink>
+              <RouterLink :to="`/projects/${projectId}/plans/${selectedPlan.id}/pipeline`">
+                <Button>
+                  Work Mode <i class="pi pi-arrow-right" />
+                </Button>
+              </RouterLink>
+            </div>
+          </div>
+          <div v-if="showExtendForm" class="plan-extend-form">
+            <label class="plan-extend-label">Additional scope to append (numbering continues from this plan's tasks)</label>
+            <textarea v-model="extendDescription" rows="3" class="plan-extend-input"
+              placeholder="e.g. also add rate limiting to the login endpoint" />
+            <div class="plan-extend-actions">
+              <label class="plan-extend-deep">
+                <input type="checkbox" v-model="extendDeep" /> Deep analysis (discovery + risks for the added scope)
+              </label>
+              <Button severity="secondary" @click="showExtendForm = false">Cancel</Button>
+              <Button :disabled="!extendDescription.trim() || generating" @click="extendPlan">
+                <i class="pi pi-sparkles" /> Generate Extension
+              </Button>
+            </div>
           </div>
           <div class="plan-viewer-body">
             <div class="md-content" v-html="renderedContent" />
@@ -332,10 +357,61 @@
       </div>
     </div>
   </Dialog>
+
+  <!-- Clarifying questions from the planning agent (feature: plan ask) -->
+  <Dialog v-model:visible="showQuestionForm" modal header="A few questions before planning"
+          :style="{width:'560px'}" :draggable="false" :closable="false">
+    <div v-if="pendingQuestions" class="qa-body">
+      <p v-if="pendingQuestions.goal_analysis" class="qa-goal">
+        <strong>Goal:</strong> {{ pendingQuestions.goal_analysis }}
+      </p>
+      <div v-for="(q, qi) in pendingQuestions.questions" :key="q.id" class="qa-question">
+        <div class="qa-q-title">{{ qi + 1 }}. {{ q.question }}</div>
+        <div v-if="q.rationale" class="qa-q-why">Why: {{ q.rationale }}</div>
+
+        <template v-if="q.type === 'single_choice'">
+          <label v-for="o in q.options" :key="o.value" class="qa-opt">
+            <input type="radio" :name="'q-'+q.id" :value="o.value" v-model="answerDraft[q.id].choice" />
+            <span class="qa-opt-label">{{ o.label }}</span>
+            <span v-if="o.rationale" class="qa-opt-why">— {{ o.rationale }}</span>
+          </label>
+          <label v-if="q.allow_freetext" class="qa-opt">
+            <input type="radio" :name="'q-'+q.id" value="__freetext__" v-model="answerDraft[q.id].choice" />
+            <span class="qa-opt-label">✎ Type my own</span>
+          </label>
+          <input v-if="answerDraft[q.id].choice === '__freetext__'" v-model="answerDraft[q.id].freetext"
+                 class="qa-input" placeholder="Your answer" />
+        </template>
+
+        <template v-else-if="q.type === 'multi_choice'">
+          <label v-for="o in q.options" :key="o.value" class="qa-opt">
+            <input type="checkbox" :value="o.value" v-model="answerDraft[q.id].choices" />
+            <span class="qa-opt-label">{{ o.label }}</span>
+            <span v-if="o.rationale" class="qa-opt-why">— {{ o.rationale }}</span>
+          </label>
+          <label v-if="q.allow_freetext" class="qa-opt">
+            <input type="checkbox" v-model="answerDraft[q.id].useFreetext" />
+            <span class="qa-opt-label">✎ Add my own</span>
+          </label>
+          <input v-if="answerDraft[q.id].useFreetext" v-model="answerDraft[q.id].freetext"
+                 class="qa-input" placeholder="Your answer" />
+        </template>
+
+        <template v-else>
+          <textarea v-model="answerDraft[q.id].freetext" class="qa-textarea" rows="2"
+                    :placeholder="q.rationale || 'Your answer'" />
+        </template>
+      </div>
+    </div>
+    <template #footer>
+      <Button label="Cancel" text @click="cancelQuestions" />
+      <Button label="Generate Plan" icon="pi pi-sparkles" @click="submitAnswers" />
+    </template>
+  </Dialog>
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import Button from 'primevue/button';
 import Textarea from 'primevue/textarea';
@@ -343,7 +419,6 @@ import Select from 'primevue/select';
 import Dialog from 'primevue/dialog';
 import { marked } from 'marked';
 import { useLogTerminal } from '../../composables/useLogTerminal.js';
-import { useProjectsStore } from '../../stores/projects.js';
 import { useWsStore } from '../../stores/ws.js';
 import { useOrchestrationStore } from '../../stores/orchestration.js';
 import { usePickupStore } from '../../stores/pickup.js';
@@ -351,7 +426,6 @@ import ProviderIcon from '../ProviderIcon.vue';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
-const projects = useProjectsStore();
 const ws = useWsStore();
 const orch = useOrchestrationStore();
 const pickup = usePickupStore();
@@ -368,17 +442,18 @@ function applyPickupPrefill() {
   showNewPlanForm.value = true;
 }
 
-const project = computed(() => projects.byId[projectId.value]);
-const state = computed(() => project.value?.derived_state?.state || 'idle');
-
 // Plan list
 const plans = ref([]);
 const selectedPlan = ref(null);
+const nowMs = ref(Date.now());
+let relativeTimer = null;
 
 // Form state
 const description = ref('');
 const deep = ref(false);
 const showNewPlanForm = ref(false);
+const uploadedFile = ref(null);
+const fileInputRef = ref(null);
 
 // Base branch the worktree is cut from (fetched fresh from origin at run time)
 const selectedBase = ref('');
@@ -393,6 +468,13 @@ const availableModels = ref([]);
 const availableEfforts = ref([]);
 const loadingModels = ref(false);
 
+// Plan clarifying questions (feature: plan ask). When the planning agent submits
+// questions, the server relays them via the `plan.questions` socket event; we show
+// a form, collect answers, and POST them to run Pass B (plan generation).
+const pendingQuestions = ref(null);   // { goal_analysis, questions:[] } or null
+const showQuestionForm = ref(false);
+const answerDraft = reactive({});     // keyed by question id
+
 const TOOLS = [
   { label: 'OpenCode',      value: 'opencode' },
   { label: 'Claude Code',   value: 'claude' },
@@ -406,6 +488,11 @@ const approving = ref(false);
 const revising = ref(false);
 const genLog = ref('');
 const genError = ref('');
+
+// Extend-an-existing-plan (append) state
+const showExtendForm = ref(false);
+const extendDescription = ref('');
+const extendDeep = ref(false);
 
 // xterm for progress log
 const genLogStr = computed(() => genLog.value);
@@ -442,19 +529,30 @@ const isIdle = computed(() =>
   plans.value.length === 0 && !generating.value && !showNewPlanForm.value
 );
 
-const canAddNewPlan = computed(() => {
-  if (['tasks_pending', 'working', 'done'].includes(state.value)) return true;
-  return plans.value.length > 0 && plans.value.every(p => p.status === 'done');
-});
+const canAddNewPlan = computed(() => true);
 
 // Run badge per plan: live orchestration store first, API snapshot as fallback.
 // Only surface states the plan status badge doesn't already cover.
 function runBadgeOf(plan) {
-  if (plan.id === 'draft') return null;
+  if (plan.status === 'draft') return null;
   const s = orch.groups[plan.id]?.status || plan.run_status;
   if (s === 'running' || s === 'queued') return 'live';
   if (s === 'failed' && plan.status !== 'failed') return 'failed';
   return null;
+}
+
+function relativeTime(ms) {
+  const delta = Math.max(0, nowMs.value - ms);
+  const sec = Math.floor(delta / 1000);
+  if (sec < 45) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hr ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day} day${day === 1 ? '' : 's'} ago`;
+  const month = Math.floor(day / 30);
+  return `${month} mo ago`;
 }
 
 // Base branch push (plans/tasks state → main)
@@ -462,7 +560,6 @@ const base = reactive({ branch: 'main', has_remote: false, dirty: false });
 const pushingBase = ref(false);
 const baseNotice = ref('');
 const baseError = ref('');
-const rebasing = ref(false);
 
 async function loadBase() {
   try {
@@ -500,25 +597,6 @@ async function pushBase() {
   }
 }
 
-// Pull remote base branch into local (fetch + rebase, no commit).
-async function rebaseBase() {
-  rebasing.value = true; baseNotice.value = ''; baseError.value = '';
-  try {
-    const res = await fetch(`/api/projects/${projectId.value}/base/pull`, { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || 'Rebase failed');
-    baseNotice.value = data.updated
-      ? `Rebased local ${data.branch} onto origin/${data.branch}`
-      : `${data.branch} already up to date with origin`;
-    loadBase();
-    loadPlans();
-  } catch (e) {
-    baseError.value = e.message;
-  } finally {
-    rebasing.value = false;
-  }
-}
-
 // Load plan list
 async function loadPlans() {
   try {
@@ -543,6 +621,7 @@ function selectPlan(plan) {
   selectedPlan.value = plan;
   if (plan.status === 'draft') {
     planContent.value = plan.content || '';
+    planMtime.value = plan.mtime || null;
     dirty.value = false;
   }
   showNewPlanForm.value = false;
@@ -604,18 +683,84 @@ async function loadProjectTool() {
   } catch {}
 }
 
+function toggleExtendForm() {
+  showExtendForm.value = !showExtendForm.value;
+  if (showExtendForm.value) { extendDescription.value = ''; extendDeep.value = false; }
+}
+
+// Extend the selected (approved/done) plan: generate an extension draft, which
+// the user then approves — the appended tasks continue this plan's numbering.
+async function extendPlan() {
+  if (!extendDescription.value.trim() || generating.value || !selectedPlan.value) return;
+  const featureId = selectedPlan.value.feature_id || selectedPlan.value.id;
+  genError.value = '';
+  genLog.value = '';
+  generating.value = true;
+  showExtendForm.value = false;
+  try {
+    const body = { description: extendDescription.value, deep: extendDeep.value };
+    if (selectedTool.value)   body.tool   = selectedTool.value;
+    if (selectedModel.value)  body.model  = selectedModel.value;
+    if (selectedEffort.value) body.effort = selectedEffort.value;
+    const res = await fetch(`/api/projects/${projectId.value}/plans/${featureId}/extend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error?.message || 'Failed');
+    }
+  } catch (e) {
+    genError.value = e.message;
+    generating.value = false;
+  }
+}
+
+function triggerFileInput() {
+  fileInputRef.value?.click();
+}
+
+function onFileChange(e) {
+  const file = e.target.files?.[0];
+  if (file) uploadedFile.value = file;
+  e.target.value = '';
+}
+
+function clearFile() {
+  uploadedFile.value = null;
+}
+
 async function generatePlan() {
-  if (!description.value.trim() || generating.value) return;
+  if ((!description.value.trim() && !uploadedFile.value) || generating.value) return;
   genError.value = '';
   genLog.value = '';
   generating.value = true;
   showNewPlanForm.value = false;
+  pendingQuestions.value = null;
+  showQuestionForm.value = false;
   try {
     const body = { description: description.value, deep: deep.value };
     if (selectedTool.value)   body.tool   = selectedTool.value;
     if (selectedModel.value)  body.model  = selectedModel.value;
     if (selectedEffort.value) body.effort = selectedEffort.value;
     if (selectedBase.value)   body.base   = selectedBase.value;
+
+    if (uploadedFile.value) {
+      // Read file as base64 in chunks to avoid blowing the call stack on
+      // large files (spreading into String.fromCharCode can stack-overflow).
+      const arrayBuffer = await uploadedFile.value.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      const CHUNK = 0x8000;
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+      }
+      body.fileContent = btoa(binary);
+      body.fileName = uploadedFile.value.name;
+    }
+
+
     const res = await fetch(`/api/projects/${projectId.value}/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -631,6 +776,65 @@ async function generatePlan() {
   }
 }
 
+// Build the answers payload from the form draft and run Pass B (plan generation).
+async function submitAnswers() {
+  if (!pendingQuestions.value) return;
+  const FREETEXT = '__freetext__';
+  const answers = [];
+  for (const q of pendingQuestions.value.questions) {
+    const d = answerDraft[q.id] || {};
+    if (q.type === 'single_choice') {
+      if (d.choice === FREETEXT) {
+        answers.push({ id: q.id, question: q.question, type: q.type, value: FREETEXT, freetext: (d.freetext || '').trim() });
+      } else {
+        const opt = (q.options || []).find(o => o.value === d.choice);
+        answers.push({ id: q.id, question: q.question, type: q.type, value: d.choice, label: opt ? opt.label : d.choice, freetext: null });
+      }
+    } else if (q.type === 'multi_choice') {
+      const chosen = Array.isArray(d.choices) ? d.choices : [];
+      const labels = chosen.map(v => { const o = (q.options || []).find(x => x.value === v); return o ? o.label : v; });
+      answers.push({ id: q.id, question: q.question, type: q.type, value: chosen, label: labels.join(', '), freetext: d.useFreetext ? (d.freetext || '').trim() : null });
+    } else {
+      const t = (d.freetext || '').trim();
+      answers.push({ id: q.id, question: q.question, type: 'text', value: t, freetext: t });
+    }
+  }
+
+  genError.value = '';
+  genLog.value = '';
+  generating.value = true;
+  showQuestionForm.value = false;
+  const goal_analysis = pendingQuestions.value.goal_analysis || '';
+  pendingQuestions.value = null;
+
+  const body = { description: description.value, deep: deep.value, answers, goal_analysis };
+  if (selectedTool.value)   body.tool   = selectedTool.value;
+  if (selectedModel.value)  body.model  = selectedModel.value;
+  if (selectedEffort.value) body.effort = selectedEffort.value;
+  if (selectedBase.value)   body.base   = selectedBase.value;
+  try {
+    const res = await fetch(`/api/projects/${projectId.value}/plan/answers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error?.message || 'Failed');
+    }
+  } catch (e) {
+    genError.value = e.message;
+    generating.value = false;
+  }
+}
+
+function cancelQuestions() {
+  showQuestionForm.value = false;
+  pendingQuestions.value = null;
+  generating.value = false;
+  showNewPlanForm.value = true; // let the user edit the request and try again
+}
+
 async function submitRevise() {
   if (!reviseInstruction.value.trim() || revising.value) return;
   genError.value = '';
@@ -641,7 +845,7 @@ async function submitRevise() {
     const res = await fetch(`/api/projects/${projectId.value}/plan/revise`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instruction: reviseInstruction.value }),
+      body: JSON.stringify({ instruction: reviseInstruction.value, sessionId: selectedPlan.value?.sessionId || selectedPlan.value?.id }),
     });
     if (!res.ok) {
       const err = await res.json();
@@ -666,7 +870,7 @@ async function sendChat() {
     const res = await fetch(`/api/projects/${projectId.value}/plan/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, history }),
+      body: JSON.stringify({ message: msg, history, sessionId: selectedPlan.value?.sessionId || selectedPlan.value?.id }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || 'Chat failed');
@@ -691,7 +895,7 @@ async function savePlan() {
   const res = await fetch(`/api/projects/${projectId.value}/plan`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, mtime: planMtime.value }),
+    body: JSON.stringify({ content, mtime: planMtime.value, sessionId: selectedPlan.value?.sessionId || selectedPlan.value?.id }),
   });
   if (res.ok) {
     const d = await res.json();
@@ -702,7 +906,8 @@ async function savePlan() {
 
 async function discardPlan() {
   if (!confirm('Discard this plan?')) return;
-  await fetch(`/api/projects/${projectId.value}/plan`, { method: 'DELETE' });
+  const sessionId = encodeURIComponent(selectedPlan.value?.sessionId || selectedPlan.value?.id || '');
+  await fetch(`/api/projects/${projectId.value}/plan?session=${sessionId}`, { method: 'DELETE' });
   selectedPlan.value = null;
   planContent.value = '';
   dirty.value = false;
@@ -713,7 +918,11 @@ async function approvePlan() {
   if (dirty.value) await savePlan();
   genLog.value = '';
   approving.value = true;
-  const res = await fetch(`/api/projects/${projectId.value}/approve`, { method: 'POST' });
+  const res = await fetch(`/api/projects/${projectId.value}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId: selectedPlan.value?.sessionId || selectedPlan.value?.id }),
+  });
   if (!res.ok) {
     const err = await res.json();
     genError.value = err.error?.message || 'Approve failed';
@@ -726,6 +935,7 @@ watch(projectId, loadProjectTool);
 
 // WebSocket events
 onMounted(async () => {
+  relativeTimer = setInterval(() => { nowMs.value = Date.now(); }, 60_000);
   await loadPlans();
   await loadProjectTool();
   loadBase();
@@ -745,20 +955,39 @@ onMounted(async () => {
   const socket = ws.socket;
   if (!socket) return;
 
-  socket.on('plan.content', ({ project_id, content, mtime }) => {
+  socket.on('plan.content', ({ project_id, sessionId, content, mtime }) => {
     if (project_id !== projectId.value) return;
-    planContent.value = content;
-    planMtime.value = mtime;
-    // Reload plan list to reflect status changes
+    const selectedSession = selectedPlan.value?.sessionId || selectedPlan.value?.id;
+    if (!selectedSession || selectedSession === sessionId) {
+      planContent.value = content;
+      planMtime.value = mtime;
+    }
+    // Reload plan list to reflect new draft sessions and status changes
     loadPlans();
   });
 
-  socket.on('plan.deleted', ({ project_id }) => {
+  socket.on('plan.deleted', ({ project_id, sessionId }) => {
     if (project_id !== projectId.value) return;
-    planContent.value = '';
-    planMtime.value = null;
-    dirty.value = false;
+    const selectedSession = selectedPlan.value?.sessionId || selectedPlan.value?.id;
+    if (!sessionId || selectedSession === sessionId) {
+      planContent.value = '';
+      planMtime.value = null;
+      dirty.value = false;
+    }
     loadPlans();
+  });
+
+  socket.on('plan.questions', ({ project_id, goal_analysis, questions }) => {
+    if (project_id !== projectId.value) return;
+    Object.keys(answerDraft).forEach(k => delete answerDraft[k]);
+    for (const q of (questions || [])) {
+      if (q.type === 'multi_choice') answerDraft[q.id] = { choices: [], freetext: '', useFreetext: false };
+      else if (q.type === 'single_choice') answerDraft[q.id] = { choice: (q.options && q.options[0] ? q.options[0].value : ''), freetext: '' };
+      else answerDraft[q.id] = { freetext: '' };
+    }
+    pendingQuestions.value = { goal_analysis: goal_analysis || '', questions: questions || [] };
+    showQuestionForm.value = true;
+    generating.value = false;
   });
 
   socket.on('process.log', ({ project_id, line }) => {
@@ -779,14 +1008,23 @@ onMounted(async () => {
     if (wasApproving && code !== 0) {
       genError.value = 'Approve failed — no new tasks were created. Re-run "Approve & Decompose".';
     }
+    // When the agent surfaced questions (Pass A), keep the description and the
+    // question form — generation isn't done; we're waiting for the user's answers.
+    if (pendingQuestions.value) return;
     if (wasGenerating || wasRevising || wasApproving) {
       description.value = '';
+      uploadedFile.value = null;
+      if (wasGenerating) selectedPlan.value = null; // select the newly-created newest draft
       loadPlans();
     }
   });
 });
 
 watch(projectId, loadPlans);
+
+onUnmounted(() => {
+  if (relativeTimer) clearInterval(relativeTimer);
+});
 </script>
 
 <style scoped>
@@ -825,16 +1063,18 @@ watch(projectId, loadPlans);
   padding: 2px 8px; cursor: pointer; transition: background 0.12s;
 }
 .btn-new-plan:hover { background: color-mix(in oklch, var(--jg-green) 12%, transparent); }
-.btn-rebase {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
-  color: var(--jg-text-muted); background: transparent; border: 1px solid var(--jg-border);
-  padding: 2px 8px; cursor: pointer; transition: all 0.12s;
-}
-.btn-rebase:hover:not(:disabled) { color: var(--jg-cyan); border-color: var(--jg-cyan); }
-.btn-rebase:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-rebase .pi { font-size: 10px; }
 .plan-list-items { flex: 1; overflow-y: auto; padding: 4px; }
+
+/* Extend-this-plan (append) form */
+.plan-extend-form { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--jg-border); }
+.plan-extend-label { font-size: 12px; color: var(--jg-text-dim); }
+.plan-extend-input {
+  width: 100%; padding: 6px 8px; border-radius: 6px;
+  background: var(--jg-bg); border: 1px solid var(--jg-border); color: var(--jg-text);
+  font-family: var(--font-mono); font-size: 12px;
+}
+.plan-extend-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.plan-extend-deep { display: flex; align-items: center; gap: 6px; margin-right: auto; font-size: 12px; color: var(--jg-text-dim); cursor: pointer; }
 
 .plan-item {
   padding: 8px 10px; cursor: pointer; border: 1px solid transparent;
@@ -847,6 +1087,7 @@ watch(projectId, loadPlans);
 /* Status badges */
 .plan-item-badges { display: flex; align-items: center; gap: 4px; }
 .plan-badge { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; padding: 1px 5px; }
+.plan-age { font-size: 9px; color: var(--jg-text-faint); }
 .plan-badge--run-live { background: color-mix(in oklch, var(--jg-green) 20%, transparent); color: var(--jg-green); animation: livePulse 1.2s infinite; }
 .plan-badge--run-failed { background: color-mix(in oklch, var(--jg-red) 15%, transparent); color: var(--jg-red); }
 .src-issue-link { display: inline-flex; align-items: center; gap: 2px; font-size: 9px; color: var(--jg-text-faint); text-decoration: none; }
@@ -1003,6 +1244,23 @@ watch(projectId, loadPlans);
 /* Nothing selected */
 .plan-empty-pick { display: flex; align-items: center; justify-content: center; gap: 10px; flex: 1; color: var(--jg-text-faint); font-size: 12px; }
 
+/* File badge */
+.file-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; margin-bottom: 8px;
+  background: color-mix(in oklch, var(--jg-cyan) 10%, transparent);
+  border: 1px solid color-mix(in oklch, var(--jg-cyan) 30%, transparent);
+  font-family: var(--font-mono); font-size: 11px; color: var(--jg-cyan);
+}
+.file-badge .pi-file { font-size: 11px; }
+.file-badge span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.file-badge-clear {
+  background: none; border: none; color: var(--jg-text-faint);
+  cursor: pointer; padding: 0; display: flex; align-items: center;
+}
+.file-badge-clear:hover { color: var(--jg-red); }
+.file-badge-clear .pi { font-size: 10px; }
+
 /* Shared */
 .deep-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--jg-text-faint); }
 .base-select { min-width: 150px; font-size: 12px; }
@@ -1033,4 +1291,20 @@ watch(projectId, loadPlans);
   color: var(--jg-text); font-family: var(--font-mono); font-size: 12px; outline: none;
 }
 .tool-modal-input:focus { border-color: var(--jg-green); }
+
+/* Clarifying questions form (feature: plan ask) */
+.qa-body { display: flex; flex-direction: column; gap: 16px; max-height: 60vh; overflow-y: auto; }
+.qa-goal { margin: 0; font-size: 13px; color: var(--jg-text-dim); }
+.qa-question { display: flex; flex-direction: column; gap: 4px; }
+.qa-q-title { font-weight: 600; font-size: 13px; color: var(--jg-text); }
+.qa-q-why { font-size: 12px; color: var(--jg-text-dim); margin-bottom: 4px; }
+.qa-opt { display: flex; align-items: baseline; gap: 6px; font-size: 13px; cursor: pointer; padding: 2px 0; }
+.qa-opt-label { color: var(--jg-text); }
+.qa-opt-why { color: var(--jg-text-dim); font-size: 12px; }
+.qa-input, .qa-textarea {
+  width: 100%; padding: 6px 8px; border-radius: 6px; margin-top: 4px;
+  background: var(--jg-bg); border: 1px solid var(--jg-border);
+  color: var(--jg-text); font-family: var(--font-mono); font-size: 12px; outline: none;
+}
+.qa-input:focus, .qa-textarea:focus { border-color: var(--jg-green); }
 </style>

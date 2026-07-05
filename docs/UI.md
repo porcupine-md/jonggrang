@@ -354,6 +354,17 @@ padding: 20px
 
 Section header inside: `font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--jg-text-faint)`.
 
+### Plan list draft rows
+
+The Plan screen can show multiple pending draft rows. Each draft row uses the draft session id internally (`id === sessionId`) and renders:
+
+- title from the draft content
+- `draft` status badge
+- relative age text beside the badge, e.g. `just now`, `1 min ago`, `2 hr ago`
+- optional source-issue link badge
+
+All draft actions (save, discard, revise, discuss, approve) must carry the selected `sessionId`; the UI must never assume there is only one root draft.
+
 ### Issues screen (top-level `/issues`)
 
 The **Issues** menu (top app nav, beside `projects`) lists GitHub/GitLab issues and picks them up as plans (feature #55).
@@ -364,6 +375,40 @@ The **Issues** menu (top app nav, beside `projects`) lists GitHub/GitLab issues 
 - **Issue row**: left state dot (`--jg-green` open / `--jg-red` closed), title + `repo#number` ref, a sub-line of label chips (pill: `1px solid var(--jg-border)`, `border-radius: 10px`), assignee, comment count, and a body preview; right side has an external-link icon + small **Pickup** button. Hover `background: var(--jg-hover)`.
 - **Detail drawer**: right-aligned overlay (reuses the Dialog/Drawer pattern in §6.7) — header `repo#number`, state badge, author/date, markdown body, comments, footer "Open original" + "Pickup → Plan".
 - **Pickup modal**: source chip + Existing/New project choice → routes to the target project's **pre-filled New Plan form** (plan-creation UX is unchanged; only the description arrives populated). Source link surfaces on the plan card as a "↗ repo#N" link.
+
+### Extend an approved plan (feature: append)
+
+On an approved/done plan in the Plan view, the header shows an **"Extend this plan"**
+secondary button (beside **Work Mode**). Clicking it reveals an inline form:
+
+- a **textarea** for the additional scope (placeholder: "e.g. also add rate limiting to the login endpoint"), mono font, `var(--jg-bg)` surface.
+- a **Deep analysis** checkbox (toggles `--deep` on the generated extension: discovery + risks for the added scope).
+- **Cancel** (secondary) / **Generate Extension** (primary, disabled until the textarea has content).
+
+The form POSTs to `POST /api/projects/:id/plans/:featureId/extend`, which spawns
+`jonggrang plan --append <featureId> "<desc>"`. The generated extension draft carries
+`append_to: <featureId>` in its frontmatter; the user then approves it (the existing
+`POST /:id/approve` detects `append_to` and decomposes the new tasks into the existing
+feature, numbering continued, completed tasks untouched). Appended tasks land in the
+same plan's kanban automatically (the board filters by `feature_id`).
+
+### Plan clarifying-questions form (feature: plan ask)
+
+After **Generate Plan**, if the planning agent decides the request is ambiguous it
+submits clarifying questions (relayed to the client over the `plan.questions`
+socket event). The Plan view opens a modal (Dialog §6.7) titled "A few questions
+before planning":
+
+- **Goal** line at top (the agent's restatement of intent).
+- One block per question: title + a muted "Why:" rationale line.
+- **single_choice** → radio options, each showing its label + rationale, plus a
+  "✎ Type my own" radio that reveals a text input.
+- **multi_choice** → checkboxes + an optional "✎ Add my own" text input.
+- **text** → a textarea.
+- Footer: **Cancel** (returns to the New Plan form) / **Generate Plan** (POSTs the
+  answers to `/api/projects/:id/plan/answers`, which runs plan generation with the
+  answers). The resulting plan streams back as usual and records a `## Clarifications`
+  section.
 
 ---
 

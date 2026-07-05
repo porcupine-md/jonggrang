@@ -2,9 +2,9 @@
 
 const { Router } = require('express');
 const os   = require('os');
-const path = require('path');
 
 const { resolveAgentDir, resolveAuthPath } = require('../../lib/bot-reviewer/auth');
+const lib = require('../../lib/jonggrang');
 
 const SYSTEM_PROMPT = `You are a software architect assistant helping the user discuss and refine a project implementation plan.
 
@@ -22,13 +22,18 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const { message, history = [] } = req.body || {};
+        const { message, history = [], sessionId = '', session = '' } = req.body || {};
         if (!message?.trim()) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'message required' } });
 
-        const planPath = path.join(project.path, '.jonggrang', 'plan.md');
         let planContent = '(no plan yet)';
         try {
-            if (fs.existsSync(planPath)) planContent = fs.readFileSync(planPath, 'utf-8');
+            lib.migrateLegacyPlanDraft(project.path);
+            const requestedSession = sessionId || session;
+            const drafts = lib.getAllDrafts(project.path);
+            const draft = requestedSession
+                ? drafts.find(d => d.sessionId === requestedSession)
+                : drafts[0];
+            if (draft && fs.existsSync(draft.planPath)) planContent = fs.readFileSync(draft.planPath, 'utf-8');
         } catch {}
 
         try {

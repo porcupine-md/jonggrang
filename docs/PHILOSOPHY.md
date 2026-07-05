@@ -67,15 +67,15 @@ Not a final stage, but a continuous enforcement layer woven into the implement l
 You describe what you want
         |
         v
-  jonggrang plan  -->  Phase 1: AI writes .jonggrang/plan.md (high-level, human-editable)
+  jonggrang plan  -->  Phase 1: AI writes .jonggrang/.drafts/<session>/plan.md (high-level, human-editable)
         |              Review / edit the plan in your editor
         v
   jonggrang approve  -->  Phase 2: AI reads plan.md → decomposes into tasks
-        |                 plan.md archived, jonggrang-tasks.json written
+        |                 plan.md archived, per-feature jonggrang-tasks.json written
         v
   jonggrang work  -->  For each task:
         |            1. Fresh context (no accumulated confusion)
-        |            2. Read AGENTS.md + .jonggrang/progress.txt (project knowledge)
+        |            2. Read AGENTS.md + .jonggrang/.output/features/{id}/progress.txt (project knowledge)
         |            3. Pick highest priority unblocked task
         |            4. Implement via AI agent (opencode/claude/jonggrang)
         |            5. Validate (typecheck, tests, lint)
@@ -286,13 +286,14 @@ your-project/
 │   └── library/             # Tier 2 — JIT via gateway
 ├── .jonggrang/
 │   ├── jonggrang.json       # Project config
-│   ├── jonggrang-tasks.json # Task board state
-│   ├── plan.md              # Draft plan (exists between plan → approve)
-│   ├── progress.txt         # Auto-generated learnings
+│   ├── .drafts/<session>/     # Draft plans (gitignored, per-session — concurrent-safe)
+│   │   └── plan.md            # Pending plan (exists between plan → approve)
 │   ├── .output/
 │   │   └── features/<id>/
-│   │       ├── plan.md      # Archived plan (after approve)
-│   │       └── MANIFEST.yaml
+│   │       ├── plan.md              # Archived plan (after approve)
+│   │       ├── MANIFEST.yaml        # Phase state
+│   │       ├── jonggrang-tasks.json # Task board state (per-feature)
+│   │       └── progress.txt         # Auto-generated learnings (per-feature)
 │   ├── .ephemeral/          # Runtime state (feedback loop, compaction)
 │   └── locks/               # File ownership locks
 ├── .claude/
@@ -312,6 +313,6 @@ your-project/
 
 The most important file for output quality. Tells AI agents about your project's conventions, patterns, and gotchas. **Human-curated** — research shows human-written AGENTS.md improves agent success ~4%.
 
-### .jonggrang/progress.txt
+### .jonggrang/.output/features/{id}/progress.txt
 
-Append-only log written by the agent after each task. Captures learnings and prevents repeating mistakes across sessions.
+Append-only log written by the agent after each task. Captures learnings and prevents repeating mistakes across sessions. Per-feature — each feature has its own progress log alongside its `plan.md` and `MANIFEST.yaml`.
