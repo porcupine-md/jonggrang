@@ -122,6 +122,20 @@ jonggrang work "add REST API for todos" --yes
 
 This runs plan → approve → execute in one command. Good for well-defined, low-risk features.
 
+### I already approved a plan and want to add more scope
+
+Instead of creating a whole new plan, **extend** the existing one — the new tasks are appended to it, numbering continues from where it left off, and completed tasks stay untouched:
+
+```bash
+jonggrang status                    # grab the feature id you want to extend
+jonggrang plan --append feat-abc123 "also add rate limiting to the login endpoint"
+# review the extension draft, then:
+jonggrang approve --feature feat-abc123
+# or one-shot: jonggrang plan --append feat-abc123 "..." --yes
+```
+
+The web dashboard has an **"Extend this plan"** button on any approved plan for the same flow.
+
 ### I want to use Claude Code instead of OpenCode
 
 ```bash

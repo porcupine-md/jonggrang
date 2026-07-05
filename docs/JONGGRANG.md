@@ -526,8 +526,13 @@ Draft-scoped endpoints accept `sessionId` (or `session`) in JSON body or query s
 
 ```
 Plan: simple-api      (task-001..005, blocked_by chain) → worktree feat/simple-api      (serial within)
-Plan: version-endpoint(task-006..009, blocked_by chain) → worktree feat/version-endpoint (parallel with the above)
+Plan: version-endpoint(task-001..004, blocked_by chain) → worktree feat/version-endpoint (parallel with the above)
 ```
+
+> Task numbering is **per-plan**: each plan numbers its own tasks from `task-001`, so
+> the two plans above both start at `task-001`. A bare `task-003` resolves within a
+> feature scope (`--feature <id>`, else the active feature, else a single global match
+> for legacy ids); `AMBIGUOUS_TASK_ID` is raised when it can't be disambiguated.
 
 ### Issues — import GitHub/GitLab issues as plans (feature #55)
 

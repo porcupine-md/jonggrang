@@ -105,11 +105,19 @@ jonggrang plan        # no description → shows list of pending + archived plan
 
 | Situation | Command |
 |-----------|---------|
-| Add new scope on top of done work | `jonggrang plan "also add rate limiting"` |
-| Change remaining pending work | `jonggrang plan "use Passport.js instead"` |
+| Add new scope to an approved plan | `jonggrang plan --append <featureId> "also add rate limiting"` then `jonggrang approve --feature <featureId>` (or `--yes` for one shot) |
+| Change remaining pending work | `jonggrang plan "use Passport.js instead"` (a new plan / new feature) |
 | Undo completed tasks | Not supported — create new tasks to override |
 
 > **Rule: completed tasks are immutable.** They reflect real code. Any correction must be a new task.
+>
+> **Per-plan task numbering.** Each plan numbers its own tasks from `task-001`. An
+> append continues from that plan's current max (e.g. `task-006` after `task-001..005`)
+> and never renumbers or modifies existing/completed tasks. A bare `task-NNN` can
+> therefore recur across plans; task-id commands resolve it within a feature scope
+> (`--feature <id>`, else the active feature, else a single global match for legacy
+> ids), and error with `AMBIGUOUS_TASK_ID` when genuinely ambiguous. Existing
+> projects keep their current ids — no renumber, no migration.
 
 ---
 
