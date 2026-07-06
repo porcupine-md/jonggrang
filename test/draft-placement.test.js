@@ -47,6 +47,28 @@ test('buildDeepPlanCondensePrompt references draftPath and never the root plan.m
     'prompt must not hardcode the legacy root .jonggrang/plan.md');
 });
 
+test('buildDraftPlanPrompt includes base branch instructions and frontmatter entry', () => {
+  const prompt = lib.buildDraftPlanPrompt('a feature', null, os.tmpdir(), FAKE_DRAFT, null, { baseBranch: 'my-custom-branch' });
+  assert.ok(prompt.includes('base branch `my-custom-branch`'), 'prompt should mention the base branch');
+  assert.ok(prompt.includes('base: "my-custom-branch"'), 'prompt should specify the base branch in the frontmatter template');
+});
+
+test('buildDeepPlanDiscoveryPrompt includes base branch instructions', () => {
+  const prompt = lib.buildDeepPlanDiscoveryPrompt('a feature', null, FAKE_DRAFT, null, { baseBranch: 'my-custom-branch' });
+  assert.ok(prompt.includes('base branch `my-custom-branch`'), 'prompt should mention the base branch in discovery');
+});
+
+test('buildDeepPlanCondensePrompt includes base branch instructions and frontmatter entry', () => {
+  const prompt = lib.buildDeepPlanCondensePrompt('a feature', 'discovery', 'analysis', null, os.tmpdir(), FAKE_DRAFT, null, { baseBranch: 'my-custom-branch' });
+  assert.ok(prompt.includes('base branch for this feature is `my-custom-branch`'), 'prompt should mention the base branch in condense');
+  assert.ok(prompt.includes('base: "my-custom-branch"'), 'prompt should specify the base branch in the frontmatter template');
+});
+
+test('buildPlanQuestionsPrompt includes base branch instructions', () => {
+  const prompt = lib.buildPlanQuestionsPrompt('a feature', null, null, 'my-custom-branch');
+  assert.ok(prompt.includes('base branch `my-custom-branch`'), 'prompt should mention the base branch in questions');
+});
+
 // ── Layer 2: verifyDraftWritten self-heals stray agent writes ────────────
 
 function tempProject() {
