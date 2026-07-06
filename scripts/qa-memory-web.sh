@@ -86,6 +86,21 @@ updated_at: 2026-07-05T10:00:00Z
   ([task-001](.jonggrang/.output/features/$FID/jonggrang-tasks.json)).
 EOF
 
+# Minimal MANIFEST.yaml so the manifest API surfaces this feature folder
+# (MEMORY.md co-exists alongside it). Without this the endpoint 404s.
+cat > ".jonggrang/.output/features/$FID/MANIFEST.yaml" << EOF
+feature_id: $FID
+description: Billing Reconciliation
+work_type: SMALL
+status: completed
+current_phase: 17
+active_phases: [1, 8, 17]
+phases:
+  1: { name: setup, status: completed }
+  8: { name: implement, status: completed }
+  17: { name: completion, status: completed }
+EOF
+
 show "Temp repo: $T"
 show "Project ID: $PROJ_ID"
 
@@ -152,7 +167,7 @@ step "GET /projects/:id/files/content?path=.jonggrang/MEMORY.md — read content
 RESP=$(curl -sf "$BASE/projects/$PROJ_ID/files/content?path=.jonggrang/MEMORY.md")
 echo "$RESP" | node -e "const d=JSON.parse(require('fs').readFileSync(0));console.log(d.content.slice(0,120)+'...')"
 assert "project memory content readable" "echo '$RESP' | grep -q 'scope: project'"
-assert "project memory has markdown link" "echo '$RESP' | grep -q 'feat-billing](.jonggrang/.output/features)'"
+assert "project memory has markdown link" "echo '$RESP' | grep -q 'feat-billing](.jonggrang/.output/features/'"
 assert "project memory has tags" "echo '$RESP' | grep -q 'tags:.*idempotency'"
 
 # ════════════════════════════════════════════════════════════════
@@ -169,7 +184,7 @@ step "GET /projects/:id/files/content?path=.jonggrang/.output/features/$FID/MEMO
 RESP=$(curl -sf "$BASE/projects/$PROJ_ID/files/content?path=.jonggrang/.output/features/$FID/MEMORY.md")
 echo "$RESP" | node -e "const d=JSON.parse(require('fs').readFileSync(0));console.log(d.content.slice(0,150)+'...')"
 assert "feature memory content readable" "echo '$RESP' | grep -q 'feature_id: $FID'"
-assert "feature memory has markdown link to task" "echo '$RESP' | grep -q 'task-001](.jonggrang/.output/features)'"
+assert "feature memory has markdown link to task" "echo '$RESP' | grep -q 'task-001](.jonggrang/.output/features/'"
 assert "feature memory has tags" "echo '$RESP' | grep -q 'tags:.*reconciliation'"
 
 # ════════════════════════════════════════════════════════════════
