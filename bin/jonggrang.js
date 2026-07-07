@@ -302,6 +302,27 @@ function updateTaskMode(tasksFile, taskId, status, worktreeMode = false) {
 const TEST_RETRY_LIMIT = 3;
 
 /**
+ * Auto-promote feature lessons → project MEMORY.md at a phase boundary.
+ * Synchronous but failure-isolated: a promote failure does NOT block the
+ * caller (review/orchestrate still complete normally). Feature memory stays
+ * canonical on failure — retryable manually via `jonggrang memory promote`.
+ * Shared by cmdReview (interactive review) and runOrchestrationLoop
+ * (orchestrate completion) so the promote wrapper lives in one place. (#79)
+ */
+async function autoPromoteMemory(projectRoot, featureId) {
+  try {
+    const mem = require('../lib/memory');
+    logInfo('Promoting stable lessons (feature → project MEMORY.md)...');
+    const result = await mem.promote(projectRoot, featureId, { tool: TOOL, permMode: MODE });
+    if (result.skipped) logInfo(`Memory promote skipped: ${result.reason}`);
+    else logSuccess(`Project memory updated: ${path.relative(projectRoot, result.projectMemoryFile)}`);
+  } catch (e) {
+    logWarn(`Memory promote failed (non-blocking): ${e.message}`);
+    logInfo(`Feature memory intact — run \`jonggrang memory promote --feature ${featureId}\` manually.`);
+  }
+}
+
+/**
  * Run the work loop for a given tasks file.
  * Executes tasks one by one until done, max iterations reached, or blocked.
  * Does NOT handle post-work phases — caller is responsible for that.
@@ -357,6 +378,30 @@ async function runWorkLoop(tasksFile, options) {
       logSuccess('All tasks completed!');
       logInfo(`Completed: ${lib.countCompleted(tasksFile)} / ${lib.countTotal(tasksFile)}`);
       console.log('');
+
+      // Memory compact: merge task fragments → feature MEMORY.md (#79)
+      // Synchronous (block here) but failure-isolated (compact fail ≠ work fail).
+      // Fragments stay in .ephemeral/ on failure — retryable manually.
+      // featureId derived from tasksFile path (.../features/<fid>/jonggrang-tasks.json)
+      // so this works in both cmdWork and orchestrate call sites.
+      try {
+        const mem = require('../lib/memory');
+        const fid = path.basename(path.dirname(tasksFile));
+        logInfo('Compacting memory (fragments → feature MEMORY.md)...');
+        const result = await mem.compact(PROJECT_ROOT, fid, { tool: TOOL, permMode: MODE });
+        if (result.skipped) {
+          logInfo(`Memory compact skipped: ${result.reason}`);
+        } else {
+          logSuccess(`Feature memory updated: ${path.relative(PROJECT_ROOT, result.memoryFile)}`);
+          if (result.fragmentsArchived > 0) {
+            logInfo(`Archived ${result.fragmentsArchived} fragment(s) to .ephemeral/memory/archive/`);
+          }
+        }
+      } catch (e) {
+        logWarn(`Memory compact failed (non-blocking): ${e.message}`);
+        logInfo(`Fragments preserved — run \`jonggrang memory compact --feature <id>\` manually.`);
+      }
+
       return { completed: true, reason: 'all_done', stats: { completed: lib.countCompleted(tasksFile), total: lib.countTotal(tasksFile) } };
     }
 
@@ -1006,6 +1051,21 @@ async function cmdReview() {
 
   logInfo('Running comprehensive review...');
   await lib.runAgent(reviewPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+
+  // Memory promote: distill feature lessons → project MEMORY.md (#79).
+  // autoPromoteMemory is failure-isolated; here we only resolve which feature
+  // to promote. Falls back gracefully if no active manifest (ad-hoc review).
+  try {
+    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    const fid = WORK_FEATURE_ID || (existing && existing.featureId);
+    if (fid) {
+      await autoPromoteMemory(PROJECT_ROOT, fid);
+    } else {
+      logInfo('Memory promote skipped: no active feature found.');
+    }
+  } catch (e) {
+    logWarn(`Memory promote skipped: ${e.message}`);
+  }
 
   logSuccess('Review complete. Check jonggrang-log/ for report.');
 }
@@ -2713,6 +2773,13 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     logHeader('Orchestration Complete!');
     logSuccess(`Feature: ${manifest.description}`);
     logSuccess(`All ${manifest.active_phases.length} phases completed.`);
+
+    // Memory promote: distill this feature's lessons → project MEMORY.md (#79).
+    // The interactive `review` command does this too (cmdReview); the orchestrate
+    // pipeline runs review as an agent phase, so promote is wired here at pipeline
+    // completion instead. (#79)
+    await autoPromoteMemory(PROJECT_ROOT, featureId);
+
     feedback.clearFeedbackState(PROJECT_ROOT);
   }
 }
@@ -3556,6 +3623,165 @@ async function cmdModel() {
 }
 
 // ============================================================
+// MEMORY CLI (#79)
+// ============================================================
+
+function cmdMemoryHelp() {
+  const mem = require('../lib/memory');
+  console.log(`Jonggrang Memory — repo-tracked compounding memory (#79)
+
+Usage: jonggrang memory <subcommand> [options]
+
+Subcommands:
+  read                              Show project memory + generated feature index (read-only)
+  read --feature <id>               Show one feature's memory detail (read-only)
+  recall --query "..."              Bounded recall for agent context (read-only)
+                  [--feature <id>] [--task <id>]
+  fragment add --feature <id> --task <id> --file <path>
+                                    Stage a raw task fragment (ephemeral, never edits canonical)
+  compact --feature <id>            Merge fragments + progress + tasks → feature MEMORY.md (single-writer)
+  promote --feature <id>            Distill stable lessons → project MEMORY.md (single-writer, conservative)
+
+Principles:
+  - Memory is context, not instruction. If it conflicts with current code,
+    AGENTS.md, or latest user instruction, trust the more current source.
+  - Canonical files (.jonggrang/MEMORY.md, .output/features/<id>/MEMORY.md)
+    are written ONLY by compact/promote. Task agents submit fragments.
+  - Recall is bounded (max ${mem.RECALL_MAX_SNIPPETS} snippets / ${mem.RECALL_MAX_CHARS} chars).
+`);
+}
+
+async function cmdMemory(args) {
+  const subcommand = args[0];
+  const subArgs = args.slice(1);
+
+  if (!subcommand || subcommand === 'help' || subcommand === '--help') {
+    cmdMemoryHelp();
+    return;
+  }
+
+  // Read tool from config (compact/promote need the agent backend). The memory
+  // command dispatches before the global flag parser, so TOOL is still the
+  // default — read it here like cmdWork/cmdPlan do.
+  if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
+    TOOL = lib.readConfig(CONFIG_FILE, 'tool', DEFAULT_TOOL);
+  }
+
+  // Parse flags common across memory subcommands
+  const flags = {};
+  const positional = [];
+  let j = 0;
+  while (j < subArgs.length) {
+    if (subArgs[j] === '--feature')         { flags.feature = subArgs[++j]; }
+    else if (subArgs[j] === '--task')       { flags.task = subArgs[++j]; }
+    else if (subArgs[j] === '--query')      { flags.query = subArgs[++j]; }
+    else if (subArgs[j] === '--file')       { flags.file = subArgs[++j]; }
+    else { positional.push(subArgs[j]); }
+    j++;
+  }
+
+  const mem = require('../lib/memory');
+  const projectRoot = process.cwd();
+
+  try {
+    switch (subcommand) {
+      case 'read': {
+        if (flags.feature) {
+          const content = mem.readFeature(projectRoot, flags.feature);
+          if (content === null) {
+            logWarn(`No feature memory for ${flags.feature}.`);
+            logInfo(`Run \`jonggrang memory compact --feature ${flags.feature}\` to build it.`);
+            process.exit(1);
+          }
+          console.log(content);
+        } else {
+          // No flag → project memory + generated feature index (read-only)
+          console.log(mem.renderIndex(projectRoot));
+        }
+        break;
+      }
+
+      case 'recall': {
+        if (!flags.query) {
+          logError('recall requires --query "<goal>" — a free-form query to search memory.');
+          logInfo('Optional scoping: --feature <id> --task <id>');
+          process.exit(1);
+        }
+        const result = mem.recall(projectRoot, {
+          query: flags.query,
+          featureId: flags.feature,
+          taskId: flags.task,
+        });
+        console.log(mem.formatRecall(result));
+        break;
+      }
+
+      case 'fragment': {
+        const action = positional[0];
+        if (action !== 'add') {
+          logError(`Unknown fragment action: ${action || '(none)'}. Use: jonggrang memory fragment add ...`);
+          process.exit(1);
+        }
+        if (!flags.feature || !flags.task || !flags.file) {
+          logError('fragment add requires --feature <id> --task <id> --file <path>');
+          process.exit(1);
+        }
+        const dest = mem.addFragment(projectRoot, flags.feature, flags.task, flags.file);
+        logInfo(`Fragment staged: ${path.relative(projectRoot, dest)}`);
+        logInfo('Run `jonggrang memory compact --feature ' + flags.feature + '` to merge into feature memory.');
+        break;
+      }
+
+      case 'compact': {
+        if (!flags.feature) {
+          logError('compact requires --feature <id>');
+          process.exit(1);
+        }
+        logInfo(`Compacting memory for feature: ${flags.feature}...`);
+        const result = await mem.compact(projectRoot, flags.feature, {
+          tool: TOOL,
+          permMode: MODE,
+        });
+        if (result.skipped) {
+          logWarn(`Skipped: ${result.reason}`);
+        } else {
+          logInfo(`Feature memory updated: ${path.relative(projectRoot, result.memoryFile)}`);
+          if (result.fragmentsArchived > 0) {
+            logInfo(`Archived ${result.fragmentsArchived} fragment(s) to .ephemeral/memory/archive/`);
+          }
+        }
+        break;
+      }
+
+      case 'promote': {
+        if (!flags.feature) {
+          logError('promote requires --feature <id>');
+          process.exit(1);
+        }
+        logInfo(`Promoting stable lessons from feature ${flags.feature} to project memory...`);
+        const result = await mem.promote(projectRoot, flags.feature, {
+          tool: TOOL,
+          permMode: MODE,
+        });
+        if (result.skipped) {
+          logWarn(`Skipped: ${result.reason}`);
+        } else {
+          logInfo(`Project memory updated: ${path.relative(projectRoot, result.projectMemoryFile)}`);
+        }
+        break;
+      }
+
+      default:
+        logError(`Unknown memory subcommand: ${subcommand}`);
+        console.log("Run 'jonggrang memory help' for usage.");
+        process.exit(1);
+    }
+  } catch (err) {
+    logError(err.message);
+    process.exit(1);
+  }
+}
+
 // TASK CLI
 // ============================================================
 
@@ -4252,6 +4478,7 @@ Commands:
   status                  Show pipeline state + task board
   review                  Run code review
   task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
+  memory <subcommand>     Repo-tracked memory (read, recall, fragment add, compact, promote) (#79)
   manifest [sub]          Inspect output-file manifests (list, show, add)
   codemap [opts]          Show/refresh deterministic codebase map (LLM-free)
   agent                   Start interactive chat with the AI agent (Pi TUI)
@@ -4432,6 +4659,11 @@ async function main() {
   // Subcommands that handle their own flags — bypass global parser
   if (command === 'task') {
     cmdTask(rest);
+    return;
+  }
+
+  if (command === 'memory') {
+    await cmdMemory(rest);
     return;
   }
 

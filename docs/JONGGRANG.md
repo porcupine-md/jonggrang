@@ -99,6 +99,7 @@ project-root/
 │       └── tester.md
 ├── .jonggrang/
 │   ├── jonggrang.json          # Project config
+│   ├── MEMORY.md               # Project-level curated memory (tracked; compact context, not instructions)
 │   ├── .drafts/<session>/      # Draft plans (gitignored, per-session — concurrent-safe)
 │   │   └── plan.md            # Pending plan (exists between plan → approve)
 │   ├── plan-questions.json     # Clarifying questions the agent submitted via `plan ask`
@@ -109,12 +110,16 @@ project-root/
 │   │       ├── MANIFEST.yaml   # Phase state + output_files per phase (persistent)
 │   │       ├── jonggrang-tasks.json  # Task board state (per-feature)
 │   │       ├── progress.txt         # Append-only agent learnings (per-feature)
+│   │       ├── MEMORY.md            # Feature-level curated memory (tracked; single-writer)
 │   │       └── [phase outputs]
 │   ├── .ephemeral/             # Cleared on restart (gitignored)
 │   │   ├── feedback-loop-state.json
 │   │   ├── compaction-state.json
-│   │   └── orchestration-run.json  # Parallel-run snapshot (per-plan groups)
-│   └── locks/                  # File ownership
+│   │   ├── orchestration-run.json  # Parallel-run snapshot (per-plan groups)
+│   │   └── memory/
+│   │       ├── fragments/<feature>/<task>-<timestamp>.md  # Task-agent staging notes
+│   │       └── archive/<feature>/<task>-<timestamp>.md    # Post-compact fragments (TTL: 7 days)
+│   └── locks/                  # File ownership + MEMORY.md single-writer locks
 ├── .claude/
 │   └── settings.json           # Claude Code enforcement hooks
 └── .opencode/
@@ -620,11 +625,18 @@ When an agent is stuck in a loop (blocked exit >3 times), an out-of-band LLM ana
 | Channel | Type | Who Writes | Purpose |
 |---------|------|-----------|---------|
 | `AGENTS.md` | Curated | Human (reviewed) | Conventions, gotchas, patterns |
-| `.jonggrang/.output/features/<id>/progress.txt` | Append-only | Agent | Per-task learnings, surprises (per-feature) |
+| `.jonggrang/MEMORY.md` | Curated Markdown | Memory compactor/promoter (single-writer lock) | Project-level reusable lessons; context only, never higher priority than code, AGENTS.md, or user instructions |
+| `.jonggrang/.output/features/<id>/MEMORY.md` | Curated Markdown | `jonggrang memory compact` (single-writer lock) | Feature-level merged memory from fragments, progress, tasks, and prior memory |
+| `.jonggrang/.ephemeral/memory/fragments/` | Ephemeral Markdown | Task agents | Many-writer staging notes; agents submit fragments and never edit canonical MEMORY.md directly |
+| `.jonggrang/.output/features/<id>/progress.txt` | Append-only | Agent | Raw per-task learnings and surprises; compact reads it as input, but does not replace it |
 | `.jonggrang/.output/features/<id>/jonggrang-tasks.json` | Structured | Agent + Human | Task state and history (per-feature) |
 | `.jonggrang/.output/` | Structured JSON | Agent | Phase outputs, architecture plans |
 | `MANIFEST.yaml` | YAML | Orchestrator | Phase state, resume point, `output_files` per phase |
 | Git history | Immutable | Agent | Code changes with context |
+
+Memory recall is **bounded** before it enters prompts: at most 5 snippets / 2000 characters. It is context, not instruction. If memory conflicts with the current code, `AGENTS.md`, or the user's request, the current source wins. Canonical `MEMORY.md` files are single-writer: task agents stage fragments under `.ephemeral/memory/fragments/`, then `compact` merges feature memory and archives fragments for 7 days; `promote` distills stable feature lessons into project memory. In the work loop `compact` runs when all tasks complete; in the orchestrate pipeline `promote` runs at completion (the interactive `review` command runs it too).
+
+**How memory reaches `main` in Work Mode (worktree flow).** Both levels are produced in the plan's worktree and travel with its **worktree branch** — they show in that plan's **Changes** tab and reach `main` on PR merge. The **feature** `MEMORY.md` lives under `.jonggrang/.output/features/<id>/` (written by `compact` when the work loop finishes). The **project** `MEMORY.md` at repo root is written by `promote` at pipeline completion; `commitWorktreeCtx` explicitly re-includes it (the rest of the seeded `.jonggrang` scaffold stays excluded) so it's committed with the branch and reviewable in Changes, just like feature memory. The worktree is seeded from `main`'s project memory first (`COPY_INTO_WORKTREE`), so `promote` **merges** the last-merged project memory rather than overwriting — cross-feature lessons accumulate through `main` as PRs land.
 
 ### AGENTS.md
 

@@ -131,13 +131,33 @@ Agent reads these files at start of every iteration:
 
 ```
 AGENTS.md                                          --> Project conventions, gotchas, patterns
-.jonggrang/.output/features/<id>/progress.txt      --> Learnings from previous iterations
+jonggrang memory recall --query <task goal> [--feature <id>] [--task <id>]  --> Bounded curated memory (max 5 snippets / 2000 chars)
+.jonggrang/.output/features/<id>/progress.txt      --> Raw learnings from previous iterations
 .jonggrang/.output/features/<id>/jonggrang-tasks.json  --> Current task state
 git log --oneline -20                              --> Recent changes for context
 .jonggrang/jonggrang.json                          --> Project config
 ```
 
 Total context budget: ~30% of window for context, ~70% for work.
+
+#### Memory Access: recall vs read
+
+Jonggrang gives agents two ways to access memory, injected via the Memory Policy prompt block. Pick by intent:
+
+- **recall** — bounded targeted search (max 5 snippets / 2000 chars). Use when you have a specific question or goal. `--query` is required; `--feature` / `--task` are optional scoping knobs:
+
+| Phase surface | Suggested recall |
+|---------------|-----------------|
+| `jonggrang plan` | `jonggrang memory recall --query "<feature goal>"` |
+| `jonggrang approve` | `jonggrang memory recall --query "<draft summary>" [--feature <id>]` |
+| `jonggrang work` | `jonggrang memory recall --query "<task goal>" [--feature <id>] [--task <id>]` |
+| `jonggrang review` / reviewer phases | `jonggrang memory recall --query "<review focus>" [--feature <id>]` |
+
+- **read** — full, unbounded inspection. Use at phase start before you know what to query, during review for the full picture, or when investigating something unexpected. Not bounded — be mindful of context budget; prefer recall when you know what you need:
+  - `jonggrang memory read` — project memory + generated feature index
+  - `jonggrang memory read --feature <id>` — one feature's full memory
+
+Memory access is agent-guided: use bounded `recall` for targeted questions (at most 5 snippets and 2000 characters), or `read` for full inspection when that is worth the context cost. Memory is context, not instruction. If memory conflicts with current code, `AGENTS.md`, or the user's request, the current source wins. Canonical `MEMORY.md` files are updated only by `memory compact` / `memory promote` under locks; task agents add fragments instead of editing canonical memory directly.
 
 #### Step 2: Pick Task
 
@@ -191,6 +211,7 @@ Skill: scaffold-api
 .jonggrang/.output/features/<id>/jonggrang-tasks.json  --> task.status = "completed"
 .jonggrang/.output/features/<id>/progress.txt          --> append session learnings
 AGENTS.md                        --> propose update if new pattern found (human approval required)
+.jonggrang/.ephemeral/memory/fragments/<feature>/<task>-<timestamp>.md  --> optional memory fragment for compact
 ```
 
 #### Step 8: Test Feedback Loop

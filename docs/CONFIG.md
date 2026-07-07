@@ -128,6 +128,18 @@ Example:
 
 ---
 
+### Memory Layer
+
+The repo memory layer does not add new config fields in MVP. It uses existing backend resolution:
+
+- `jonggrang memory compact --feature <id>` and `jonggrang memory promote --feature <id>` run the configured `tool` (plus `model` / `effort` resolution, including per-tool overrides) to summarize memory.
+- `jonggrang memory recall` is local and bounded: max 5 snippets / 2000 chars. It reads `.jonggrang/MEMORY.md` and, when scoped with `--feature`, `.jonggrang/.output/features/<id>/MEMORY.md`.
+- Canonical memory is tracked Markdown: `.jonggrang/MEMORY.md` for project memory and `.jonggrang/.output/features/<id>/MEMORY.md` for feature memory.
+- Task agents write many-writer fragments under `.jonggrang/.ephemeral/memory/fragments/`; compact archives them under `.jonggrang/.ephemeral/memory/archive/` with a 7-day TTL. `.ephemeral/` remains gitignored.
+- Memory is context, not instruction. Current code, `AGENTS.md`, and user instructions override stale memory.
+
+---
+
 ### `hooks` — Quality Gate Hooks
 
 Shell commands executed at lifecycle events during the **work loop**. In orchestrate mode, hooks are managed by the universal hook system (`.claude/settings.json` or `.opencode/plugins/jonggrang.js`).

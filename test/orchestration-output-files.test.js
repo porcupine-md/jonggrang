@@ -166,6 +166,67 @@ test('buildPhaseContext does not include OUTPUT_FILES instruction (git-based)', 
   assert.ok(!ctx.includes('OUTPUT_FILES:'), 'OUTPUT_FILES instruction should not be in prompt (git-based tracking)');
 });
 
+// ── buildPhaseContext: memory policy injection (#79) ──────────
+// Regression guard: phases 3-7, 9-17 must inject memory policy (recall + read
+// + link guidance). Phase 8 must NOT (buildWorkPrompt already injects it there).
+// If someone edits buildPhaseContext and drops the inject, these go red.
+
+function makeMemManifest(featureId = 'feat-test') {
+  return {
+    description: 'test feature',
+    work_type: 'SMALL',
+    active_phases: [3, 8, 9, 14],
+    feature_id: featureId,
+    phases: { 3: { status: 'completed' }, 8: { status: 'completed' } },
+  };
+}
+
+test('buildPhaseContext injects memory policy for agent-bearing phases (3-17, except 8)', () => {
+  const root = makeTempProject();
+  const manifest = makeMemManifest('feat-test');
+  // Sample phases across the range: discovery(3), architecting(7),
+  // simplification(9), code-quality(12), testing(14), completion(17)
+  for (const phaseNum of [3, 7, 9, 12, 14, 17]) {
+    const ctx = orchestration.buildPhaseContext(
+      { ...manifest, current_phase: phaseNum },
+      phaseNum,
+      root,
+    );
+    assert.ok(ctx.includes('## Jonggrang Memory Policy'),
+      `phase ${phaseNum} should inject memory policy header`);
+    assert.ok(/jonggrang memory recall --query/.test(ctx),
+      `phase ${phaseNum} should include recall command`);
+    assert.ok(/jonggrang memory read/.test(ctx),
+      `phase ${phaseNum} should include read command`);
+    assert.ok(/\[label\]\(path\)/.test(ctx),
+      `phase ${phaseNum} should include link-tracing guidance`);
+  }
+});
+
+test('buildPhaseContext does NOT inject memory policy for phase 8 (no double-inject)', () => {
+  const root = makeTempProject();
+  const manifest = makeMemManifest('feat-test');
+  const ctx = orchestration.buildPhaseContext(
+    { ...manifest, current_phase: 8 },
+    8,
+    root,
+  );
+  assert.ok(!ctx.includes('## Jonggrang Memory Policy'),
+    'phase 8 must not inject memory policy (buildWorkPrompt handles it)');
+});
+
+test('buildPhaseContext passes feature_id through to memory policy prompt', () => {
+  const root = makeTempProject();
+  const manifest = makeMemManifest('feat-billing');
+  const ctx = orchestration.buildPhaseContext(
+    { ...manifest, current_phase: 9 },
+    9,
+    root,
+  );
+  assert.ok(ctx.includes('--feature feat-billing'),
+    'memory policy should contain concrete featureId in recall/read commands');
+});
+
 // ── completePhase with outputFiles param ─────────────────────
 
 test('completePhase 4-arg with outputFiles stores files', () => {
