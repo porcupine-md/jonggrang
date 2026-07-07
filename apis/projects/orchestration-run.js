@@ -31,6 +31,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const COPY_INTO_WORKTREE = [
     '.jonggrang/jonggrang.json',
     '.jonggrang/.output',
+    '.jonggrang/MEMORY.md',
     '.jonggrang/skills',
     '.jonggrang/lib',
     '.claude',
@@ -170,15 +171,33 @@ module.exports = function(deps) {
     const SEEDED_PATHS = [...new Set(COPY_INTO_WORKTREE.map(p => p.split('/')[0])), 'node_modules'];
     const DIFF_EXCLUDES = SEEDED_PATHS.flatMap(p => [`:(exclude)${p}`, `:(exclude)${p}/**`]);
 
-    function commitWorktreeCtx(ctx, wt, message) {
+    function commitWorktreeCtx(ctx, wt, message, featureId) {
         gitSync(ctx, wt, ['add', '-A']);
-        // Unstage seeded scaffold + deps so the feature commit is code-only.
+        // Unstage seeded scaffold + deps so the feature commit is code-only...
         try { gitSync(ctx, wt, ['reset', '-q', '--', ...SEEDED_PATHS]); } catch {}
+        // ...but DO include THIS feature's own progress state (tasks/manifest/
+        // progress/plan) so it travels with the work-mode branch. Other features
+        // and shared scaffold stay excluded.
+        if (featureId) {
+            try { gitSync(ctx, wt, ['add', '-A', '--', `.jonggrang/.output/features/${featureId}`]); } catch {}
+        }
+        // ...and the project MEMORY.md: `promote` updates it in THIS worktree at
+        // pipeline completion, so it's a change this feature produced — commit it
+        // with the branch (shows in Changes, reaches main on PR merge), same as
+        // feature memory. (The rest of the .jonggrang scaffold stays excluded.)
+        try { gitSync(ctx, wt, ['add', '-A', '--', PROJECT_MEMORY_PATH]); } catch {}
         const staged = gitSync(ctx, wt, ['diff', '--cached', '--name-only']).trim();
         if (!staged) return false;
         gitSync(ctx, wt, ['commit', '-m', message, '-m', lib.COAUTHOR_TRAILER]);
         return true;
     }
+
+    // Positive pathspec for a feature's own progress dir — git exclude pathspecs
+    // always win, so we run a SEPARATE diff for this and merge it with the code diff.
+    const featureOutputPathspec = (featureId) => `.jonggrang/.output/features/${featureId}`;
+    // Project memory lives at repo root; `.jonggrang` is a seeded/excluded path, so
+    // it also needs a separate positive diff to surface in the Changes view.
+    const PROJECT_MEMORY_PATH = '.jonggrang/MEMORY.md';
 
     // Untracked files (from Agent/Terminal sessions) don't show in `git diff`
     // until registered — mark intent-to-add first so new files appear with
@@ -187,18 +206,28 @@ module.exports = function(deps) {
         try { gitSync(ctx, wt, ['add', '-A', '-N']); } catch {}
     }
 
-    function changedFilesCtx(ctx, wt, baseSha) {
+    function changedFilesCtx(ctx, wt, baseSha, featureId) {
         registerUntracked(ctx, wt);
-        const out = gitSync(ctx, wt, ['diff', '--name-status', baseSha, '--', '.', ...DIFF_EXCLUDES]);
+        // Code changes (all seeded/.jonggrang excluded)...
+        let out = gitSync(ctx, wt, ['diff', '--name-status', baseSha, '--', '.', ...DIFF_EXCLUDES]);
+        // ...plus THIS feature's own progress dir (separate diff — exclude wins).
+        if (featureId) {
+            try { out += '\n' + gitSync(ctx, wt, ['diff', '--name-status', baseSha, '--', featureOutputPathspec(featureId)]); } catch {}
+        }
+        // ...plus the project MEMORY.md (promote updates it in this worktree).
+        try { out += '\n' + gitSync(ctx, wt, ['diff', '--name-status', baseSha, '--', PROJECT_MEMORY_PATH]); } catch {}
+        const seen = new Set();
         return out.split('\n').filter(Boolean).map(line => {
             const tabIdx = line.indexOf('\t');
             if (tabIdx < 0) return { status: line.trim(), file: '' };
             return { status: line.slice(0, tabIdx), file: line.slice(tabIdx + 1) };
-        });
+        }).filter(e => e.file && !seen.has(e.file) && seen.add(e.file));
     }
 
     function fileDiffCtx(ctx, wt, baseSha, file) {
         registerUntracked(ctx, wt);
+        // A specific file (code or the feature's own .output) diffs directly; the
+        // full diff excludes seeded/.jonggrang (feature .output shows via file view).
         return gitSync(ctx, wt, file
             ? ['diff', baseSha, '--', file]
             : ['diff', baseSha, '--', '.', ...DIFF_EXCLUDES]);
@@ -271,7 +300,7 @@ module.exports = function(deps) {
         // Base commit so the diff (vs baseSha) shows ONLY work done in the worktree.
         let effectiveBase = made.baseSha;
         try {
-            if (commitWorktreeCtx(ctx, made.worktreePath, `chore: jonggrang workspace for ${info.featureId}`)) {
+            if (commitWorktreeCtx(ctx, made.worktreePath, `chore: jonggrang workspace for ${info.featureId}`, info.featureId)) {
                 effectiveBase = gitSync(ctx, made.worktreePath, ['rev-parse', 'HEAD']).trim();
             }
         } catch { /* keep original baseSha */ }
@@ -281,6 +310,25 @@ module.exports = function(deps) {
         };
         writeWorktreeMeta(project, all);
         return { ...made, baseSha: effectiveBase, created: true };
+    }
+
+    // Re-seed the feature's task list from MAIN into the worktree at run start.
+    // approve/append writes tasks to MAIN's .output/features/<fid>/; a REUSED
+    // worktree (created earlier, before an append) would otherwise keep a stale
+    // task list and the appended tasks would never appear/run (the dashboard now
+    // reads the worktree). Main is authoritative at run start (it holds the approved
+    // + appended list plus the previous run's completed snapshot); the worktree
+    // then takes over as the live source during the run.
+    function seedFeatureFromMain(project, ctx, featureId) {
+        const rel = path.join('.jonggrang', '.output', 'features', featureId);
+        const wt = ctx.wt(featureId);
+        try {
+            if (ctx.mode === 'container') {
+                containerCopy(ctx, [{ src: `${ctx.root}/${rel}`, dst: `${wt}/${rel}` }]);
+            } else {
+                lib.copyToWorktree(project.path, ctx.hostWt(featureId), [rel]);
+            }
+        } catch (err) { console.error('seedFeatureFromMain error:', err.message); }
     }
 
     // In-container push using the mounted SSH key (staged to a root-owned 0600 file).
@@ -481,34 +529,10 @@ module.exports = function(deps) {
         if (group.logTail.length > LOG_TAIL_MAX) group.logTail.shift();
     }
 
-    function applySignal(project, signal, group) {
-        if (signal.type !== 'task_status' || !signal.taskId) return;
-        try {
-            // Scope resolution to the emitting group's feature. Per-feature numbering
-            // means a bare id (task-001) recurs across features, so without this hint
-            // findTaskFeature could resolve to the wrong feature (active/first-match)
-            // and mark done a task in a different plan.
-            const featureId = lib.findTaskFeature(project.path, signal.taskId, { featureId: group?.featureId });
-            if (!featureId) {
-                console.error('orchestration applySignal error: task feature not found', signal.taskId);
-                return;
-            }
-            const tasksFile = lib.tasksFileFor(project.path, featureId);
-            if (signal.status === 'completed') lib.markTaskDone(tasksFile, signal.taskId);
-            else lib.updateTaskStatus(tasksFile, signal.taskId, signal.status);
-            // The host write succeeded, so applySignal is the LIVE writer of main
-            // tasks.json for this group. Tell the periodic mirror to leave tasks.json
-            // alone — otherwise it copies the worktree's stale copy (the worker emits
-            // signals but never updates its own tasks.json mid-task) back over these
-            // updates, reverting in_progress/completed → pending during the run.
-            if (group) group._tasksLiveWritten = true;
-        } catch (err) {
-            // Host write failed (e.g. sandbox-Linux root-owned main → EACCES). Leave
-            // _tasksLiveWritten unset so syncTasks mirrors the worktree copy as the
-            // fallback path. Single writer either way — never both at once.
-            console.error('orchestration applySignal error:', err.message);
-        }
-    }
+    // NOTE: the host no longer writes main tasks.json from task_status signals.
+    // The worktree worker writes its OWN .output/features/<fid>/jonggrang-tasks.json
+    // (the single source of truth); the host only READS it and emits to the UI
+    // (see emitFeatureProgress). This removes the dual-writer "tasks disappear" bug.
 
     // The worktree worker updates the manifest in its OWN seeded copy
     // (<worktree>/.jonggrang/.output/...), but the web pipeline view reads the
@@ -558,28 +582,98 @@ module.exports = function(deps) {
         mirrorFromWorktree(project, ctx, group,
             path.join('.jonggrang', '.output', 'features', group.featureId, 'progress.txt'), 'syncProgress');
     }
-    // Mirror the worktree's per-feature task board back to main. The host-side
-    // applySignal write fails under sandbox (main tasks.json is root-owned by the
-    // in-container approve → host EACCES), so mirror the file via the container.
-    function syncTasks(project, ctx, group) {
-        // If applySignal is successfully writing main tasks.json (host / macOS bind
-        // mount), it is the single live writer — mirroring the worktree's stale copy
-        // here would revert its in_progress/completed updates back to pending. Only
-        // mirror when applySignal's host write can't land (sandbox-Linux root-owned).
-        if (group._tasksLiveWritten) return;
-        mirrorFromWorktree(project, ctx, group,
-            path.join('.jonggrang', '.output', 'features', group.featureId, 'jonggrang-tasks.json'), 'syncTasks');
+    // Write a file into MAIN's project tree (host fs; falls back to an in-container
+    // write when the host copy is root-owned under sandbox).
+    function writeMainFile(project, ctx, rel, content) {
+        const dst = path.join(project.path, rel);
+        try { fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.writeFileSync(dst, content); return; }
+        catch (e) { if (ctx.mode !== 'container') throw e; }
+        const dstC = path.join(ctx.root, rel);
+        execFileSync('docker', ['exec', '-i', ctx.container, 'sh', '-c', `mkdir -p "$(dirname "${dstC}")" && cat > "${dstC}"`], { input: content, maxBuffer: GIT_MAXBUF });
+    }
+
+    // MERGE the worktree's task board into main (not overwrite): the worktree holds
+    // the live statuses of the tasks it ran, but MAIN may carry tasks APPENDED during
+    // the run (append writes to main). Overwriting would wipe those. Keep worktree
+    // versions for shared ids and preserve main-only (appended) tasks. Returns true
+    // if any preserved appended task is still pending (→ reopen manifest so it runs).
+    function snapshotTasksMerged(project, ctx, group) {
+        const fid = group.featureId;
+        const rel = path.join('.jonggrang', '.output', 'features', fid, 'jonggrang-tasks.json');
+        const base = group.hostWorktreePath || group.worktreePath;
+        let wt; try { wt = JSON.parse(fs.readFileSync(path.join(base, rel), 'utf8')); } catch { return false; }
+        let main; try { main = JSON.parse(fs.readFileSync(path.join(project.path, rel), 'utf8')); } catch { main = { tasks: [] }; }
+        const wtIds = new Set((wt.tasks || []).map(t => t.id));
+        const appended = (main.tasks || []).filter(t => !wtIds.has(t.id));
+        const merged = { ...wt, tasks: (wt.tasks || []).concat(appended) };
+        writeMainFile(project, ctx, rel, JSON.stringify(merged, null, 2) + '\n');
+        return appended.some(t => t.status !== 'completed' && t.status !== 'skipped');
+    }
+
+    // If tasks were appended to main mid-run, the worktree manifest (snapshotted over
+    // main) marks execution phases completed — reopen them so `work` runs the appended
+    // tasks instead of skipping to post-work.
+    function reopenMainManifestIfPending(project, ctx, group) {
+        const rel = path.join('.jonggrang', '.output', 'features', group.featureId, 'MANIFEST.yaml');
+        try {
+            const m = orchestration.readManifest(path.join(project.path, rel));
+            if (!m) return;
+            let changed = false;
+            for (const n of (m.active_phases || [])) {
+                if (n >= 8 && m.phases?.[n]?.status === 'completed') { m.phases[n].status = 'pending'; changed = true; }
+            }
+            if (changed || m.status === 'completed') {
+                m.status = 'in_progress'; m.updated_at = new Date().toISOString();
+                // Use orchestration.writeManifest (correct serializer, same as approve's
+                // reopen). Host write works for host + macOS-sandbox (bind mount); fall
+                // back to an in-container write only if the host copy is root-owned.
+                try { orchestration.writeManifest(path.join(project.path, rel), m); }
+                catch (e) { if (ctx.mode === 'container') writeMainFile(project, ctx, rel, require('js-yaml').dump(m)); else throw e; }
+            }
+        } catch (err) { console.error('reopenMainManifestIfPending error:', err.message); }
+    }
+
+    // ONE-TIME snapshot of the feature's live worktree progress → main, taken when
+    // the run ends. The isolated worktree is the source of truth WHILE it runs
+    // (dashboard reads it via sandbox.featureOutputDir); this leaves a final copy in
+    // main so the dashboard still has state after the worktree is removed. Tasks are
+    // MERGED (preserving any tasks appended to main mid-run); the manifest is then
+    // reopened if those appended tasks are still pending.
+    function snapshotFeatureToMain(project, ctx, group) {
+        syncManifest(project, ctx, group);
+        syncProgress(project, ctx, group);
+        const hasPendingAppended = snapshotTasksMerged(project, ctx, group);
+        if (hasPendingAppended) reopenMainManifestIfPending(project, ctx, group);
+    }
+
+    // Read the feature's LIVE progress from its worktree and push it to the UI over
+    // sockets — READ-ONLY (never writes main), so there is no dual-writer revert.
+    // Running feature's tasks come from the worktree (live); other features from main.
+    function emitFeatureProgress(project, group) {
+        const fid = group.featureId;
+        const dir = sandbox.featureOutputDir(project, fid);
+        try {
+            const others = (lib.getAllTasks(project.path).tasks || []).filter(t => t.feature_id !== fid);
+            const live = JSON.parse(fs.readFileSync(path.join(dir, 'jonggrang-tasks.json'), 'utf8')).tasks || [];
+            const tasks = others.concat(live.map(t => ({ ...t, feature_id: fid })));
+            emit(project.id, 'tasks.update', { tasks });
+        } catch { /* tasks file not ready */ }
+        try {
+            const manifest = orchestration.readManifest(path.join(dir, 'MANIFEST.yaml'));
+            if (manifest) emit(project.id, 'manifest.updated', { manifest });
+        } catch { /* manifest not ready */ }
+        try {
+            const content = fs.readFileSync(path.join(dir, 'progress.txt'), 'utf8');
+            emit(project.id, 'progress.update', { content });
+        } catch { /* no progress log yet */ }
     }
 
     function wireWorker(project, ctx, run, group) {
         const child = group.child;
         group.pid = child.pid;
-        // Live-mirror the worktree manifest + progress log + task board → main while the worker runs.
-        group.manifestSync = setInterval(() => {
-            syncManifest(project, ctx, group);
-            syncProgress(project, ctx, group);
-            syncTasks(project, ctx, group);
-        }, 1500);
+        // Live progress: READ the worktree (source of truth) and emit to the UI.
+        // No writes to main → no dual-writer revert (the "tasks disappear" bug).
+        group.manifestSync = setInterval(() => emitFeatureProgress(project, group), 1500);
         let buf = '';
         const onData = (stream) => (data) => {
             buf += data.toString();
@@ -594,7 +688,9 @@ module.exports = function(deps) {
                     try { signal = JSON.parse(trimmed); } catch { /* not JSON */ }
                 }
                 if (signal && signal.type === 'task_status') {
-                    applySignal(project, signal, group);
+                    // Worker already wrote its own worktree tasks.json; just refresh
+                    // the UI live from that source (read-only, no main write).
+                    emitFeatureProgress(project, group);
                     continue;
                 }
                 pushLog(group, trimmed);
@@ -608,12 +704,13 @@ module.exports = function(deps) {
             group.exitCode = code;
             group.finishedAt = new Date().toISOString();
             if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
-            syncManifest(project, ctx, group); // final state (e.g. completed) → main project
-            syncProgress(project, ctx, group); // final progress log → main project
-            syncTasks(project, ctx, group);    // final task board → main project
+            // Decision (b): one-time snapshot of the worktree's final progress → main
+            // so the dashboard keeps the last state after the worktree is removed.
+            snapshotFeatureToMain(project, ctx, group);
+            emitFeatureProgress(project, group); // final UI refresh
             if (code === 0) {
                 try {
-                    group.committed = commitWorktreeCtx(ctx, group.worktreePath, `feat(${group.featureId}): ${group.title}`);
+                    group.committed = commitWorktreeCtx(ctx, group.worktreePath, `feat(${group.featureId}): ${group.title}`, group.featureId);
                 } catch (err) {
                     group.error = `commit failed: ${err.message}`;
                 }
@@ -643,6 +740,9 @@ module.exports = function(deps) {
     // opts.workerArgs overrides the default all-tasks args (single task / resume).
     function startGroup(project, ctx, run, g, opts = {}) {
         const wt = ensureWorktree(project, ctx, g);
+        // Pull the latest approved/appended task list from main into the worktree
+        // so a reused worktree picks up tasks added since it was created.
+        seedFeatureFromMain(project, ctx, g.featureId);
         const group = {
             featureId: g.featureId, branch: wt.branch, title: g.title, taskIds: g.taskIds,
             status: 'running', worktreePath: wt.worktreePath, hostWorktreePath: wt.hostWorktreePath,
@@ -881,7 +981,7 @@ module.exports = function(deps) {
         if (!g) return res.status(404).json({ error: { code: 'GROUP_NOT_FOUND', message: 'No worktree for this plan yet' } });
         const ctx = buildCtx(project);
         try {
-            const files = changedFilesCtx(ctx, g.worktree_path, g.base_sha);
+            const files = changedFilesCtx(ctx, g.worktree_path, g.base_sha, g.feature_id);
             const { file } = req.query;
             const diff = file ? fileDiffCtx(ctx, g.worktree_path, g.base_sha, String(file)) : null;
             res.json({ feature_id: g.feature_id, branch: g.branch, files, file: file || null, diff });
@@ -911,7 +1011,7 @@ module.exports = function(deps) {
             // changes before pushing. No-op when the tree is clean.
             try {
                 if (fs.existsSync(ctx.hostWt(g.feature_id))) {
-                    commitWorktreeCtx(ctx, g.worktree_path, `feat(${g.feature_id}): ${g.title || 'worktree changes'}`);
+                    commitWorktreeCtx(ctx, g.worktree_path, `feat(${g.feature_id}): ${g.title || 'worktree changes'}`, g.feature_id);
                 }
             } catch (err) {
                 return res.status(500).json({ error: { code: 'COMMIT_ERROR', message: err.message } });
