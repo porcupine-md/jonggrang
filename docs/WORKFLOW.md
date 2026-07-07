@@ -157,7 +157,7 @@ Jonggrang gives agents two ways to access memory, injected via the Memory Policy
   - `jonggrang memory read` — project memory + generated feature index
   - `jonggrang memory read --feature <id>` — one feature's full memory
 
-Recall is **mandatory but bounded**: at most 5 snippets and 2000 characters enter the prompt. Memory is context, not instruction. If memory conflicts with current code, `AGENTS.md`, or the user's request, the current source wins. Canonical `MEMORY.md` files are updated only by `memory compact` / `memory promote` under locks; task agents add fragments instead of editing canonical memory directly.
+Memory access is agent-guided: use bounded `recall` for targeted questions (at most 5 snippets and 2000 characters), or `read` for full inspection when that is worth the context cost. Memory is context, not instruction. If memory conflicts with current code, `AGENTS.md`, or the user's request, the current source wins. Canonical `MEMORY.md` files are updated only by `memory compact` / `memory promote` under locks; task agents add fragments instead of editing canonical memory directly.
 
 #### Step 2: Pick Task
 
