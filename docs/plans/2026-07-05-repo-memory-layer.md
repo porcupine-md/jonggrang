@@ -44,7 +44,7 @@ from MVP. `memory read` (no flag) is now the clean entrypoint.
 ```bash
 jonggrang memory read                         # project MEMORY.md + generated feature index (read-only)
 jonggrang memory read --feature <id>          # feature memory detail
-jonggrang memory recall --phase <phase> --query "..." [--feature <id>] [--task <id>]
+jonggrang memory recall --query "..." [--feature <id>] [--task <id>]
 jonggrang memory fragment add --feature <id> --task <id> --file <path>
 jonggrang memory compact --feature <id>
 jonggrang memory promote --feature <id>

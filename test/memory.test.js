@@ -110,8 +110,7 @@ test('addFragment validates tasks, writes unique staging files, and leaves canon
 test('recall is bounded, scoped, structured, ranked by query, and empty-safe', () => {
   const emptyRoot = tempProject();
   try {
-    assert.deepEqual(memory.recall(emptyRoot, { phase: 'plan', query: 'anything' }), {
-      phase: 'plan',
+    assert.deepEqual(memory.recall(emptyRoot, { query: 'anything' }), {
       query: 'anything',
       featureId: null,
       taskId: null,
@@ -155,14 +154,14 @@ test('recall is bounded, scoped, structured, ranked by query, and empty-safe', (
       'feature-only detail needle',
     ].join('\n'));
 
-    const projectOnly = memory.recall(root, { phase: 'work', query: 'needle' });
+    const projectOnly = memory.recall(root, { query: 'needle' });
     assert.equal(projectOnly.featureId, null);
     assert.equal(projectOnly.count <= memory.RECALL_MAX_SNIPPETS, true);
     assert.equal(projectOnly.snippets.every(s => s.scope === 'project'), true);
     assert.equal(projectOnly.snippets[0].heading, 'Project Needle Winner');
     assert.equal(projectOnly.snippets[0].text.startsWith('## Project Needle Winner'), false);
 
-    const scoped = memory.recall(root, { phase: 'work', query: 'needle', featureId: 'feat-a', taskId: 'task-001' });
+    const scoped = memory.recall(root, { query: 'needle', featureId: 'feat-a', taskId: 'task-001' });
     assert.equal(scoped.count <= memory.RECALL_MAX_SNIPPETS, true);
     assert.equal(scoped.snippets.reduce((sum, s) => sum + s.text.length, 0) <= memory.RECALL_MAX_CHARS, true);
     assert.ok(scoped.snippets.some(s => s.scope === 'project'));
@@ -355,8 +354,8 @@ test('renderIndex renders project memory and generated feature index without mod
 
 test('buildMemoryPolicyPrompt renders concrete work recall when feature/task are known', () => {
   const prompt = memory.buildMemoryPolicyPrompt('work', { featureId: 'feat-a', taskId: 'task-001' });
-  assert.match(prompt, /jonggrang memory recall --phase work --feature feat-a --task task-001 --query "<task goal>"/);
-  assert.doesNotMatch(prompt, /<feature_id>|<task_id>/);
+  assert.match(prompt, /jonggrang memory recall --query "<task goal>" --feature feat-a --task task-001/);
+  assert.doesNotMatch(prompt, /<feature_id>|<task_id>|--phase/);
 });
 
 test('validateFeatureExists / validateTaskExists reject invalid ids and missing state', () => {

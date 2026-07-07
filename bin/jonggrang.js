@@ -3630,8 +3630,8 @@ Usage: jonggrang memory <subcommand> [options]
 Subcommands:
   read                              Show project memory + generated feature index (read-only)
   read --feature <id>               Show one feature's memory detail (read-only)
-  recall --phase <p> --query "..."  Bounded recall for agent context (read-only)
-                    [--feature <id>] [--task <id>]
+  recall --query "..."              Bounded recall for agent context (read-only)
+                  [--feature <id>] [--task <id>]
   fragment add --feature <id> --task <id> --file <path>
                                     Stage a raw task fragment (ephemeral, never edits canonical)
   compact --feature <id>            Merge fragments + progress + tasks → feature MEMORY.md (single-writer)
@@ -3669,7 +3669,6 @@ async function cmdMemory(args) {
   while (j < subArgs.length) {
     if (subArgs[j] === '--feature')         { flags.feature = subArgs[++j]; }
     else if (subArgs[j] === '--task')       { flags.task = subArgs[++j]; }
-    else if (subArgs[j] === '--phase')      { flags.phase = subArgs[++j]; }
     else if (subArgs[j] === '--query')      { flags.query = subArgs[++j]; }
     else if (subArgs[j] === '--file')       { flags.file = subArgs[++j]; }
     else { positional.push(subArgs[j]); }
@@ -3698,13 +3697,13 @@ async function cmdMemory(args) {
       }
 
       case 'recall': {
-        if (!flags.phase) {
-          logError('--phase <plan|approve|work|review|simplify|test> is required.');
+        if (!flags.query) {
+          logError('recall requires --query "<goal>" — a free-form query to search memory.');
+          logInfo('Optional scoping: --feature <id> --task <id>');
           process.exit(1);
         }
         const result = mem.recall(projectRoot, {
-          phase: flags.phase,
-          query: flags.query || '',
+          query: flags.query,
           featureId: flags.feature,
           taskId: flags.task,
         });

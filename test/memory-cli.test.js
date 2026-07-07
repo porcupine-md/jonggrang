@@ -106,7 +106,7 @@ test('memory read --feature prints feature memory and fails cleanly when missing
   }
 });
 
-test('memory recall CLI formats bounded scoped recall and requires --phase', () => {
+test('memory recall CLI formats bounded scoped recall and requires --query', () => {
   const root = tempProject();
   try {
     createFeature(root, 'feat-a');
@@ -119,13 +119,13 @@ test('memory recall CLI formats bounded scoped recall and requires --phase', () 
       '---\nfeature_id: feat-a\nupdated_at: 2026-07-05T01:00:00.000Z\n---\n## Feature Lesson\nneedle feature detail\n'
     );
 
-    const missingPhase = runMemory(root, ['recall', '--query', 'needle']);
-    assert.notEqual(missingPhase.code, 0);
-    assert.match(missingPhase.output, /--phase <plan\|approve\|work\|review\|simplify\|test> is required/);
+    const missingQuery = runMemory(root, ['recall', '--feature', 'feat-a']);
+    assert.notEqual(missingQuery.code, 0);
+    assert.match(missingQuery.output, /recall requires --query/);
 
-    const result = runMemory(root, ['recall', '--phase', 'work', '--feature', 'feat-a', '--task', 'task-001', '--query', 'needle']);
+    const result = runMemory(root, ['recall', '--feature', 'feat-a', '--task', 'task-001', '--query', 'needle']);
     assert.equal(result.code, 0, result.output);
-    assert.match(result.stdout, /## Recall \(phase=work · feature=feat-a · task=task-001 · query="needle"\)/);
+    assert.match(result.stdout, /## Recall \(feature=feat-a · task=task-001 · query="needle"\)/);
     assert.match(result.stdout, /bounded to 5 max \/ 2000 chars/);
     assert.match(result.stdout, /### Feature Lesson/);
     assert.match(result.stdout, /_\[feature\] \.jonggrang\/\.output\/features\/feat-a\/MEMORY\.md · updated 2026-07-05_/);

@@ -82,7 +82,7 @@ assert "exits 0"                                 "[ $? -eq 0 ]"
 assert "no project MEMORY.md file exists yet"    "! [ -f .jonggrang/MEMORY.md ]"
 
 step "memory recall — empty memory should be empty-safe"
-$JG memory recall --phase plan --query "anything"
+$JG memory recall --query "anything"
 assert "recall exits 0 (not crash on empty)"     "[ $? -eq 0 ]"
 
 step "memory read --feature feat-x — missing feature, clean error"
@@ -265,9 +265,9 @@ $JG memory read --feature feat-tidak-ada 2>&1 | tail -1
 $JG memory read --feature feat-tidak-ada >/dev/null 2>&1
 assert "A4 exits 1"  "[ $? -ne 0 ]"
 
-step "A5: recall — missing --phase"
-$JG memory recall --query "x" 2>&1 | tail -1
-$JG memory recall --query "x" >/dev/null 2>&1
+step "A5: recall — missing --query"
+$JG memory recall --feature x 2>&1 | tail -1
+$JG memory recall --feature x >/dev/null 2>&1
 assert "A5 exits 1"  "[ $? -ne 0 ]"
 
 step "A6: compact — feature doesn't exist"
