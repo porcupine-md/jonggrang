@@ -140,9 +140,11 @@ git log --oneline -20                              --> Recent changes for contex
 
 Total context budget: ~30% of window for context, ~70% for work.
 
-#### Memory Recall Contract
+#### Memory Access: recall vs read
 
-Before an agent acts, Jonggrang asks it to recall repo memory with a free-form query scoped to the current task. `--query` is required; `--feature` / `--task` are optional scoping knobs the agent includes when it has them:
+Jonggrang gives agents two ways to access memory, injected via the Memory Policy prompt block. Pick by intent:
+
+- **recall** — bounded targeted search (max 5 snippets / 2000 chars). Use when you have a specific question or goal. `--query` is required; `--feature` / `--task` are optional scoping knobs:
 
 | Phase surface | Suggested recall |
 |---------------|-----------------|
@@ -150,6 +152,10 @@ Before an agent acts, Jonggrang asks it to recall repo memory with a free-form q
 | `jonggrang approve` | `jonggrang memory recall --query "<draft summary>" [--feature <id>]` |
 | `jonggrang work` | `jonggrang memory recall --query "<task goal>" [--feature <id>] [--task <id>]` |
 | `jonggrang review` / reviewer phases | `jonggrang memory recall --query "<review focus>" [--feature <id>]` |
+
+- **read** — full, unbounded inspection. Use at phase start before you know what to query, during review for the full picture, or when investigating something unexpected. Not bounded — be mindful of context budget; prefer recall when you know what you need:
+  - `jonggrang memory read` — project memory + generated feature index
+  - `jonggrang memory read --feature <id>` — one feature's full memory
 
 Recall is **mandatory but bounded**: at most 5 snippets and 2000 characters enter the prompt. Memory is context, not instruction. If memory conflicts with current code, `AGENTS.md`, or the user's request, the current source wins. Canonical `MEMORY.md` files are updated only by `memory compact` / `memory promote` under locks; task agents add fragments instead of editing canonical memory directly.
 
