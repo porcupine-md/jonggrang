@@ -302,6 +302,27 @@ function updateTaskMode(tasksFile, taskId, status, worktreeMode = false) {
 const TEST_RETRY_LIMIT = 3;
 
 /**
+ * Auto-promote feature lessons → project MEMORY.md at a phase boundary.
+ * Synchronous but failure-isolated: a promote failure does NOT block the
+ * caller (review/orchestrate still complete normally). Feature memory stays
+ * canonical on failure — retryable manually via `jonggrang memory promote`.
+ * Shared by cmdReview (interactive review) and runOrchestrationLoop
+ * (orchestrate completion) so the promote wrapper lives in one place. (#79)
+ */
+async function autoPromoteMemory(projectRoot, featureId) {
+  try {
+    const mem = require('../lib/memory');
+    logInfo('Promoting stable lessons (feature → project MEMORY.md)...');
+    const result = await mem.promote(projectRoot, featureId, { tool: TOOL, permMode: MODE });
+    if (result.skipped) logInfo(`Memory promote skipped: ${result.reason}`);
+    else logSuccess(`Project memory updated: ${path.relative(projectRoot, result.projectMemoryFile)}`);
+  } catch (e) {
+    logWarn(`Memory promote failed (non-blocking): ${e.message}`);
+    logInfo(`Feature memory intact — run \`jonggrang memory promote --feature ${featureId}\` manually.`);
+  }
+}
+
+/**
  * Run the work loop for a given tasks file.
  * Executes tasks one by one until done, max iterations reached, or blocked.
  * Does NOT handle post-work phases — caller is responsible for that.
@@ -1031,27 +1052,19 @@ async function cmdReview() {
   logInfo('Running comprehensive review...');
   await lib.runAgent(reviewPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
-  // Memory promote: distill feature lessons → project MEMORY.md (#79)
-  // Synchronous but failure-isolated (promote fail ≠ review fail).
-  // Feature memory stays canonical on failure — retryable manually.
+  // Memory promote: distill feature lessons → project MEMORY.md (#79).
+  // autoPromoteMemory is failure-isolated; here we only resolve which feature
+  // to promote. Falls back gracefully if no active manifest (ad-hoc review).
   try {
-    const mem = require('../lib/memory');
     const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
     const fid = WORK_FEATURE_ID || (existing && existing.featureId);
     if (fid) {
-      logInfo('Promoting stable lessons (feature → project MEMORY.md)...');
-      const result = await mem.promote(PROJECT_ROOT, fid, { tool: TOOL, permMode: MODE });
-      if (result.skipped) {
-        logInfo(`Memory promote skipped: ${result.reason}`);
-      } else {
-        logSuccess(`Project memory updated: ${path.relative(PROJECT_ROOT, result.projectMemoryFile)}`);
-      }
+      await autoPromoteMemory(PROJECT_ROOT, fid);
     } else {
       logInfo('Memory promote skipped: no active feature found.');
     }
   } catch (e) {
-    logWarn(`Memory promote failed (non-blocking): ${e.message}`);
-    logInfo('Feature memory intact — run `jonggrang memory promote --feature <id>` manually.');
+    logWarn(`Memory promote skipped: ${e.message}`);
   }
 
   logSuccess('Review complete. Check jonggrang-log/ for report.');
@@ -2764,17 +2777,8 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     // Memory promote: distill this feature's lessons → project MEMORY.md (#79).
     // The interactive `review` command does this too (cmdReview); the orchestrate
     // pipeline runs review as an agent phase, so promote is wired here at pipeline
-    // completion instead. Synchronous but failure-isolated (promote fail ≠ run fail).
-    try {
-      const mem = require('../lib/memory');
-      logInfo('Promoting stable lessons (feature → project MEMORY.md)...');
-      const result = await mem.promote(PROJECT_ROOT, featureId, { tool: TOOL, permMode: MODE });
-      if (result.skipped) logInfo(`Memory promote skipped: ${result.reason}`);
-      else logSuccess(`Project memory updated: ${path.relative(PROJECT_ROOT, result.projectMemoryFile)}`);
-    } catch (e) {
-      logWarn(`Memory promote failed (non-blocking): ${e.message}`);
-      logInfo(`Feature memory intact — run \`jonggrang memory promote --feature ${featureId}\` manually.`);
-    }
+    // completion instead. (#79)
+    await autoPromoteMemory(PROJECT_ROOT, featureId);
 
     feedback.clearFeedbackState(PROJECT_ROOT);
   }
@@ -3623,6 +3627,7 @@ async function cmdModel() {
 // ============================================================
 
 function cmdMemoryHelp() {
+  const mem = require('../lib/memory');
   console.log(`Jonggrang Memory — repo-tracked compounding memory (#79)
 
 Usage: jonggrang memory <subcommand> [options]
@@ -3642,7 +3647,7 @@ Principles:
     AGENTS.md, or latest user instruction, trust the more current source.
   - Canonical files (.jonggrang/MEMORY.md, .output/features/<id>/MEMORY.md)
     are written ONLY by compact/promote. Task agents submit fragments.
-  - Recall is bounded (max ${require('../lib/memory').RECALL_MAX_SNIPPETS} snippets / ${require('../lib/memory').RECALL_MAX_CHARS} chars).
+  - Recall is bounded (max ${mem.RECALL_MAX_SNIPPETS} snippets / ${mem.RECALL_MAX_CHARS} chars).
 `);
 }
 
