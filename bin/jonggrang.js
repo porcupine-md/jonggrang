@@ -2760,6 +2760,22 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
     logHeader('Orchestration Complete!');
     logSuccess(`Feature: ${manifest.description}`);
     logSuccess(`All ${manifest.active_phases.length} phases completed.`);
+
+    // Memory promote: distill this feature's lessons → project MEMORY.md (#79).
+    // The interactive `review` command does this too (cmdReview); the orchestrate
+    // pipeline runs review as an agent phase, so promote is wired here at pipeline
+    // completion instead. Synchronous but failure-isolated (promote fail ≠ run fail).
+    try {
+      const mem = require('../lib/memory');
+      logInfo('Promoting stable lessons (feature → project MEMORY.md)...');
+      const result = await mem.promote(PROJECT_ROOT, featureId, { tool: TOOL, permMode: MODE });
+      if (result.skipped) logInfo(`Memory promote skipped: ${result.reason}`);
+      else logSuccess(`Project memory updated: ${path.relative(PROJECT_ROOT, result.projectMemoryFile)}`);
+    } catch (e) {
+      logWarn(`Memory promote failed (non-blocking): ${e.message}`);
+      logInfo(`Feature memory intact — run \`jonggrang memory promote --feature ${featureId}\` manually.`);
+    }
+
     feedback.clearFeedbackState(PROJECT_ROOT);
   }
 }
