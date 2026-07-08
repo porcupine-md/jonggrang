@@ -31,6 +31,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const COPY_INTO_WORKTREE = [
     '.jonggrang/jonggrang.json',
     '.jonggrang/.output',
+    '.jonggrang/MEMORY.md',
     '.jonggrang/skills',
     '.jonggrang/lib',
     '.claude',
@@ -180,6 +181,11 @@ module.exports = function(deps) {
         if (featureId) {
             try { gitSync(ctx, wt, ['add', '-A', '--', `.jonggrang/.output/features/${featureId}`]); } catch {}
         }
+        // ...and the project MEMORY.md: `promote` updates it in THIS worktree at
+        // pipeline completion, so it's a change this feature produced — commit it
+        // with the branch (shows in Changes, reaches main on PR merge), same as
+        // feature memory. (The rest of the .jonggrang scaffold stays excluded.)
+        try { gitSync(ctx, wt, ['add', '-A', '--', PROJECT_MEMORY_PATH]); } catch {}
         const staged = gitSync(ctx, wt, ['diff', '--cached', '--name-only']).trim();
         if (!staged) return false;
         gitSync(ctx, wt, ['commit', '-m', message, '-m', lib.COAUTHOR_TRAILER]);
@@ -189,6 +195,9 @@ module.exports = function(deps) {
     // Positive pathspec for a feature's own progress dir — git exclude pathspecs
     // always win, so we run a SEPARATE diff for this and merge it with the code diff.
     const featureOutputPathspec = (featureId) => `.jonggrang/.output/features/${featureId}`;
+    // Project memory lives at repo root; `.jonggrang` is a seeded/excluded path, so
+    // it also needs a separate positive diff to surface in the Changes view.
+    const PROJECT_MEMORY_PATH = '.jonggrang/MEMORY.md';
 
     // Untracked files (from Agent/Terminal sessions) don't show in `git diff`
     // until registered — mark intent-to-add first so new files appear with
@@ -205,6 +214,8 @@ module.exports = function(deps) {
         if (featureId) {
             try { out += '\n' + gitSync(ctx, wt, ['diff', '--name-status', baseSha, '--', featureOutputPathspec(featureId)]); } catch {}
         }
+        // ...plus the project MEMORY.md (promote updates it in this worktree).
+        try { out += '\n' + gitSync(ctx, wt, ['diff', '--name-status', baseSha, '--', PROJECT_MEMORY_PATH]); } catch {}
         const seen = new Set();
         return out.split('\n').filter(Boolean).map(line => {
             const tabIdx = line.indexOf('\t');
