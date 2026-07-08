@@ -1025,6 +1025,7 @@ function parsePlanFrontmatter(content) {
   return {
     feature:     get('feature'),
     branch:      get('branch'),
+    base:        get('base'),
     work_type:   get('work_type'),
     description: get('description'),
     created_at:  get('created_at'),
@@ -1382,7 +1383,16 @@ async function cmdPlan(args, opts = {}) {
 
   if (!await ensureInit()) return;
 
-  const resolvedBase = baseBranch || lib.resolveBaseBranch(PROJECT_ROOT);
+  let resolvedBase = baseBranch;
+  if (appendTo && !resolvedBase && fs.existsSync(appendPlanPath)) {
+    const fm = lib.parsePlanFrontmatter(appendPlanPath);
+    if (fm.base) {
+      resolvedBase = fm.base;
+    }
+  }
+  if (!resolvedBase) {
+    resolvedBase = lib.resolveBaseBranch(PROJECT_ROOT);
+  }
 
   // ── Revise mode: AI rewrites an existing draft ──────────────
   if (reviseMode) {

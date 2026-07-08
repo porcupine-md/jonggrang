@@ -69,6 +69,35 @@ test('buildPlanQuestionsPrompt includes base branch instructions', () => {
   assert.ok(prompt.includes('base branch `my-custom-branch`'), 'prompt should mention the base branch in questions');
 });
 
+test('buildAppendPlanPrompt includes base branch instructions and frontmatter entry', () => {
+  // Scenario 1: Base branch passed through options overrides everything
+  const prompt1 = lib.buildAppendPlanPrompt(
+    'additional scope',
+    '---\nfeature: my-feat\nbase: "old-base"\n---\n# plan',
+    [],
+    null,
+    os.tmpdir(),
+    FAKE_DRAFT,
+    'my-feat',
+    { baseBranch: 'my-custom-branch' }
+  );
+  assert.ok(prompt1.includes('base branch `my-custom-branch`'), 'prompt should mention the custom base branch');
+  assert.ok(prompt1.includes('base: "my-custom-branch"'), 'prompt should specify the custom base branch in the frontmatter template');
+
+  // Scenario 2: Base branch is inherited from the existing plan frontmatter when option is not set
+  const prompt2 = lib.buildAppendPlanPrompt(
+    'additional scope',
+    '---\nfeature: my-feat\nbase: "my-inherited-branch"\n---\n# plan',
+    [],
+    null,
+    os.tmpdir(),
+    FAKE_DRAFT,
+    'my-feat'
+  );
+  assert.ok(prompt2.includes('base branch `my-inherited-branch`'), 'prompt should inherit the base branch from the existing plan');
+  assert.ok(prompt2.includes('base: "my-inherited-branch"'), 'prompt should specify the inherited base branch in the frontmatter template');
+});
+
 // ── Layer 2: verifyDraftWritten self-heals stray agent writes ────────────
 
 function tempProject() {
