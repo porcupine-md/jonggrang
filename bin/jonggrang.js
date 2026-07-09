@@ -1085,6 +1085,7 @@ function parsePlanFrontmatter(content) {
   return {
     feature:     get('feature'),
     branch:      get('branch'),
+    base:        get('base'),
     work_type:   get('work_type'),
     description: get('description'),
     created_at:  get('created_at'),
@@ -1442,6 +1443,17 @@ async function cmdPlan(args, opts = {}) {
 
   if (!await ensureInit()) return;
 
+  let resolvedBase = baseBranch;
+  if (appendTo && !resolvedBase && fs.existsSync(appendPlanPath)) {
+    const fm = lib.parsePlanFrontmatter(appendPlanPath);
+    if (fm.base) {
+      resolvedBase = fm.base;
+    }
+  }
+  if (!resolvedBase) {
+    resolvedBase = lib.resolveBaseBranch(PROJECT_ROOT);
+  }
+
   // ── Revise mode: AI rewrites an existing draft ──────────────
   if (reviseMode) {
     const sid = sessionId || lib.resolveActiveDraft(PROJECT_ROOT);
@@ -1579,7 +1591,7 @@ async function cmdPlan(args, opts = {}) {
     if (!answers && !noAsk && !autoApprove) {
       lib.clearPlanQuestions(questionsFile);
       logInfo('Analyzing goal — the agent may ask clarifying questions first...');
-      const qPrompt = lib.buildPlanQuestionsPrompt(description, CONFIG_FILE, srcPath);
+      const qPrompt = lib.buildPlanQuestionsPrompt(description, CONFIG_FILE, srcPath, resolvedBase);
       await lib.runAgent(qPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       const q = lib.getPlanQuestions(questionsFile);
       if (q.questions && q.questions.length > 0) {
@@ -1624,7 +1636,7 @@ async function cmdPlan(args, opts = {}) {
       const discoveryFile = path.join(draftDir, 'deep-plan-discovery.md');
       const analysisFile = path.join(draftDir, 'deep-plan-analysis.md');
       logInfo(`${BOLD}[1/3]${NC} Codebase discovery (for the additional scope)...`);
-      await lib.runAgent(lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile), TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      await lib.runAgent(lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, null, { baseBranch: resolvedBase }), TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       if (lib.fileExists(discoveryFile)) {
         const discoveryContent = fs.readFileSync(discoveryFile, 'utf8');
         logInfo(`${BOLD}[2/3]${NC} Complexity analysis & brainstorm...`);
@@ -1638,7 +1650,7 @@ async function cmdPlan(args, opts = {}) {
       logInfo('Generating extension plan...');
     }
 
-    const prompt = lib.buildAppendPlanPrompt(description, existingPlan, existingTasks, CONFIG_FILE, PROJECT_ROOT, draftFile, appendTo, { deep: deepCtx });
+    const prompt = lib.buildAppendPlanPrompt(description, existingPlan, existingTasks, CONFIG_FILE, PROJECT_ROOT, draftFile, appendTo, { deep: deepCtx, baseBranch: resolvedBase });
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
     const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
     if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1672,13 +1684,13 @@ async function cmdPlan(args, opts = {}) {
 
     // Phase 1: Discovery
     logInfo(`${BOLD}[1/3]${NC} Codebase discovery...`);
-    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, srcPath, { clarifications });
+    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, srcPath, { clarifications, baseBranch: resolvedBase });
     await lib.runAgent(discoveryPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (!lib.fileExists(discoveryFile)) {
       logError(`Discovery agent did not write ${discoveryFile}`);
       logInfo('Falling back to standard plan generation...');
-      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications });
+      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase });
       await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
       if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1693,7 +1705,7 @@ async function cmdPlan(args, opts = {}) {
       if (!lib.fileExists(analysisFile)) {
         logError(`Analysis agent did not write ${analysisFile}`);
         logInfo('Falling back to standard plan generation using discovery only...');
-        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications });
+        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase });
         await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
         const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
         if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1703,7 +1715,7 @@ async function cmdPlan(args, opts = {}) {
         logInfo(`${BOLD}[3/3]${NC} Condensing into enriched plan.md...`);
         const analysisContent = fs.readFileSync(analysisFile, 'utf8');
         const condensePrompt = lib.buildDeepPlanCondensePrompt(
-          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications }
+          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase }
         );
         await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
         const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
@@ -1730,7 +1742,7 @@ async function cmdPlan(args, opts = {}) {
     // Clear stale feedback-loop state — planning is read-only, must not be blocked.
     feedback.clearFeedbackState(PROJECT_ROOT);
 
-    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications });
+    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase });
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
     const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
     if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1747,8 +1759,8 @@ async function cmdPlan(args, opts = {}) {
   // write it into the generated plan.md frontmatter (overriding anything the AI
   // may have put there). Covers both deep + standard generation paths above.
   // Warn if it didn't take — otherwise the worktree silently cuts from HEAD.
-  if (baseBranch && lib.fileExists(draftFile) && !lib.setPlanBase(draftFile, baseBranch)) {
-    logWarn(`Could not write base "${baseBranch}" to the plan frontmatter — the worktree will start from HEAD unless you set it manually.`);
+  if (resolvedBase && lib.fileExists(draftFile) && !lib.setPlanBase(draftFile, resolvedBase)) {
+    logWarn(`Could not write base "${resolvedBase}" to the plan frontmatter — the worktree will start from HEAD unless you set it manually.`);
   }
 
   if (autoApprove) {
