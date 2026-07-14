@@ -185,9 +185,11 @@ contract keeps semantic names consistent. Each pack contributes only the rules
 and token values appropriate to its product shape.
 
 Jonggrang can ship one `neutral-application@1` pack first. More packs can be
-added without changing the plan flow. External systems such as Chakra,
-Tailwind Plus, or a commercial design kit may be referenced by a pack, but their
-source is never copied without the project's license allowing it.
+added without changing the plan flow. A guide and handoff pin the selected pack
+id and version, so a later pack release never silently changes an in-progress
+feature. External systems such as Chakra, Tailwind Plus, or a commercial design
+kit may be referenced by a pack, but their source is never copied without the
+project's license allowing it.
 
 ## When a token source is missing
 
@@ -309,6 +311,9 @@ ui_context:
     - Task task-003
   guide: .jonggrang/UI.md
   guide_revision: <content digest at approval>
+  guide_sections:
+    - Components and layout patterns
+    - Interaction, responsive, and accessibility rules
   baseline: neutral-application@1
   token_source: client/src/assets/main.css
   source_files:
@@ -323,9 +328,11 @@ ui_context:
 ```
 
 The developer, tester, and reviewer prompt receives this object and the named
-handoff sections. The root guide and exact source files remain available when
-more detail is needed. A backend without a browser, Figma, or Storybook can
-still work from local paths.
+handoff sections. The root guide stays available by its path; it is not injected
+in full. An agent reads the listed guide sections when the handoff leaves a
+question open, then follows the named source files if it needs implementation
+detail. A backend without a browser, Figma, or Storybook can still work from
+local paths.
 
 Non-UI tasks have no `ui_context`, so their prompt size and workflow stay as
 they are today.
@@ -347,23 +354,63 @@ feature. Its handoff keeps the guide revision and decisions used for that
 feature. The user can revise or extend the feature plan if pending tasks should
 adopt the newer rule.
 
-## First implementation slice
+## Delivery sequence
 
-Issue #89 should start with the smallest useful version:
+The implementation should cover the complete path, in this order.
 
-- detect UI-affecting plans and audit `.jonggrang/UI.md` when present;
-- create a draft guide with `plan ask` when the guide is missing or incomplete;
-- select an existing or starter baseline when no token source exists;
-- add a dependent UI-foundation task when the selected token source is planned;
-- show guide status, guide diff, and baseline choice beside the plan before
-  approval;
-- write the approved guide and `UI_HANDOFF.md` at feature approval;
-- add `ui_context` to UI tasks and inject only their selected handoff sections;
-- record post-feature guide proposals without auto-promoting them.
+### 1. Define the files and baseline-pack interface
 
-The initial implementation can ship the neutral application starter only.
-Dashboard, marketing, and framework-specific packs can follow without changing
-the guide, handoff, or task contract.
+Add the `.jonggrang/UI.md` and feature `UI_HANDOFF.md` formats, the task
+`ui_context` schema, and a versioned baseline-pack manifest. Ship
+`neutral-application@1` first. The manifest and the guide both pin a pack id
+and version.
+
+### 2. Detect UI work and audit the project
+
+Planning classifies UI-affecting work, locates the guide, and inspects local UI
+evidence. The audit reports the framework, theme/token source, components,
+screens, verification tools, references, and guide drift.
+
+### 3. Create or revise the root guide
+
+For a missing or incomplete guide, the planner uses focused `plan ask`
+questions, selects or recommends a baseline, and drafts the guide beside the
+plan. For an existing guide, it proposes only the relevant change. The plan UI
+shows guide status, the guide diff, baseline choice, and token status before
+approval.
+
+### 4. Materialize the approved design foundation
+
+Approval writes the guide. If the token source is `planned`, task breakdown
+creates the UI-foundation task and blocks later UI tasks on it. That task writes
+and validates the canonical token source, then marks the guide source `ready`.
+
+### 5. Build the feature handoff and tasks
+
+Approval writes `UI_HANDOFF.md` with the guide revision, baseline, shared
+feature direction, references, and task sections. Task breakdown adds
+`ui_context` to each UI task and points at its matching handoff and guide
+sections.
+
+### 6. Inject bounded context at task runtime
+
+Developer, tester, and reviewer prompts receive the task context plus the
+selected handoff text. They can read the named root-guide sections and source
+files when necessary. The runtime does not inject the full guide or unrelated
+task sections.
+
+### 7. Review and promote durable changes
+
+Review records visual, accessibility, and component-reuse results. It can add
+proposed guide updates to the feature handoff. The user promotes selected
+updates to the root guide; task agents cannot promote them themselves.
+
+### 8. Grow baseline packs and optional integrations
+
+Add dashboard, marketing, and framework-specific packs through the pack
+interface. Add Storybook lookup, component-index generation, Figma MCP, DTCG
+transforms, and visual-regression wiring only for projects that use them. These
+extensions do not change the root-guide, handoff, or task-context contract.
 
 ## Sources checked
 
