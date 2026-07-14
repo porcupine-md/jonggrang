@@ -3286,7 +3286,18 @@ function spawnJonggrang(args) {
   return spawnSync(process.execPath, [process.argv[1], ...args], { stdio: 'inherit' });
 }
 
-async function cmdAgent() {
+async function cmdAgent(rawArgs = []) {
+  // Optional interactive seed: `agent [--readonly] <initial prompt>`. Used by the
+  // web "Discuss" mode to open the Pi TUI already primed with a plan draft and,
+  // when --readonly is set, restricted to non-mutating tools.
+  let readonly = false;
+  const promptParts = [];
+  for (const a of rawArgs) {
+    if (a === '--readonly') readonly = true;
+    else promptParts.push(a);
+  }
+  const initialPrompt = promptParts.join(' ').trim();
+
   // Must set BEFORE import + initTheme() — initTheme() calls getCustomThemesDir()
   // → getAgentDir() which reads the env var. Setting it after would fall back to ~/.pi/agent.
   applyAgentDirEnv();
@@ -3434,7 +3445,15 @@ async function cmdAgent() {
   const extPath = path.join(__dirname, '..', 'hooks', 'pi', 'jonggrang-extension.ts');
   const extArgs = fs.existsSync(extPath) ? ['--extension', extPath] : [];
 
-  await main(extArgs, { extensionFactories: [jonggrangExtension] });
+  // Seed the interactive session: initial prompt as a positional arg, and (in
+  // read-only mode) restrict Pi to non-mutating tools so a discussion can't edit
+  // the repo. Prompt goes first so it isn't swallowed as a flag value.
+  const piArgs = [];
+  if (initialPrompt) piArgs.push(initialPrompt);
+  if (readonly) piArgs.push('--tools', 'read,grep,find,ls');
+  piArgs.push(...extArgs);
+
+  await main(piArgs, { extensionFactories: [jonggrangExtension] });
 }
 
 // ============================================================
@@ -4775,7 +4794,7 @@ async function main() {
       await cmdOrchestrate(planArgs);
       break;
     case 'agent':
-      await cmdAgent();
+      await cmdAgent(planArgs);
       break;
     case 'login':
       await cmdLogin();

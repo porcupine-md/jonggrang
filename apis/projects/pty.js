@@ -5,6 +5,7 @@ const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
 const sandbox = require('../../lib/sandbox');
+const lib = require('../../lib/jonggrang');
 
 module.exports = function(deps) {
     const { io, webState, lastActivity } = deps;
@@ -62,6 +63,62 @@ module.exports = function(deps) {
         if (tool === 'opencode')  return { cmd: 'opencode', args: [] };
         if (sandboxEnabled)       return { cmd: 'jonggrang', args: ['agent'] };
         return { cmd: 'node', args: [nodeCli, 'agent'] };
+    }
+
+    // ── Plan discussion (interactive, read-only) ──────────────────
+    //
+    // "Discuss" launches the project's selected coding agent in an interactive
+    // PTY session, seeded with the plan draft, running in a read-only / plan
+    // mode so the conversation refines the plan without touching the repo.
+
+    function readPlanContent(project, sessionId) {
+        try {
+            lib.migrateLegacyPlanDraft(project.path);
+            const drafts = lib.getAllDrafts(project.path);
+            const draft = sessionId
+                ? drafts.find(d => d.sessionId === sessionId)
+                : drafts[0];
+            if (draft && fs.existsSync(draft.planPath)) {
+                return fs.readFileSync(draft.planPath, 'utf-8');
+            }
+        } catch {}
+        return '(no plan content found)';
+    }
+
+    function buildDiscussSeed(planContent) {
+        return [
+            'We are in PLAN DISCUSSION mode — a READ-ONLY conversation to refine an implementation plan.',
+            'Do NOT create, edit, or delete any files, and do not run commands that modify the repository.',
+            '',
+            'Here is the current draft plan:',
+            '',
+            '--- PLAN START ---',
+            planContent,
+            '--- PLAN END ---',
+            '',
+            'Give me a 2-3 sentence summary of what this plan does and the single most important gap or risk you see, then wait for my questions. Keep answers concise.',
+        ].join('\n');
+    }
+
+    // Interactive command for each backend: seed prompt as the initial message,
+    // read-only where the CLI supports it (claude plan mode, codex read-only
+    // sandbox, Pi restricted tool set). OpenCode has no read-only CLI flag, so
+    // the seed prompt carries the constraint.
+    function resolveDiscussCommand(tool, seed, sandboxEnabled) {
+        if (tool === 'claude')   return { cmd: 'claude',   args: ['--permission-mode', 'plan', seed] };
+        if (tool === 'codex')    return { cmd: 'codex',    args: ['--sandbox', 'read-only', seed] };
+        if (tool === 'opencode') return { cmd: 'opencode', args: [seed] };
+        if (sandboxEnabled)      return { cmd: 'jonggrang', args: ['agent', '--readonly', seed] };
+        return { cmd: 'node', args: [nodeCli, 'agent', '--readonly', seed] };
+    }
+
+    // Discuss always runs in the project directory (drafts have no worktree yet).
+    function discussScope(project) {
+        return {
+            session: 'discuss',
+            hostCwd: project.path,
+            containerCwd: project.sandbox?.enabled ? sandbox.getContainerPath(project) : null,
+        };
     }
 
     function spawnPty(project, scope, cmd, args, cols, rows) {
@@ -215,6 +272,51 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
         stopSession(project, 'terminal', (req.body || {}).feature_id);
+        res.json({ ok: true });
+    });
+
+    // ── Plan discussion routes ────────────────────────────────────
+
+    router.get('/:id/plan/discuss/config', (req, res) => {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
+        const tool = readProjectTool(project);
+        const { session } = discussScope(project);
+        res.json({ tool, running: activePtySessions.has(`${project.id}:${session}`) });
+    });
+
+    router.post('/:id/plan/discuss/start', async (req, res) => {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
+
+        const { tool, cols = 80, rows = 24, sessionId = '' } = req.body || {};
+        const resolvedTool = tool || readProjectTool(project);
+        const seed = buildDiscussSeed(readPlanContent(project, sessionId));
+        const { cmd, args } = resolveDiscussCommand(resolvedTool, seed, project.sandbox?.enabled);
+        const scope = discussScope(project);
+
+        if (project.sandbox?.enabled) {
+            const running = await sandbox.isRunning(project.id);
+            if (!running) return res.status(503).json({ error: 'SANDBOX_NOT_RUNNING', message: 'Docker sandbox is not running. Start it first.' });
+        }
+
+        try {
+            spawnPty(project, scope, cmd, args, cols, rows);
+            res.json({ ok: true, tool: resolvedTool, session: scope.session });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    router.post('/:id/plan/discuss/stop', (req, res) => {
+        const project = webState.getProject(req.params.id);
+        if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
+        const { session } = discussScope(project);
+        const ptyProcess = activePtySessions.get(`${project.id}:${session}`);
+        if (ptyProcess) {
+            try { ptyProcess.kill(); } catch {}
+            activePtySessions.delete(`${project.id}:${session}`);
+        }
         res.json({ ok: true });
     });
 
