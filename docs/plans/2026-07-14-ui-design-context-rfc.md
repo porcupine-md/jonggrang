@@ -7,7 +7,7 @@
 ## TL;DR
 
 When Jonggrang plans a UI task, the agent needs more than a screenshot or a
-paragraph saying “make this feel clean.” It should first look at the components
+paragraph saying "make this feel clean." It should first look at the components
 and stories already in the project. The plan then records the user flow,
 states, references, and decisions for that one feature. Implementation adds to
 the local system, and the review checks the result with the project's own a11y
