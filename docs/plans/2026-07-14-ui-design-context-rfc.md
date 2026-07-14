@@ -1,190 +1,98 @@
-# RFC: UI Design Context for Planning and Implementation
+# Giving UI tasks useful context
 
-**Status:** Proposed — documentation and issue only; no runtime behavior changes in this branch.<br>
+**Status:** proposal only; this branch does not change Jonggrang runtime behavior.<br>
 **Tracking:** [#89](https://github.com/porcupine-md/jonggrang/issues/89)<br>
-**Date:** 2026-07-14<br>
-**Owner:** Jonggrang maintainers
+**Date:** 2026-07-14
 
-## TL;DR — Storify
+## TL;DR
 
-📐 **Peta Konteks UI**
+When Jonggrang plans a UI task, the agent needs more than a screenshot or a
+paragraph saying “make this feel clean.” It should first look at the components
+and stories already in the project. The plan then records the user flow,
+states, references, and decisions for that one feature. Implementation adds to
+the local system, and the review checks the result with the project's own a11y
+and visual tests where available.
 
-```text
-Permintaan: “buat settings page”
-             ↓
-  [Storybook / component index]
-       apa yang sudah benar-benar ada?
-             ↓
-  [approved baseline / reference]
-       primitive atau pattern mana yang boleh diadaptasi?
-             ↓
-  [UX_SPEC.md]
-       untuk siapa, flow apa, state apa, dan keputusan apa?
-             ↓
-  [implementasi lokal + story]
-       bukan copy-paste library atau screenshot
-             ↓
-  [a11y + visual regression]
-       apakah hasilnya terbukti tetap benar?
-```
+A useful split is:
 
-Agent yang hanya diberi `DESIGN.md` seperti tukang yang diberi moodboard: ia
-menangkap rasa, tetapi masih harus menebak bahan dan ukuran. Storybook memberi
-bahan yang benar-benar tersedia; token/theme memberi ukuran yang legal;
-`UX_SPEC.md` menjelaskan keputusan untuk ruangan yang sedang dibuat; dan visual
-test memeriksa hasil akhirnya. Plan menyusun konteks itu untuk satu fitur — ia
-tidak boleh diam-diam mengubah aturan rumahnya (`UI_SYSTEM.md`, token/theme,
-dan component index).
+- `UX_SPEC.md` belongs to a feature plan. It explains the work at hand.
+- The theme, `UI_SYSTEM.md`, component index, and Storybook belong to the
+  project. A plan reads them. A plan does not rewrite them as a side effect.
 
-## Decision
+That keeps a feature agent from inventing a new button, token scale, or layout
+rule just because it did not find the right context quickly.
 
-Jonggrang should not treat a `DESIGN.md`, a token file, Storybook, Figma, or a
-third-party component library as sufficient UI context on its own. A UI feature
-needs a small, layered context assembled at plan time and verified during
-implementation.
+## Why write this down
 
-The proposed order is:
+Jonggrang already gives agents a plan, codebase context, and a review loop.
+That works well for code structure. UI work has an extra problem: a request
+like “add notification settings” leaves many product choices open. Which
+control fits? Is saving immediate? What happens on failure? Does the page use
+an existing settings pattern or need a new one?
 
-```text
-existing local component/story
-  → approved framework baseline or visual reference
-  → feature UX specification
-  → local implementation + local story
-  → accessibility and visual verification
-```
+[`docs/UI.md`](../UI.md) already does part of this for the Jonggrang dashboard.
+It describes the terminal-first style, the CSS variables, and several component
+choices. It is useful reference material. It does not list every component the
+app has, describe every feature flow, or catch a visual regression. The missing
+piece is a small way to bring those sources together for each UI task.
 
-The layers have distinct ownership:
+## The working model
 
-| Artefact | Scope | Owner / source of truth | Plan's role |
-|---|---|---|---|
-| Token/theme source | Product | Existing theme; DTCG only when portability warrants it | Reference; propose a separate token task if a gap exists |
-| `UI_SYSTEM.md` | Product | Human-curated product policy | Read; update only through an explicit, reviewed design-system task |
-| Component index | Product | Generated or curated from local source and Storybook | Query; add/update entries when a component changes |
-| Storybook | Product | Local production components and states | Primary implementation reference and visual baseline |
-| `UX_SPEC.md` | Feature | Created during planning, approved with the feature plan | Compose from the other layers and record feature judgement |
+Start with what the project already owns:
 
-This answers an important boundary: **only `UX_SPEC.md` is a normal output of a
-feature plan.** A plan consumes the product-level artefacts; it must not
-silently rewrite global design policy or invent a parallel token system.
+1. Check the local component index and Storybook. Reuse an existing component
+   when it fits.
+2. If there is a gap, use an approved primitive or pattern as a starting point.
+   Record where it came from.
+3. Write down the feature's UX decisions in `UX_SPEC.md` alongside the plan.
+4. Add the finished component or page state to the local Storybook when that is
+   part of the project.
+5. Run the project's accessibility and visual checks.
 
-## Problem
+Storybook is the best reference for implementation because it shows code that
+is actually in the repository. A Figma frame, external Storybook, or Tailwind
+Plus example can still help, but it is a reference. It does not automatically
+become a component the product owns.
 
-Fresh-context coding agents can reproduce local code patterns but lack durable
-UI judgement. A generic request such as “build a settings page” leaves the
-agent to guess hierarchy, component choice, error states, responsive behavior,
-and visual density. A prose-only design document improves the guess, but does
-not prove component reuse or visual conformance.
+The agent should be able to read this information without a browser. A compact
+component index is enough for lookup; Storybook remains the place to inspect
+variants and states visually. Figma MCP and Code Connect are useful additions
+for backends that support them, but the basic flow must work from local files.
 
-The current dashboard has a useful local precedent in [`docs/UI.md`](../UI.md):
-it documents the terminal-first visual policy, CSS tokens, component decisions,
-and exceptions. It is valuable guidance, but it is not a component catalogue,
-feature flow, or visual test suite. This RFC generalizes the missing workflow;
-it does not change the current Vue/PrimeVue dashboard system.
+## What each file is for
 
-## Research verdict
+### Project-level files
 
-### `DESIGN.md`
+The project keeps these over time:
 
-Google's `DESIGN.md` format combines structured visual identity fields with
-prose rationale, linting, reference checking, and export paths. It is useful as
-an agent-readable policy layer. Its repository labels the format **alpha**, and
-prose cannot enforce the use of a particular production component.
+- The theme or token source holds visual values. Use the existing framework
+  theme in a single-product app. Use DTCG when the same tokens must feed
+  several platforms or toolchains.
+- `UI_SYSTEM.md` or `DESIGN.md` holds product rules that code cannot express
+  well: visual density, hierarchy, confirmation, and component-use rules. It
+  points to the token source instead of copying every colour and spacing value.
+- The component index maps a component name to its source, variants, story, and
+  any local rules.
+- Storybook records local components and important page states.
 
-**Use it for:** hierarchy, brand intent, do/don't rules, and cross-feature
-judgement.
+These files can change, but changing them is design-system work. It deserves an
+explicit task and review.
 
-**Do not use it as:** the only token source or the only verification mechanism.
+### Feature-level file
 
-### DTCG tokens and `designtoken.md`
+`UX_SPEC.md` is written during planning and approved with the feature plan. It
+captures the user job, the page hierarchy, interaction states, responsive
+notes, copy constraints, and any deliberate trade-off. It should link to the
+local components and to external references used by the plan.
 
-DTCG is the interoperable typed-token format. It is the best canonical source
-when tokens must be transformed across targets or toolchains. Tokens constrain
-legal values; they do not decide whether a destructive action needs a dialog,
-or which CTA has priority.
+A plan can propose a new token or component when it finds a real gap. The
+proposal should become its own task. The planner must not quietly create a
+second button style or token family while implementing an unrelated feature.
 
-`designtoken.md` is a useful agent-friendly bootstrap: it can give a small
-project a rich token/reference sheet quickly. It is Markdown and
-vendor-specific, so it should not be the canonical source for a mature,
-multi-target system. Vendor claims about improved agent output are not treated
-as independent benchmark evidence.
+## A plan entry can stay small
 
-### Storybook, Figma, and Code Connect
-
-A mature **local Storybook is the primary implementation reference**. It shows
-components that really exist, their variants, states, accessibility behavior,
-and intended composition. Figma Code Connect further maps Figma components to
-production code and enriches Figma MCP context where the agent backend can use
-it.
-
-A Storybook URL alone is not a deterministic agent interface: not every backend
-has browser/MCP access, and a story usually does not explain a feature's user
-flow. A compact local component index gives agents a stable lookup interface;
-Storybook remains the visual and behavioral reference. Screenshot regression
-turns that reference into verification.
-
-### Baseline libraries and patterns
-
-Framework libraries and commercial pattern libraries are accelerators, not the
-product's design system:
-
-- **Chakra UI** is a React component and theming baseline. A React project may
-  adapt its primitives through local recipes or wrappers.
-- **Tailwind CSS** is a utility implementation layer. **Tailwind Plus**
-  (formerly Tailwind UI) provides patterns/templates, not a production
-  component API for the project.
-- A Vue product must use a Vue-compatible baseline. The Jonggrang dashboard
-  currently uses Vue and PrimeVue; Chakra UI is therefore not a usable
-  implementation baseline for that dashboard without a framework migration.
-
-Do not make Chakra and Tailwind two competing component systems in one React
-product. Select one primary component/token ownership model. Tailwind utilities
-can coexist with Chakra only under explicit rules; otherwise agents will create
-duplicate primitives and inconsistent token paths. Respect the license of any
-commercial template source and do not redistribute copied source outside its
-terms.
-
-## Target model
-
-```text
-DTCG tokens OR framework theme                 ┐ legal values
-UI_SYSTEM.md                                   ├ policy and rationale
-local component index + Storybook              ├ available implementation
-Figma/reference screenshot (optional)          ├ intended visual direction
-feature UX_SPEC.md                             ┘ feature-specific judgement
-                         ↓
-                  implementation agent
-                         ↓
-     token/component checks + a11y + visual regression
-```
-
-### Token ownership by maturity
-
-Do not require DTCG from day one.
-
-| Product shape | Canonical value source |
-|---|---|
-| Single React product using Chakra | Chakra semantic theme tokens |
-| Single Tailwind product | CSS variables / Tailwind theme |
-| Vue dashboard using PrimeVue | Local CSS variables and PrimeVue overrides/theme |
-| Multiple platforms or shared token pipeline | DTCG source, transformed into each target |
-
-There must be one editable canonical source for each token. Generated Tailwind,
-Chakra, or CSS output must not be edited as a second source of truth.
-
-## Planning contract for UI work
-
-The planner should first inspect local sources. It must choose the smallest
-valid next step:
-
-```text
-reuse local component
-  → adapt an approved baseline primitive/pattern
-    → create a local reusable component and story
-      → escalate an intentional new design decision
-```
-
-For UI-affecting work, the approved plan should include a compact `ui_context`
-section, for example:
+The plan does not need to paste a design system into every task. This is enough
+context for a settings feature:
 
 ```yaml
 ui_context:
@@ -193,7 +101,6 @@ ui_context:
     - Toggle
     - AppButton
   baseline:
-    kind: component-primitive
     source: chakra-ui
     reference: Switch
   visual_references:
@@ -208,106 +115,108 @@ ui_context:
     - NotificationSettings.loading
     - NotificationSettings.error
   decisions:
-    - One primary CTA; no autosave because the preference has immediate impact.
+    - Save explicitly; this preference has an immediate effect.
 ```
 
-`UX_SPEC.md` may contain this contract plus the user job, hierarchy, interaction
-flow, responsive behavior, copy constraints, and measurable acceptance
-criteria. A reference must say *what to preserve*; “make it look like this
-screenshot” is not an adequate specification.
+The `decisions` field tells the next agent what matters about a reference. A
+link alone is ambiguous. The plan can say that the page has one primary action,
+uses explicit save rather than autosave, and shows field errors in place.
 
-If no local component or approved baseline is available, the plan records that
-uncertainty and requests design review rather than presenting an invented
-pattern as established policy.
+## Baselines are project-specific
 
-## Implementation and review contract
+Projects start with the local system. They use a compatible, approved source
+when there is a real gap. Tailwind and Chakra appear here only as examples for
+target projects.
 
-An implementation task with `ui_context` should:
+An existing local Storybook is the normal baseline for a project with working
+UI. It already reflects the framework, the component API, and the visual rules
+that the repository uses. Another team's Storybook can be a reference, but it
+only becomes an implementation baseline when the project can actually use its
+package or copy its pattern under the right license.
 
-1. inspect the listed local source/story before coding;
-2. use semantic tokens and the local component boundary, not arbitrary raw
-   colors, spacing, or direct third-party imports where policy disallows them;
-3. add or update local stories for material component/page states;
-4. test keyboard/focus and relevant accessibility behavior;
-5. capture the declared viewport/state screenshots when visual tooling exists;
-6. report reference reuse, newly introduced components, and visual/a11y results.
+Possible sources include:
 
-A reviewer verifies the plan mapping, component reuse, state coverage,
-accessibility, and visual result. It does not use a screenshot as proof of good
-UX judgement: human approval remains necessary for subjective product choices.
+- a framework component library, such as Chakra for React or PrimeVue for Vue;
+- a pattern library, such as Tailwind Plus;
+- an approved external Storybook or Figma reference.
 
-## Proposed Jonggrang rollout
+A project may have none of them. In that case the plan records its assumption
+and asks for a design decision.
 
-This is deliberately staged. It must work for all supported agent backends
-without requiring a browser, Figma MCP, Storybook, or a particular frontend
-framework.
+For a React project, Chakra can provide accessible primitives and a theme.
+Tailwind can be the utility layer, while Tailwind Plus can provide layout
+patterns. If a React project uses both Chakra and Tailwind, it needs a clear
+answer for who owns components and tokens. Without that decision, agents will
+create two styles of button, input, and spacing scale.
 
-### Phase A — documentation and voluntary convention
+The Jonggrang dashboard is Vue with PrimeVue and local CSS variables. Its local
+Storybook, PrimeVue components, and CSS rules come first. Chakra's ideas around
+semantic tokens, component recipes, and accessibility can be borrowed; its
+React components cannot be imported into the Vue client.
 
-- Publish a UI-context skill/template and the plan contract above.
-- Let projects declare paths to their theme, component index, Storybook, and
-  optional Figma/reference sources.
-- Teach planner, developer, tester, and reviewer prompts to consume the
-  context only when a task is UI-affecting.
-- Preserve a no-design-system fallback that states assumptions clearly.
+Commercial patterns also come with license terms. The plan may reference them,
+but copied source must stay within the relevant license.
 
-### Phase B — deterministic local discovery
+## Tokens: start with the system already there
 
-- Add a compact, queryable component index contract.
-- Add validation for referenced local paths/stories and for missing required
-  UI states in the plan.
-- Keep framework/baseline adapters declarative rather than hardcoding Chakra
-  or Tailwind behavior into Jonggrang.
+DTCG is useful when a design system needs to generate tokens for several
+targets. It is unnecessary ceremony for every project.
 
-### Phase C — verification integration
+| Project | Value source to keep editable |
+|---|---|
+| React app built on Chakra | Chakra semantic theme tokens |
+| Tailwind app | CSS variables or the Tailwind theme |
+| Vue and PrimeVue app | Local CSS variables and PrimeVue theme/overrides |
+| Shared web, native, or multi-product system | DTCG, transformed for each target |
 
-- Allow projects to register existing visual regression and accessibility
-  commands.
-- Make UI verification results part of the task/review output, but do not
-  impose a single testing provider.
-- Add Figma MCP/Code Connect as optional enrichment only after every supported
-  backend has a clear capability boundary and a local fallback.
+Each visual value should have one editable home. Generated CSS or framework
+output is a build artifact, not another place to edit the same token.
 
-## Non-goals
+## What implementation and review should check
 
-- Building a universal design system, a Figma integration, or a component
-  generator in the first issue.
-- Replacing a project's existing Storybook, theme, or framework library.
-- Pixel-perfect screenshot imitation without a stated UX reason.
-- Turning design guidance into a blocking instruction that overrides current
-  code, user requirements, or accessibility needs.
-- Requiring DTCG, Chakra, Tailwind, Storybook, or Figma for all Jonggrang
-  projects.
+For a task with `ui_context`, the developer should inspect the listed source
+and stories before coding. The task report should name the reused components,
+the new local components, and the states it covered. If the project has a
+Storybook convention, material states belong there too.
 
-## Success measures for a later implementation
+The reviewer checks whether the implementation follows the agreed flow, uses
+the expected local components and tokens, and covers the declared states. The
+review also runs or records the configured keyboard, accessibility, and visual
+checks. Screenshot checks catch visual drift. Plan approval and review still
+need a human decision on the product choice.
 
-Evaluate the approach with the same UI task under three conditions: no UI
-context, prose-only `DESIGN.md`, and the layered contract. Hold model and task
-constant. Measure:
+## First pass
 
-- direct third-party imports or duplicated local primitives;
-- hardcoded visual values outside the approved token path;
-- declared loading/error/empty state coverage;
-- accessibility violations;
-- visual regressions against approved baselines;
-- human corrections and time to an accepted result.
+Issue #89 starts with a small convention:
 
-No public source found in this research provides a controlled benchmark proving
-that a single design document outperforms the layered approach. These metrics
-are therefore the required local validation, not an assumed result.
+- a template for `UX_SPEC.md` and `ui_context`;
+- optional project paths for a theme, component index, Storybook, and visual or
+  accessibility commands;
+- prompt guidance for planner, developer, tester, and reviewer when a task is
+  UI-related;
+- a local-file fallback for agents without browser, Storybook, or Figma access.
 
-## Evidence ledger
+Later work can add component-index validation, project-configured visual-test
+reporting, and optional Figma MCP/Code Connect support. Those additions should
+remain backend-neutral and optional.
 
-| Source | Evidence type | Confidence | Retrieved |
-|---|---|---:|---|
-| [Google Labs `DESIGN.md`](https://github.com/google-labs-code/design.md) | Primary repository: format, lint, export, alpha status | High | 2026-07-14 |
-| [Google announcement](https://blog.google/innovation-and-ai/models-and-research/google-labs/stitch-design-md/) | Primary product explanation | High | 2026-07-14 |
-| [DTCG 2025.10 stable announcement](https://www.w3.org/community/design-tokens/2025/10/28/design-tokens-specification-reaches-first-stable-version/) | Primary specification announcement | High | 2026-07-14 |
-| [Style Dictionary token documentation](https://github.com/style-dictionary/style-dictionary/blob/main/docs/src/content/docs/info/tokens.md) | Primary implementation documentation | High | 2026-07-14 |
-| [Figma Code Connect](https://help.figma.com/hc/en-us/articles/23920389749655-Code-Connect) | Primary product documentation | High | 2026-07-14 |
-| [Figma design systems and MCP](https://www.figma.com/blog/design-systems-ai-mcp/) | Primary product explanation | Medium | 2026-07-14 |
-| [Skyscanner Backpack `AGENTS.md`](https://github.com/Skyscanner/backpack/blob/main/AGENTS.md) | Production repository practice | Medium | 2026-07-14 |
-| [Moodle design system](https://github.com/moodlehq/design-system) | Production repository practice | Medium | 2026-07-14 |
-| [CMS design system](https://github.com/CMSgov/design-system) | Production repository practice | Medium | 2026-07-14 |
-| [designtoken.md](https://designtoken.md/) | Vendor product page | Low for performance claims; medium for format description | 2026-07-14 |
-| [WaveSpeed comparison](https://wavespeed.ai/blog/posts/design-md-vs-design-tokens-ai-workflows/) | Opinion/case report | Low for causal claims | 2026-07-14 |
+We should test the convention rather than assume it helps. Give the same UI
+change to agents with no context, a prose-only design document, and this
+layered context. Compare duplicated components, hardcoded values, state
+coverage, a11y findings, visual diffs, and the number of human corrections.
+
+## Sources checked
+
+| Source | Why it was used | Retrieved |
+|---|---|---|
+| [Google Labs `DESIGN.md`](https://github.com/google-labs-code/design.md) | Format, linter/export ideas, and alpha status | 2026-07-14 |
+| [Google announcement](https://blog.google/innovation-and-ai/models-and-research/google-labs/stitch-design-md/) | Google's rationale for the format | 2026-07-14 |
+| [DTCG 2025.10](https://www.w3.org/community/design-tokens/2025/10/28/design-tokens-specification-reaches-first-stable-version/) | Stable token specification | 2026-07-14 |
+| [Style Dictionary token docs](https://github.com/style-dictionary/style-dictionary/blob/main/docs/src/content/docs/info/tokens.md) | DTCG-oriented token transforms | 2026-07-14 |
+| [Figma Code Connect](https://help.figma.com/hc/en-us/articles/23920389749655-Code-Connect) | Mapping Figma components to code | 2026-07-14 |
+| [Figma on design systems and MCP](https://www.figma.com/blog/design-systems-ai-mcp/) | MCP context available to supported agents | 2026-07-14 |
+| [Skyscanner Backpack](https://github.com/Skyscanner/backpack/blob/main/AGENTS.md) | Existing repository practice for agent UI guidance | 2026-07-14 |
+| [Moodle design system](https://github.com/moodlehq/design-system) | Existing component-index and Storybook practice | 2026-07-14 |
+| [CMS design system](https://github.com/CMSgov/design-system) | Existing Storybook and visual-test practice | 2026-07-14 |
+| [designtoken.md](https://designtoken.md/) | Markdown token-sheet format; vendor claims treated as unverified | 2026-07-14 |
+| [WaveSpeed comparison](https://wavespeed.ai/blog/posts/design-md-vs-design-tokens-ai-workflows/) | Opinion framing only, not benchmark evidence | 2026-07-14 |
