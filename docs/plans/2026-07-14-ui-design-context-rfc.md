@@ -22,6 +22,33 @@ A useful split is:
 That keeps a feature agent from inventing a new button, token scale, or layout
 rule just because it did not find the right context quickly.
 
+## The flow at a glance
+
+```text
+Feature request
+      |
+      v
+Read the project UI context
+(theme, UI_SYSTEM.md, component index, Storybook)
+      |
+      v
+Write UX_SPEC.md for this feature
+(flow, states, references, decisions)
+      |
+      v
+Implement with local components or an approved reference
+      |
+      v
+Add or update the local story, then run a11y and visual checks
+      |
+      v
+Review the feature against the approved UX_SPEC.md
+```
+
+The first box reads project knowledge. The second creates feature knowledge.
+That boundary is the point of the proposal: a settings-page task can add a
+settings-page decision without silently changing the project's button rules.
+
 ## Why write this down
 
 Jonggrang already gives agents a plan, codebase context, and a review loop.
