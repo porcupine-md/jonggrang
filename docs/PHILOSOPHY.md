@@ -52,7 +52,7 @@ To keep this phase from overflowing a small context window, the agent is fed the
 The agent writes the tests, runs them, and verifies coverage. Tests are not an afterthought appended at the end; they are part of the definition of done for every task.
 
 ### Review
-A dedicated review pass reads the implementation as a future maintainer would. It asks: is this correct? is this maintainable? does it match the plan?
+A dedicated review pass reads the implementation as a future maintainer would. It asks: is this correct? is this maintainable? does it match the plan? For frontend work the reviewer does not stop at the source — it drives the *rendered* UI in a real headless browser via the `agent-browser` CLI (preinstalled in the sandbox), checking layout, responsiveness, theming, and accessibility that code inspection and unit tests cannot see.
 
 ### Hooks (Continuous Enforcement)
 Not a final stage, but a continuous enforcement layer woven into the implement loop. Every tool call, every file edit, every agent exit passes through hooks first. They police what the agent cannot be trusted to police itself: no secrets leaking into context, no orchestrator making direct edits it should delegate, no agent spawning when the context window is near-full, no exit until review and tests are green.

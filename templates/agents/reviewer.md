@@ -39,6 +39,11 @@ Depends on which phase you're called for:
 - [ ] File structure matches plan's `files` list
 - [ ] No extra scope added (scope creep)
 - [ ] Function signatures match design
+- [ ] **Frontend:** rendered UI matches the design. Verify in a real headless browser
+      with `agent-browser` (preinstalled; read-only observation, safe for Reviewer) —
+      `open` the app, take a `snapshot` + `screenshot`, and check layout, responsive
+      behavior, theming, and accessibility. See the `validating-visual-design` and
+      `auditing-interface-quality` skills.
 
 ### Phase 11 — Domain Compliance
 - [ ] REST: correct HTTP verbs, status codes, plural nouns

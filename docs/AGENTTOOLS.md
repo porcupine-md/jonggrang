@@ -2,6 +2,15 @@
 
 This guide covers every file and function you must touch to integrate a new AI agent backend into jonggrang. The four existing backends — `claude` (CLI spawn), `opencode` (CLI spawn with JSON streaming), `codex` (CLI spawn with JSONL streaming), and `jonggrang` (Pi SDK, in-process) — serve as reference implementations.
 
+> **Not every tool is a backend.** Some tools are *shared utilities* that agents call via
+> Bash rather than agent runtimes that drive the pipeline. For example
+> [`agent-browser`](https://github.com/vercel-labs/agent-browser) (frontend design
+> validation) is not integrated through this guide — it is installed in the sandbox image
+> (`docker/Dockerfile`) and surfaced to agents through a skill
+> (`skills/library/frontend/validating-visual-design`) plus the instruction templates. Use
+> the skill + image route for shared CLIs; use the checklist below only for new agent
+> *backends* selected via `.jonggrang/jonggrang.json`.
+
 ---
 
 ## Two Backend Patterns
