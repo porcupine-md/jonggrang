@@ -526,7 +526,7 @@ Draft-scoped endpoints accept `sessionId` (or `session`) in JSON body or query s
 | `PUT /api/projects/:id/plan` | Saves `{ content, mtime?, sessionId }` to that draft's `plan.md`; never writes root `.jonggrang/plan.md`. |
 | `DELETE /api/projects/:id/plan?session=<id>` | Deletes that draft session folder. |
 | `POST /api/projects/:id/plan/revise` | Runs `jonggrang plan --revise ... --session <id>`. |
-| `POST /api/projects/:id/plan/chat` | Discusses the selected draft content. |
+| `POST /api/projects/:id/plan/discuss/start` | Opens an interactive **read-only** PTY session to the project's selected coding agent (claude/opencode/codex/jonggrang), seeded with the draft plan, so the user can discuss and refine it live. `stop` kills it, `config` reports the running state. |
 | `POST /api/projects/:id/approve` | Runs `jonggrang approve --session <id>`. |
 
 ```
