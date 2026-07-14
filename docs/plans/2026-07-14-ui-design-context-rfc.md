@@ -1,4 +1,4 @@
-# Giving UI tasks useful context
+# UI guide and handoff for UI work
 
 **Status:** proposal only; this branch does not change Jonggrang runtime behavior.<br>
 **Tracking:** [#89](https://github.com/porcupine-md/jonggrang/issues/89)<br>
@@ -6,244 +6,243 @@
 
 ## TL;DR
 
-When Jonggrang plans a UI task, the agent needs more than a screenshot or a
-paragraph saying "make this feel clean." It should first look at the components
-and stories already in the project. The plan then records the user flow,
-states, references, and decisions for that one feature. Implementation adds to
-the local system, and the review checks the result with the project's own a11y
-and visual tests where available.
+A project gets one tracked UI guide at `.jonggrang/UI.md`. It describes the
+product's visual and interaction rules in the same practical style as this
+repository's [`docs/UI.md`](../UI.md).
 
-A useful split is:
-
-- `UX_SPEC.md` belongs to a feature plan. It explains the work at hand.
-- The theme, `UI_SYSTEM.md`, component index, and Storybook belong to the
-  project. A plan reads them. A plan does not rewrite them as a side effect.
-
-That keeps a feature agent from inventing a new button, token scale, or layout
-rule just because it did not find the right context quickly.
-
-## The flow at a glance
+A UI plan reads that guide and writes a small feature snapshot at
+`.jonggrang/.output/features/<feature-id>/UI_HANDOFF.md`. Task breakdown adds a
+small `ui_context` object only to UI-related tasks. Each task receives its own
+slice of the handoff, not the entire guide.
 
 ```text
-Feature request
-      |
-      v
-Read the project UI context
-(theme, UI_SYSTEM.md, component index, Storybook)
-      |
-      v
-Write UX_SPEC.md for this feature
-(flow, states, references, decisions)
-      |
-      v
-Implement with local components or an approved reference
-      |
-      v
-Add or update the local story, then run a11y and visual checks
-      |
-      v
-Review the feature against the approved UX_SPEC.md
+.jonggrang/UI.md
+project-wide guide
+        |
+        v
+feature plan
+        |
+        +-- UI_HANDOFF.md
+        |   feature decisions and guide references
+        |
+        +-- jonggrang-tasks.json
+            ui_context for each UI task
+                    |
+                    v
+              developer / tester / reviewer
 ```
 
-The first box reads project knowledge. The second creates feature knowledge.
-That boundary is the point of the proposal: a settings-page task can add a
-settings-page decision without silently changing the project's button rules.
+The guide is global. The handoff is frozen with the approved feature. The task
+context is narrow enough to fit the task.
 
-## Why write this down
+## Why this is one guide plus two handoffs
 
-Jonggrang already gives agents a plan, codebase context, and a review loop.
-That works well for code structure. UI work has an extra problem: a request
-like “add notification settings” leaves many product choices open. Which
-control fits? Is saving immediate? What happens on failure? Does the page use
-an existing settings pattern or need a new one?
+`docs/UI.md` already shows the useful shape of a UI guide: philosophy, tokens,
+typography, components, layout patterns, and rules. Splitting those sections
+into several mandatory files would make a small project maintain a design
+system it does not need.
 
-[`docs/UI.md`](../UI.md) already does part of this for the Jonggrang dashboard.
-It describes the terminal-first style, the CSS variables, and several component
-choices. It is useful reference material. It does not list every component the
-app has, describe every feature flow, or catch a visual regression. The missing
-piece is a small way to bring those sources together for each UI task.
+The feature and task layers solve a different problem. A global guide cannot
+say whether one feature needs explicit save, which state belongs to task 003,
+or which existing component should be reused. That information belongs with the
+approved plan.
 
-## The working model
+The resulting ownership is simple:
 
-Start with what the project already owns:
+| Location | Contains | Changes when |
+|---|---|---|
+| `.jonggrang/UI.md` | Product-wide UI rules and source map | A product rule or durable pattern changes |
+| `.jonggrang/.output/features/<id>/UI_HANDOFF.md` | Approved feature decisions and references to the guide | The plan is approved or intentionally extended |
+| `jonggrang-tasks.json` `ui_context` | Task-specific instructions and source paths | Tasks are broken down or appended |
 
-1. Check the local component index and Storybook. Reuse an existing component
-   when it fits.
-2. If there is a gap, use an approved primitive or pattern as a starting point.
-   Record where it came from.
-3. Write down the feature's UX decisions in `UX_SPEC.md` alongside the plan.
-4. Add the finished component or page state to the local Storybook when that is
-   part of the project.
-5. Run the project's accessibility and visual checks.
+`docs/UI.md` remains the dashboard documentation for this repository. The new
+`.jonggrang/UI.md` is the guide that Jonggrang reads inside any managed project.
+A future migration can seed it from an existing `docs/UI.md`; this RFC does not
+move or overwrite the current file.
 
-Storybook is the best reference for implementation because it shows code that
-is actually in the repository. A Figma frame, external Storybook, or Tailwind
-Plus example can still help, but it is a reference. It does not automatically
-become a component the product owns.
+## What belongs in `.jonggrang/UI.md`
 
-The agent should be able to read this information without a browser. A compact
-component index is enough for lookup; Storybook remains the place to inspect
-variants and states visually. Figma MCP and Code Connect are useful additions
-for backends that support them, but the basic flow must work from local files.
+The guide is Markdown. It should stay readable and point to code instead of
+copying generated CSS or component source.
 
-## What each file is for
+```md
+# UI guide
 
-### Project-level files
+## Product and users
+Who uses the product and what they need to do most often.
 
-The project keeps these over time:
+## Flavor and visual direction
+For example: dense operations tool, calm consumer app, editorial content, or
+an existing product that this project must match.
 
-- The theme or token source holds visual values. Use the existing framework
-  theme in a single-product app. Use DTCG when the same tokens must feed
-  several platforms or toolchains.
-- `UI_SYSTEM.md` or `DESIGN.md` holds product rules that code cannot express
-  well: visual density, hierarchy, confirmation, and component-use rules. It
-  points to the token source instead of copying every colour and spacing value.
-- The component index maps a component name to its source, variants, story, and
-  any local rules.
-- Storybook records local components and important page states.
+## Source map
+- Tokens/theme: client/src/assets/main.css
+- Components: client/src/components/
+- Stories: none
+- Reference: https://figma.com/...
 
-These files can change, but changing them is design-system work. It deserves an
-explicit task and review.
+## Tokens and typography
+The token source, font choices, scale, and rules for new values.
 
-### Feature-level file
+## Components and layout patterns
+Existing primitives, recurring page patterns, and rules for adding a new one.
 
-`UX_SPEC.md` is written during planning and approved with the feature plan. It
-captures the user job, the page hierarchy, interaction states, responsive
-notes, copy constraints, and any deliberate trade-off. It should link to the
-local components and to external references used by the plan.
+## Interaction, responsive, and accessibility rules
+Loading, empty, error, confirmation, keyboard, and viewport expectations.
 
-A plan can propose a new token or component when it finds a real gap. The
-proposal should become its own task. The planner must not quietly create a
-second button style or token family while implementing an unrelated feature.
+## Rules summary
+The few rules an agent should not miss.
+```
 
-## A plan entry can stay small
+The headings can grow with the project. The required idea is smaller: a person
+and an agent should be able to find the visual direction, the real source
+files, existing patterns, and hard rules without hunting through the repository.
 
-The plan does not need to paste a design system into every task. This is enough
-context for a settings feature:
+DTCG, Storybook, Figma, Tailwind, and Chakra are optional sources. If the
+project already has one, the guide points to it. Jonggrang does not add those
+dependencies just to fill out the guide.
+
+## Creating a guide when one is missing
+
+A plan that affects UI first looks for `.jonggrang/UI.md`, the framework,
+existing components, theme files, and live screens. Most of the guide can come
+from the repository.
+
+If there is no guide, the planner uses the existing `plan ask` flow for the
+parts code cannot answer. It asks only what is needed to make a usable first
+draft:
+
+1. What should the UI follow: existing product, Figma, screenshots, a URL, or a
+   new direction?
+2. Which flavor is closest: application, dashboard, marketing, content, or
+   custom?
+3. Who uses the feature and what must be visible or easy to do first?
+4. Are there non-negotiables such as a brand rule, mobile support, accessibility
+   requirement, or a pattern to avoid?
+
+The planner recommends a flavor from the codebase when it can. The user can
+keep it, choose another, or give a reference. A flavor is a starting template,
+not a visual theme that Jonggrang forces on every project.
+
+The plan draft contains the proposed `UI.md` together with the feature plan.
+Approval materializes the guide at `.jonggrang/UI.md`; the user can edit or
+revise it before approval through the normal plan flow.
+
+## When a guide already exists
+
+The planner reads the relevant guide sections and code. It should not ask the
+user to reconfirm the whole guide on every UI plan.
+
+It asks a question when the request conflicts with the guide, a needed rule is
+missing, or the guide points at a source that no longer exists. The plan then
+shows the relevant rule and the proposed change. This keeps the guide useful
+without turning planning into a repeated design interview.
+
+## Feature handoff
+
+`UI_HANDOFF.md` is a compact feature snapshot. It names the canonical guide and
+records the feature decisions that were approved with the plan.
+
+```md
+# UI handoff: notification settings
+
+Guide: .jonggrang/UI.md
+Guide revision: <content digest at approval>
+
+## Shared direction
+- Use the existing settings-section pattern and semantic theme values.
+- Keep one primary action per viewport.
+
+## References
+- docs/UI.md#settings-section-card
+- client/src/assets/main.css
+- client/src/components/app/BaseModal.vue
+
+## Task task-003
+Scope: save and inline error state.
+States: loading, save-error, saved.
+Decision: explicit save; the preference changes product behaviour immediately.
+Check: npm test
+```
+
+The handoff does not copy all of `.jonggrang/UI.md`. It contains the feature's
+shared decisions plus short sections for tasks that need UI work. If a feature
+has many UI tasks, the file can have more `## Task task-xxx` sections. The task
+loader reads `## Shared direction` and the section for its own task id.
+
+This gives the feature a stable record without injecting a large document into
+every fresh agent context.
+
+## Task contract
+
+Task breakdown adds `ui_context` only when a task affects UI:
 
 ```yaml
 ui_context:
-  existing_components:
-    - FormField
-    - Toggle
-    - AppButton
-  baseline:
-    source: chakra-ui
-    reference: Switch
-  visual_references:
-    - figma: https://figma.com/file/.../node-id
-    - pattern: tailwind-plus/application-ui/forms/settings
-  token_source: design/tokens.tokens.json
+  handoff: .jonggrang/.output/features/notification-settings/UI_HANDOFF.md
+  sections:
+    - Shared direction
+    - Task task-003
+  guide: .jonggrang/UI.md
+  source_files:
+    - client/src/assets/main.css
+    - client/src/components/app/BaseModal.vue
   states:
     - loading
-    - saved
     - save-error
-  stories_to_add:
-    - NotificationSettings.loading
-    - NotificationSettings.error
-  decisions:
-    - Save explicitly; this preference has an immediate effect.
+    - saved
+  verification:
+    - npm test
 ```
 
-The `decisions` field tells the next agent what matters about a reference. A
-link alone is ambiguous. The plan can say that the page has one primary action,
-uses explicit save rather than autosave, and shows field errors in place.
+The developer, tester, and reviewer receive this object and the selected
+handoff sections. The guide and source paths remain available when they need
+more detail. A backend without browser, Figma, or Storybook access still has
+the local guide and source files.
 
-## Baselines are project-specific
+Non-UI tasks have no `ui_context` and keep the current prompt size.
 
-Projects start with the local system. They use a compatible, approved source
-when there is a real gap. Tailwind and Chakra appear here only as examples for
-target projects.
+## Keeping the guide current
 
-An existing local Storybook is the normal baseline for a project with working
-UI. It already reflects the framework, the component API, and the visual rules
-that the repository uses. Another team's Storybook can be a reference, but it
-only becomes an implementation baseline when the project can actually use its
-package or copy its pattern under the right license.
+The planner may draft changes to `.jonggrang/UI.md` before a feature starts.
+That draft is reviewed together with the plan.
 
-Possible sources include:
+During implementation, task agents do not edit the global guide. They can note
+a repeated pattern or missing rule in their task output. At feature review, the
+reviewer decides whether it is worth promoting. The proposal is appended to
+`UI_HANDOFF.md` under `## Proposed guide updates`.
 
-- a framework component library, such as Chakra for React or PrimeVue for Vue;
-- a pattern library, such as Tailwind Plus;
-- an approved external Storybook or Figma reference.
+The user chooses whether to promote those updates to `.jonggrang/UI.md`. This
+keeps one project-wide source of truth and prevents a task from changing global
+rules just because it needed a local exception.
 
-A project may have none of them. In that case the plan records its assumption
-and asks for a design decision.
+A change to `.jonggrang/UI.md` after approval does not silently rewrite an
+in-progress feature. The approved handoff remains that feature's contract. A
+user can extend or revise the plan when the feature should adopt the newer
+rule.
 
-For a React project, Chakra can provide accessible primitives and a theme.
-Tailwind can be the utility layer, while Tailwind Plus can provide layout
-patterns. If a React project uses both Chakra and Tailwind, it needs a clear
-answer for who owns components and tokens. Without that decision, agents will
-create two styles of button, input, and spacing scale.
+## First implementation slice
 
-The Jonggrang dashboard is Vue with PrimeVue and local CSS variables. Its local
-Storybook, PrimeVue components, and CSS rules come first. Chakra's ideas around
-semantic tokens, component recipes, and accessibility can be borrowed; its
-React components cannot be imported into the Vue client.
+Issue #89 should start with the smallest useful version:
 
-Commercial patterns also come with license terms. The plan may reference them,
-but copied source must stay within the relevant license.
+- detect UI-affecting plans and look for `.jonggrang/UI.md`;
+- use `plan ask` to fill a missing guide from the four questions above;
+- draft and approve a new or changed guide with the plan;
+- write `UI_HANDOFF.md` during feature approval;
+- add `ui_context` to UI tasks and inject only their selected handoff sections;
+- record proposed guide updates at review without auto-promoting them.
 
-## Tokens: start with the system already there
-
-DTCG is useful when a design system needs to generate tokens for several
-targets. It is unnecessary ceremony for every project.
-
-| Project | Value source to keep editable |
-|---|---|
-| React app built on Chakra | Chakra semantic theme tokens |
-| Tailwind app | CSS variables or the Tailwind theme |
-| Vue and PrimeVue app | Local CSS variables and PrimeVue theme/overrides |
-| Shared web, native, or multi-product system | DTCG, transformed for each target |
-
-Each visual value should have one editable home. Generated CSS or framework
-output is a build artifact, not another place to edit the same token.
-
-## What implementation and review should check
-
-For a task with `ui_context`, the developer should inspect the listed source
-and stories before coding. The task report should name the reused components,
-the new local components, and the states it covered. If the project has a
-Storybook convention, material states belong there too.
-
-The reviewer checks whether the implementation follows the agreed flow, uses
-the expected local components and tokens, and covers the declared states. The
-review also runs or records the configured keyboard, accessibility, and visual
-checks. Screenshot checks catch visual drift. Plan approval and review still
-need a human decision on the product choice.
-
-## First pass
-
-Issue #89 starts with a small convention:
-
-- a template for `UX_SPEC.md` and `ui_context`;
-- optional project paths for a theme, component index, Storybook, and visual or
-  accessibility commands;
-- prompt guidance for planner, developer, tester, and reviewer when a task is
-  UI-related;
-- a local-file fallback for agents without browser, Storybook, or Figma access.
-
-Later work can add component-index validation, project-configured visual-test
-reporting, and optional Figma MCP/Code Connect support. Those additions should
-remain backend-neutral and optional.
-
-We should test the convention rather than assume it helps. Give the same UI
-change to agents with no context, a prose-only design document, and this
-layered context. Compare duplicated components, hardcoded values, state
-coverage, a11y findings, visual diffs, and the number of human corrections.
+Storybook lookup, component-index generation, Figma MCP, DTCG transforms, and
+visual-regression wiring can be added later when a project already uses them.
 
 ## Sources checked
 
 | Source | Why it was used | Retrieved |
 |---|---|---|
-| [Google Labs `DESIGN.md`](https://github.com/google-labs-code/design.md) | Format, linter/export ideas, and alpha status | 2026-07-14 |
-| [Google announcement](https://blog.google/innovation-and-ai/models-and-research/google-labs/stitch-design-md/) | Google's rationale for the format | 2026-07-14 |
-| [DTCG 2025.10](https://www.w3.org/community/design-tokens/2025/10/28/design-tokens-specification-reaches-first-stable-version/) | Stable token specification | 2026-07-14 |
-| [Style Dictionary token docs](https://github.com/style-dictionary/style-dictionary/blob/main/docs/src/content/docs/info/tokens.md) | DTCG-oriented token transforms | 2026-07-14 |
-| [Figma Code Connect](https://help.figma.com/hc/en-us/articles/23920389749655-Code-Connect) | Mapping Figma components to code | 2026-07-14 |
-| [Figma on design systems and MCP](https://www.figma.com/blog/design-systems-ai-mcp/) | MCP context available to supported agents | 2026-07-14 |
+| [Google Labs `DESIGN.md`](https://github.com/google-labs-code/design.md) | Guide format, linting, and export ideas | 2026-07-14 |
+| [DTCG 2025.10](https://www.w3.org/community/design-tokens/2025/10/28/design-tokens-specification-reaches-first-stable-version/) | Typed token format when a project needs cross-target tokens | 2026-07-14 |
+| [Figma Code Connect](https://help.figma.com/hc/en-us/articles/23920389749655-Code-Connect) | Optional mapping from design components to code | 2026-07-14 |
 | [Skyscanner Backpack](https://github.com/Skyscanner/backpack/blob/main/AGENTS.md) | Existing repository practice for agent UI guidance | 2026-07-14 |
-| [Moodle design system](https://github.com/moodlehq/design-system) | Existing component-index and Storybook practice | 2026-07-14 |
-| [CMS design system](https://github.com/CMSgov/design-system) | Existing Storybook and visual-test practice | 2026-07-14 |
+| [Moodle design system](https://github.com/moodlehq/design-system) | Component documentation and agent lookup practice | 2026-07-14 |
+| [CMS design system](https://github.com/CMSgov/design-system) | Storybook and visual-test practice | 2026-07-14 |
 | [designtoken.md](https://designtoken.md/) | Markdown token-sheet format; vendor claims treated as unverified | 2026-07-14 |
-| [WaveSpeed comparison](https://wavespeed.ai/blog/posts/design-md-vs-design-tokens-ai-workflows/) | Opinion framing only, not benchmark evidence | 2026-07-14 |
