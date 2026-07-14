@@ -1,6 +1,6 @@
 {
   "name": "jonggrang",
-  "version": "0.15.0",
+  "version": "0.15.2",
   "description": "Deterministic AI orchestration platform — 16-phase workflow engine for autonomous software development",
   "license": "MIT",
   "main": "server.js",
