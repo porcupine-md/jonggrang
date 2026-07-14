@@ -190,8 +190,8 @@
               <Button label="Discard" severity="secondary" @click="discardPlan" />
               <Button
                 severity="secondary"
-                :class="{ 'btn-active': showChatSidebar }"
-                @click="showChatSidebar = !showChatSidebar"
+                :class="{ 'btn-active': showDiscussPanel }"
+                @click="showDiscussPanel = !showDiscussPanel"
               >
                 <i class="pi pi-comments" /> Discuss
               </Button>
@@ -235,46 +235,15 @@
               <div v-if="genError" class="error-text" style="padding:8px 16px">{{ genError }}</div>
             </div>
 
-            <!-- Chat sidebar -->
-            <div v-if="showChatSidebar" class="plan-chat-sidebar">
-              <div class="chat-sidebar-header">
-                <span class="chat-sidebar-title"><i class="pi pi-comments" /> Discuss</span>
-                <button class="chat-close-btn" @click="showChatSidebar = false"><i class="pi pi-times" /></button>
-              </div>
-              <div class="chat-messages" ref="chatMessagesRef">
-                <div v-if="chatMessages.length === 0" class="chat-empty">
-                  Ask anything about this plan — suggest changes, explore trade-offs, identify risks.
-                </div>
-                <div
-                  v-for="msg in chatMessages"
-                  :key="msg.id"
-                  :class="['chat-msg', `chat-msg--${msg.role}`]"
-                >
-                  <div class="chat-msg-content">{{ msg.content }}</div>
-                  <button
-                    v-if="msg.role === 'assistant'"
-                    class="chat-apply-btn"
-                    title="Use this as a revision instruction"
-                    @click="applyAsRevision(msg.content)"
-                  ><i class="pi pi-pencil" /> Apply as Revision</button>
-                </div>
-                <div v-if="chatLoading" class="chat-msg chat-msg--loading">
-                  <i class="pi pi-spin pi-spinner" /> Thinking...
-                </div>
-              </div>
-              <div class="chat-input-row">
-                <textarea
-                  v-model="chatInput"
-                  class="chat-input"
-                  placeholder="Ask about this plan… (Ctrl+Enter to send)"
-                  rows="2"
-                  @keydown.ctrl.enter="sendChat"
-                />
-                <Button :disabled="!chatInput.trim() || chatLoading" @click="sendChat">
-                  <i class="pi pi-send" />
-                </Button>
-              </div>
-            </div>
+            <!-- Discuss panel: interactive PTY session to the selected agent -->
+            <PlanDiscuss
+              v-if="showDiscussPanel"
+              :key="selectedPlan?.sessionId || selectedPlan?.id"
+              :project-id="projectId"
+              :session-id="selectedPlan?.sessionId || selectedPlan?.id"
+              :tool="discussTool"
+              @close="showDiscussPanel = false"
+            />
           </div>
         </div>
 
@@ -423,6 +392,7 @@ import { useWsStore } from '../../stores/ws.js';
 import { useOrchestrationStore } from '../../stores/orchestration.js';
 import { usePickupStore } from '../../stores/pickup.js';
 import ProviderIcon from '../ProviderIcon.vue';
+import PlanDiscuss from './PlanDiscuss.vue';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
@@ -508,12 +478,9 @@ const showReviseBar = ref(false);
 const reviseInstruction = ref('');
 const reviseInputEl = ref(null);
 
-// Chat sidebar
-const showChatSidebar = ref(false);
-const chatMessages = ref([]);
-const chatInput = ref('');
-const chatLoading = ref(false);
-const chatMessagesRef = ref(null);
+// Discuss panel (interactive PTY session to the selected agent)
+const showDiscussPanel = ref(false);
+const discussTool = computed(() => selectedTool.value || 'jonggrang');
 
 // Rendered markdown for viewer
 const renderedContent = computed(() => {
@@ -858,37 +825,6 @@ async function submitRevise() {
   }
 }
 
-async function sendChat() {
-  const msg = chatInput.value.trim();
-  if (!msg || chatLoading.value) return;
-  const id = Date.now();
-  chatMessages.value.push({ id, role: 'user', content: msg });
-  chatInput.value = '';
-  chatLoading.value = true;
-  try {
-    const history = chatMessages.value.slice(0, -1);
-    const res = await fetch(`/api/projects/${projectId.value}/plan/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, history, sessionId: selectedPlan.value?.sessionId || selectedPlan.value?.id }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || 'Chat failed');
-    chatMessages.value.push({ id: id + 1, role: 'assistant', content: data.content });
-  } catch (e) {
-    chatMessages.value.push({ id: id + 2, role: 'error', content: e.message });
-  }
-  chatLoading.value = false;
-  await nextTick();
-  if (chatMessagesRef.value) chatMessagesRef.value.scrollTop = chatMessagesRef.value.scrollHeight;
-}
-
-function applyAsRevision(content) {
-  reviseInstruction.value = content.slice(0, 500);
-  showReviseBar.value = true;
-  nextTick(() => reviseInputEl.value?.focus());
-}
-
 async function savePlan() {
   if (!selectedPlan.value) return;
   const content = planContent.value;
@@ -1159,61 +1095,6 @@ onUnmounted(() => {
   color: var(--jg-text); padding: 6px 10px; outline: none;
 }
 .revise-input:focus { border-color: var(--jg-orange); }
-
-/* Chat sidebar */
-.plan-chat-sidebar {
-  width: 340px; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden;
-  border-left: 1px solid var(--jg-border);
-}
-.chat-sidebar-header {
-  display: flex; align-items: center; padding: 8px 12px;
-  border-bottom: 1px solid var(--jg-border); flex-shrink: 0;
-  background: var(--jg-card);
-}
-.chat-sidebar-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--jg-text-faint); flex: 1; display: flex; align-items: center; gap: 6px; }
-.chat-close-btn {
-  width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
-  background: none; border: none; color: var(--jg-text-faint); cursor: pointer;
-}
-.chat-close-btn:hover { color: var(--jg-text); }
-.chat-close-btn .pi { font-size: 11px; }
-.chat-messages { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-.chat-empty { font-size: 11px; color: var(--jg-text-faint); text-align: center; margin: auto; padding: 20px; line-height: 1.6; }
-.chat-msg { display: flex; flex-direction: column; gap: 4px; }
-.chat-msg--user .chat-msg-content {
-  align-self: flex-end; background: color-mix(in oklch, var(--jg-green) 12%, transparent);
-  border: 1px solid color-mix(in oklch, var(--jg-green) 30%, transparent);
-  padding: 6px 10px; font-size: 12px; color: var(--jg-text); max-width: 90%; line-height: 1.5;
-}
-.chat-msg--assistant .chat-msg-content {
-  background: var(--jg-hover); border: 1px solid var(--jg-border);
-  padding: 8px 10px; font-size: 12px; color: var(--jg-text); line-height: 1.6; white-space: pre-wrap;
-}
-.chat-msg--error .chat-msg-content {
-  background: color-mix(in oklch, var(--jg-red) 10%, transparent);
-  border: 1px solid color-mix(in oklch, var(--jg-red) 30%, transparent);
-  padding: 6px 10px; font-size: 12px; color: var(--jg-red);
-}
-.chat-msg--loading { color: var(--jg-text-faint); font-size: 11px; display: flex; align-items: center; gap: 6px; }
-.chat-apply-btn {
-  align-self: flex-start; font-size: 10px; font-family: var(--font-mono);
-  background: none; border: 1px solid var(--jg-border); color: var(--jg-text-faint);
-  padding: 2px 7px; cursor: pointer; display: flex; align-items: center; gap: 4px;
-  transition: color 0.12s, border-color 0.12s;
-}
-.chat-apply-btn:hover { color: var(--jg-orange); border-color: var(--jg-orange); }
-.chat-apply-btn .pi { font-size: 10px; }
-.chat-input-row {
-  display: flex; gap: 6px; padding: 8px 10px;
-  border-top: 1px solid var(--jg-border); flex-shrink: 0;
-  background: var(--jg-card);
-}
-.chat-input {
-  flex: 1; font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
-  background: var(--jg-bg); border: 1px solid var(--jg-border);
-  color: var(--jg-text); padding: 6px 8px; outline: none; resize: none;
-}
-.chat-input:focus { border-color: var(--jg-green); }
 
 /* Read-only viewer */
 .plan-viewer-wrap { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
