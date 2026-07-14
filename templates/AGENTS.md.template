@@ -186,6 +186,27 @@ created_at: 2026-04-16T10:30:00Z
 
 ---
 
+## Browser Automation (frontend design validation)
+
+The `agent-browser` CLI is preinstalled in the Jonggrang sandbox and available to every
+agent backend (claude, opencode, codex, jonggrang). Use it to validate frontend design in
+a real headless browser — do not sign off UI work on typecheck + unit tests alone.
+
+```bash
+agent-browser open http://localhost:3000   # open the running app
+agent-browser wait --load networkidle
+agent-browser snapshot                       # accessibility tree with @refs (a11y)
+agent-browser screenshot ui.png              # capture; review layout/contrast/dark mode
+agent-browser set viewport 375 812           # responsive re-check, then screenshot again
+agent-browser close
+```
+
+Full workflow lives in the `validating-visual-design` skill
+(`.claude/skills/validating-visual-design/SKILL.md` or the equivalent path for your tool).
+On a bare host (outside the sandbox), run `agent-browser install` once to fetch Chrome.
+
+---
+
 ## Bug Reporting
 
 When you discover a defect **outside the scope of your current task**, report it immediately:

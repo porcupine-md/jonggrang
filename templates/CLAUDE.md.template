@@ -46,9 +46,28 @@ jonggrang bug "description of what is broken" --feature <feature_id>
 
 Get the `feature_id` by running: `jonggrang task show <id>` — look for the `feature_id` field in the output.
 
+## Browser Automation (frontend design validation)
+
+The `agent-browser` CLI is available (preinstalled in the Jonggrang sandbox) for
+validating frontend design in a real headless browser. When your task touches the UI,
+verify the *rendered* result — not just that the code compiles — before signalling done:
+
+```bash
+agent-browser open http://localhost:3000   # open the running app
+agent-browser wait --load networkidle
+agent-browser snapshot                       # accessibility tree with @refs
+agent-browser screenshot ui.png              # capture + review layout/contrast/dark mode
+agent-browser close
+```
+
+Full workflow (responsive checks, interactions): read
+`.claude/skills/validating-visual-design/SKILL.md`. On a bare host (no sandbox), run
+`agent-browser install` once to fetch Chrome.
+
 ## Rules
 
 - Only modify files listed in your task's `"files"` array
+- Validate frontend design with `agent-browser` when the task touches UI
 - Follow patterns in AGENTS.md
 - One atomic commit per task
 - Do not skip validation

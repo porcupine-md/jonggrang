@@ -44,7 +44,21 @@ RUN npm install -g --no-fund --no-audit \
     jonggrang \
     @anthropic-ai/claude-code \
     opencode-ai \
-    @openai/codex
+    @openai/codex \
+    agent-browser
+
+# ── agent-browser Chrome (frontend design validation for every agent) ─────────
+# Bundles a headless Chromium + Linux system libs so `agent-browser` works
+# offline inside the sandbox. Chrome for Testing ships Linux amd64 only, so on
+# arm64 we install Playwright's Chromium build (agent-browser auto-detects it).
+# All coding agents use this to validate frontend design
+# (see skills/library/frontend/validating-visual-design).
+RUN ARCH=$(dpkg --print-architecture) \
+    && if [ "$ARCH" = "amd64" ]; then \
+         agent-browser install --with-deps; \
+       else \
+         npx --yes playwright@latest install --with-deps chromium; \
+       fi
 
 # ── openvscode-server (powers the "Full" code-editor mode in the dashboard) ───
 # Installed to /opt/openvscode-server, symlinked onto PATH. Latest stable tag is

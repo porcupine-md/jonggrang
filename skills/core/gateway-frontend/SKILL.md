@@ -4,7 +4,7 @@ description: Route frontend tasks to the right library skill. Detects React/Vue/
 type: gateway
 tier: core
 domains: [frontend, ui, components]
-trigger: "React, Vue, Angular, component, JSX, TSX, CSS, Tailwind, frontend, UI, browser, DOM, Next.js"
+trigger: "React, Vue, Angular, component, JSX, TSX, CSS, Tailwind, frontend, UI, browser, DOM, Next.js, agent-browser, visual, design check, screenshot, responsive"
 ---
 
 ## Purpose
@@ -24,6 +24,7 @@ You are the Frontend Gateway. Detect intent from the current task and return the
 | `accessibility`, `a11y`, `aria`, `screen reader` | `skills/library/frontend/accessibility/SKILL.md` |
 | `css`, `tailwind`, `styled-components`, `emotion` | `skills/library/frontend/styling-patterns/SKILL.md` |
 | `ssr`, `ssg`, `next.js`, `hydration`, `server component` | `skills/library/frontend/ssr-patterns/SKILL.md` |
+| `visual`, `design check`, `screenshot`, `responsive`, `contrast`, `browser validation`, `verify UI`, `agent-browser` | `skills/library/frontend/validating-visual-design/SKILL.md` |
 | `component`, `jsx`, `tsx`, `react` (general) | `skills/library/frontend/react-component-patterns/SKILL.md` |
 
 ## Output Format
