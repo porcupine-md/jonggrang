@@ -51,8 +51,11 @@ defineEmits(['open-task']);
 .card-list { display: flex; flex-direction: column; gap: 6px; position: relative; }
 .col-empty { font-size: 11px; color: var(--jg-text-faint); text-align: center; padding: 20px 0; }
 
-.card-move, .card-enter-active, .card-leave-active { transition: all 350ms cubic-bezier(0.4,0,0.2,1); }
+/* Animate only transform + opacity — never `all`, which also transitions
+   layout properties and made moving/entering cards pile up during live updates. */
+.card-move, .card-enter-active, .card-leave-active { transition: transform 350ms cubic-bezier(0.4,0,0.2,1), opacity 350ms cubic-bezier(0.4,0,0.2,1); }
 .card-enter-from { opacity: 0; transform: translateY(-8px); }
 .card-leave-to   { opacity: 0; transform: translateX(-8px); }
+/* Take leaving cards out of flow so siblings can FLIP-move smoothly. */
 .card-leave-active { position: absolute; width: calc(100% - 16px); }
 </style>
