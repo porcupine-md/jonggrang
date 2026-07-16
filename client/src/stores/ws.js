@@ -12,6 +12,10 @@ export const useWsStore = defineStore('ws', () => {
   const connected = ref(false);
   const connecting = ref(false);
   const subscribed = ref(new Set());
+  // Latest snapshot signal that a plan produced clarifying questions still
+  // awaiting answers, so PlanView can restore the questions continuation after
+  // a refresh rather than showing a bare dialog (dialog sequencing: task-004).
+  const planQuestions = ref(null); // { projectId, pending, sessionId } | null
 
   function connect() {
     if (socket.value?.connected || connecting.value) return;
@@ -31,7 +35,16 @@ export const useWsStore = defineStore('ws', () => {
       if (snapshot) {
         if (snapshot.state) projects.updateDerivedState(project_id, snapshot.state);
         if (snapshot.tasks) tasks.replaceAll(snapshot.tasks);
+        // Restore the running process (work or a plan-family op — the descriptor
+        // carries `command`, so PlanView can map kind→spinner from server truth).
         if (snapshot.process) proc.setRunning(snapshot.process);
+        if ('plan_questions_pending' in snapshot) {
+          planQuestions.value = {
+            projectId: project_id,
+            pending: !!snapshot.plan_questions_pending,
+            sessionId: snapshot.plan_questions_session_id || null,
+          };
+        }
         const orch = useOrchestrationStore();
         if (orch.projectId === project_id && snapshot.orchestration) orch.hydrate(snapshot.orchestration);
       }
@@ -137,5 +150,5 @@ export const useWsStore = defineStore('ws', () => {
     subscribed.value.clear();
   }
 
-  return { socket, connected, connecting, subscribed, connect, subscribe, unsubscribe, disconnect };
+  return { socket, connected, connecting, subscribed, planQuestions, connect, subscribe, unsubscribe, disconnect };
 });
