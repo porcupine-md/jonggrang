@@ -19,7 +19,8 @@ UI plan
   +-- audit repository and .jonggrang/UI.md
   |
   +-- no usable guide
-  |     -> plan ask -> guide draft + baseline choice -> user approval
+  |     -> optional user guide + plan ask -> guide draft + baseline choice
+  |        -> user approval
   |
   +-- usable guide
         -> feature UI_HANDOFF.md -> task ui_context -> task prompt
@@ -61,6 +62,26 @@ for every feature. A task needs even less context than a feature.
 repository. `.jonggrang/UI.md` is the guide read by Jonggrang inside any
 managed project. A future command may seed it from an existing `docs/UI.md`.
 This proposal does not move or overwrite the current document.
+
+## Optional user-level guide
+
+`~/.jonggrang/UI.md` is an opt-in personal reference. Jonggrang reads it only
+when a project has no `.jonggrang/UI.md`, during project initialization or a
+new UI plan. It can carry a user's usual direction, preferred references, and
+starter-baseline preference.
+
+It is not a shared token source for every project. A project may select it as
+input, modify it, or ignore it. After approval, the project guide and its token
+source are the authority for that project.
+
+The lookup order is:
+
+```text
+project .jonggrang/UI.md
+  > an explicit baseline or reference chosen for this project
+  > optional ~/.jonggrang/UI.md
+  > built-in neutral-application@1
+```
 
 ## `.jonggrang/UI.md` format
 
@@ -153,10 +174,12 @@ project.
 The planner uses this order:
 
 1. Reuse the existing project system when the repository already has one.
-2. Use a user-provided design reference, framework theme, or component system.
-3. Recommend a Jonggrang starter baseline when the repository and user provide
-   no usable direction.
-4. Ask the user when the product shape makes the recommendation uncertain.
+2. Use an explicit project reference, framework theme, component system, or
+   baseline selected by the user in the plan.
+3. Read the optional `~/.jonggrang/UI.md` as a personal reference when the
+   project has no guide.
+4. Recommend a Jonggrang starter baseline when no usable direction remains.
+5. Ask the user when the product shape makes the recommendation uncertain.
 
 The initial starter set should be small and modular:
 
@@ -223,9 +246,10 @@ user anything. It looks for:
 - existing `docs/UI.md`, `.jonggrang/UI.md`, Figma links, and design references;
 - stale source paths or rules in the current guide that conflict with code.
 
-When `.jonggrang/UI.md` is missing, the audit supplies the first draft. The
-planner uses the existing `plan ask` flow only for information code cannot
-reveal:
+When `.jonggrang/UI.md` is missing, the audit combines repository evidence
+with the optional `~/.jonggrang/UI.md` when it exists. The user-level guide is
+reference material, not a file copied unchanged into the project. The planner
+uses the existing `plan ask` flow only for information code cannot reveal:
 
 1. What should the UI follow: an existing product, Figma, screenshots, a URL,
    or a new direction?
