@@ -178,6 +178,21 @@ only when local code has no fit. A new component records its source path,
 states, and a Storybook story or representative screen when the project has
 that convention.
 
+Use the same entry shape for every reusable component or layout pattern:
+
+```md
+### Component or pattern name
+Use when: <the user/job condition>
+Source: <project path>
+Variants and states: <normal, loading, disabled, error, etc.>
+Example: <short markup or CSS snippet>
+Avoid: <the common wrong use>
+```
+
+This is intentionally more direct than "use the existing button." It tells the
+agent which file to inspect, what states must work, and when a new component is
+actually justified.
+
 #### 6. Interaction, responsive, and accessibility rules
 
 Capture shared behaviour that is absent from a static design: loading, empty,
@@ -205,6 +220,35 @@ include data-table rules for analytics, chart rules for trading, localization
 rules for multi-language products, role-state rules for admin software, theme
 modes, icons, motion, and framework overrides. It should not add empty template
 sections.
+
+## Guide validation and agent reading rules
+
+The platform validates the parts that can be checked without asking a model to
+judge taste:
+
+- frontmatter uses `jonggrang-ui-guide/v1` and names a baseline;
+- all eight required headings exist;
+- source-map paths exist, or are marked `none` or `planned` with an owner task;
+- a `ready` token source exists and a `planned` token source has a dependent
+  UI-foundation task;
+- referenced component paths, guide headings, and feature task ids resolve;
+- a selected baseline pack id and version exist in the local catalog.
+
+The agent follows this order when it works on a UI task:
+
+1. Read the selected feature handoff sections.
+2. Read the root-guide sections named by `ui_context` when the handoff needs
+   more rationale or a reusable rule.
+3. Read the named implementation source files before changing a component or
+   token.
+4. Report `UI_GUIDE_DRIFT` when the handoff, guide, and current code disagree.
+   It must not silently invent a new token, component, or rule to reconcile the
+   conflict.
+
+The current user request and approved feature handoff set the work scope. The
+root guide sets product policy. The token and component source files are the
+implementation evidence. A baseline pack and optional user-level guide only
+supply defaults before the project guide is approved.
 
 ## Worked example
 
@@ -399,6 +443,10 @@ Baseline: existing-project
 Token source: client/src/assets/main.css (ready)
 Guide status: unchanged
 
+## Feature intent
+Warehouse operators choose which exception alerts need attention during a shift.
+They must understand the effect before saving and return to scanning quickly.
+
 ## Shared direction
 - Keep the exception-console density and settings-section layout.
 - Use existing `StatusTag`, `BaseModal`, and `--po-*` tokens.
@@ -411,9 +459,21 @@ Guide status: unchanged
 - client/src/components/app/BaseModal.vue
 
 ## Task task-003
-Scope: persist alert preferences and show the save result.
-States: loading, saved, save-error.
-Decision: use explicit Save. Changes affect warehouse notifications immediately.
+Objective: persist preferences and make the result obvious without a page reload.
+Use: existing primary `Button`; no new toast or alert component.
+Change: wire Save to the preference endpoint and place feedback below the
+settings section header.
+
+States:
+- loading: Save is disabled and shows its built-in loading state.
+- saved: show a short green inline message for five seconds.
+- save-error: keep the user's selections and show the API message inline.
+
+Do not: autosave, navigate away, or add a second primary button.
+Acceptance: keyboard users can activate Save and focus stays on the button
+while feedback appears. The error message is linked to the settings section.
+Sources: `client/src/views/ExceptionsView.vue`,
+`client/src/components/app/BaseModal.vue`.
 Check: npm test
 ```
 
@@ -427,7 +487,7 @@ Check: npm test
   "blocked_by": ["task-001"],
   "ui_context": {
     "handoff": ".jonggrang/.output/features/alert-preferences/UI_HANDOFF.md",
-    "sections": ["Shared direction", "Task task-003"],
+    "sections": ["Feature intent", "Shared direction", "Task task-003"],
     "guide": ".jonggrang/UI.md",
     "guide_revision": "sha256:8f20...b19c",
     "guide_sections": [
@@ -435,6 +495,8 @@ Check: npm test
       "Interaction, responsive, and accessibility rules"
     ],
     "baseline": "existing-project",
+    "read_order": ["handoff", "guide_sections", "source_files"],
+    "on_conflict": "report UI_GUIDE_DRIFT",
     "token_source": "client/src/assets/main.css",
     "source_files": [
       "client/src/views/ExceptionsView.vue",
@@ -566,6 +628,11 @@ It does not repeat a full design interview for every UI plan.
 guide, its revision, the baseline, and the feature decisions. It does not copy
 the root guide.
 
+Every handoff has a feature intent, shared direction, references, and one short
+section for every UI task. A task section answers six questions: what outcome
+it owns, which existing component/pattern it uses, what it changes, how every
+required state behaves, what it must avoid, and how to verify it.
+
 ```md
 # UI handoff: notification settings
 
@@ -575,8 +642,12 @@ Baseline: neutral-application@1
 Token source: client/src/assets/main.css (ready)
 Guide status: unchanged
 
+## Feature intent
+Administrators choose which team notifications they receive. The preference
+must be understandable before it takes effect.
+
 ## Shared direction
-- Use the existing settings-section pattern and semantic theme values.
+- Use the settings-section pattern and semantic theme values.
 - Keep one primary action per viewport.
 
 ## References
@@ -585,9 +656,20 @@ Guide status: unchanged
 - client/src/components/app/BaseModal.vue
 
 ## Task task-003
-Scope: save and inline error state.
-States: loading, save-error, saved.
-Decision: explicit save; the preference changes product behaviour immediately.
+Objective: save the changed preferences and show the result inline.
+Use: existing primary button and settings-section pattern.
+Change: submit the form without navigation.
+
+States:
+- loading: disable Save and show its loading state.
+- saved: show a short inline success message.
+- save-error: preserve values and show an inline error near the controls.
+
+Do not: autosave, add a new toast system, or create a new button style.
+Acceptance: Save remains keyboard reachable; an error is associated with the
+changed controls; only one primary action is visible.
+Sources: `client/src/assets/main.css`,
+`client/src/components/app/BaseModal.vue`.
 Check: npm test
 ```
 
@@ -603,10 +685,11 @@ Add an inline-validation rule because this feature introduces the first
 reusable validated form pattern.
 ```
 
-The handoff contains shared feature direction and short `## Task task-xxx`
-sections. A large feature may have many task sections, but the loader reads
-only `## Shared direction` and the section for its own task id. It never
-injects the complete guide or every feature task into a fresh context.
+The handoff contains feature intent, shared direction, and short
+`## Task task-xxx` sections. A large feature may have many task sections, but
+the loader reads only `## Feature intent`, `## Shared direction`, and the
+section for its own task id. It never injects the complete guide or every
+feature task into a fresh context.
 
 ## Task contract and prompt context
 
@@ -616,6 +699,7 @@ Task breakdown adds `ui_context` only to UI-related tasks:
 ui_context:
   handoff: .jonggrang/.output/features/notification-settings/UI_HANDOFF.md
   sections:
+    - Feature intent
     - Shared direction
     - Task task-003
   guide: .jonggrang/UI.md
@@ -624,6 +708,11 @@ ui_context:
     - Components and layout patterns
     - Interaction, responsive, and accessibility rules
   baseline: neutral-application@1
+  read_order:
+    - handoff
+    - guide_sections
+    - source_files
+  on_conflict: report UI_GUIDE_DRIFT
   token_source: client/src/assets/main.css
   source_files:
     - client/src/assets/main.css
