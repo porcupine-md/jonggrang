@@ -47,6 +47,27 @@ them mandatory:
 not copy a full CSS file, DTCG JSON, or Storybook into Markdown. Token values
 still have one editable source in project code or in a DTCG file.
 
+## The detail level to borrow from `docs/UI.md`
+
+The project guide should borrow the level of specificity in the existing
+`docs/UI.md`, not merely its headings. A component rule is useful when an agent
+can implement it without guessing. A layout rule is useful when it shows the
+spacing, state, or source component that makes the pattern recognisable.
+
+| Existing `docs/UI.md` detail | Equivalent in `.jonggrang/UI.md` |
+|---|---|
+| Philosophy such as terminal-first, sharp corners, and density | Product rationale plus visual direction, including explicit do/don't rules |
+| Colour, surface, text, and light-mode token values | Token contract with canonical source, mode rules, and a small representative snippet |
+| Font stack, type scale, and spacing values | Typography and spacing table with the values agents should reuse |
+| Button, input, dialog, tag, and tab recipes | Component entries with use case, source path, variants/states, and a concrete usage or CSS sample |
+| Sidebar, settings section, Kanban, and timeline layouts | Layout-pattern entries with markup/CSS and a representative screen path |
+| Dark/light handling, icons, motion, and PrimeVue overrides | Conditional integration sections when the repository uses modes, icon libraries, animation, or a framework component library |
+| Rules summary | Short fallback injected or referenced by UI tasks |
+
+A guide does not need every dashboard-specific section from `docs/UI.md`. It
+does need the same directness for the components and patterns that matter to
+its own product.
+
 ## Why there are three levels
 
 A single guide is enough for the product system. It cannot carry every decision
@@ -133,21 +154,40 @@ prevents duplicate components and duplicated token values in the guide.
 #### 4. Token contract, typography, and spacing
 
 Name the canonical token source and the rules for new values. Cover semantic
-colour, type, spacing, radius, elevation, and component states as relevant.
-For a simple project this points to CSS variables or a framework theme. For a
-multi-target system it can point to DTCG JSON.
+colour, surface, text, type, spacing, radius, elevation, and component states
+as relevant. For a simple project this points to CSS variables or a framework
+theme. For a multi-target system it can point to DTCG JSON.
+
+Show enough direct detail to prevent a new arbitrary value: a representative
+token snippet, type scale, spacing scale, and any dark/light override or
+colour-mixing rule that the project uses. The complete generated token file
+stays at the canonical source path.
 
 #### 5. Components and layout patterns
 
 Record reusable primitives, recurring page patterns, and how to handle a gap.
-An agent should be able to find the existing button, form, dialog, table,
-navigation, empty state, or settings pattern before it creates another one.
+For every component or pattern an agent is expected to reuse, include its source
+path and at least one concrete usage, variant, or CSS example. An agent should
+be able to find the existing button, form, dialog, table, navigation, empty
+state, or settings pattern before it creates another one.
+
+State the creation rule as well: reuse an existing component first; add a
+variant when the primitive fits; create a local component only when the pattern
+will recur or needs its own accessibility behaviour; use a baseline primitive
+only when local code has no fit. A new component records its source path,
+states, and a Storybook story or representative screen when the project has
+that convention.
 
 #### 6. Interaction, responsive, and accessibility rules
 
 Capture shared behaviour that is absent from a static design: loading, empty,
 error, destructive actions, keyboard and focus handling, responsive behaviour,
 and contrast requirements. Feature-specific states stay in the handoff.
+
+When repository evidence calls for it, add direct sections for theme modes,
+icons, motion, and framework overrides. A PrimeVue project, for example, should
+state where overrides live and which defaults must be removed; a project with
+no component framework does not need that section.
 
 #### 7. References and verification
 
@@ -162,8 +202,9 @@ the affected field", and "keep one primary action per viewport".
 
 The planner may add a section when repository evidence needs it. Useful examples
 include data-table rules for analytics, chart rules for trading, localization
-rules for multi-language products, and role-state rules for admin software.
-It should not add empty template sections.
+rules for multi-language products, role-state rules for admin software, theme
+modes, icons, motion, and framework overrides. It should not add empty template
+sections.
 
 ## Worked example
 
@@ -209,22 +250,132 @@ when the same pattern appears in more than one screen.
 
 ## Token contract, typography, and spacing
 Use `--po-*` CSS variables from `main.css`. New colours need a semantic name;
-do not add raw hex values to a component. Use the mono font stack. Keep related
-controls 8px apart and separate groups by 16px. Interactive surfaces have
-`--po-radius: 0px`.
+do not add raw hex values to a component.
+
+```css
+:root {
+  --po-bg: oklch(0.165 0.014 245);
+  --po-surface: oklch(0.195 0.014 245);
+  --po-border: oklch(0.32 0.014 245);
+  --po-text: oklch(0.92 0.006 95);
+  --po-text-muted: oklch(0.60 0.008 95);
+  --po-action: oklch(0.78 0.16 145);
+  --po-danger: oklch(0.68 0.18 25);
+  --po-radius: 0px;
+}
+```
+
+Use the mono font stack at 13px/1.6 for body text. Keep related controls 8px
+apart and separate groups by 16px.
+
+| Use | Size | Weight | Token |
+|---|---:|---:|---|
+| Section heading | 11px | 600 | `--po-text-muted` |
+| Body and controls | 13px | 400 | `--po-text` |
+| Metadata | 11px | 400 | `--po-text-muted` |
+
+A new token belongs in `main.css` with a semantic name and a dark/light value
+when the application supports both modes. Use `color-mix()` for faded status
+backgrounds instead of introducing a raw alpha colour.
 
 ## Components and layout patterns
-Use `BaseModal` for confirmation flows and the existing `StatusTag` for shipment
-status. Use the settings-section pattern for preference groups. Check the
-exception screen before creating a new table, filter, empty state, or toolbar.
-A new local component needs a story or an example screen when the project later
-adds Storybook.
+
+### Primary action
+
+Use PrimeVue `Button` with the local primary class for the one action that
+commits the current screen. The loading state belongs on the button; do not add
+a second spinner beside it.
+
+```vue
+<Button
+  label="Save preferences"
+  :loading="saving"
+  class="po-button-primary"
+  @click="save"
+/>
+```
+
+```css
+.po-button-primary {
+  background: var(--po-action);
+  color: var(--po-bg);
+  border: 1px solid var(--po-action);
+  border-radius: var(--po-radius);
+}
+```
+
+### Shipment status
+
+Use the existing `StatusTag` component rather than a hand-written coloured
+badge. It maps known statuses to semantic tokens and keeps the label readable.
+
+```vue
+<StatusTag :status="shipment.status" />
+```
+
+Source: `client/src/components/app/StatusTag.vue`.
+
+### Confirmation dialog
+
+Use `BaseModal` for destructive or irreversible actions. It owns focus return
+and escape handling. The caller supplies the action text and button callback.
+
+```vue
+<BaseModal v-model:open="confirming" title="Cancel shipment">
+  <p>This cannot be undone after the carrier pickup is confirmed.</p>
+  <template #actions>
+    <Button severity="secondary" @click="confirming = false">Keep shipment</Button>
+    <Button severity="danger" @click="cancelShipment">Cancel shipment</Button>
+  </template>
+</BaseModal>
+```
+
+Source: `client/src/components/app/BaseModal.vue`.
+
+### Settings section
+
+Use this layout for a small group of related preferences. Do not create a new
+card pattern for a single form section.
+
+```vue
+<section class="po-settings-section">
+  <header>
+    <h2>Alert preferences</h2>
+    <p>Choose which warehouse exceptions need immediate attention.</p>
+  </header>
+  <!-- controls go here -->
+</section>
+```
+
+```css
+.po-settings-section {
+  background: var(--po-surface);
+  border: 1px solid var(--po-border);
+  border-radius: var(--po-radius);
+  padding: 20px;
+}
+```
+
+### When there is a gap
+
+Check `ExceptionsView.vue` and the shared component directory first. Add a
+variant to an existing component when its behaviour fits. Create a local
+component when the same pattern will be reused or when it needs its own focus,
+keyboard, or state handling. Add the component path and its states to this
+guide; add a Storybook story when Storybook exists.
 
 ## Interaction, responsive, and accessibility rules
 Show save errors beside the affected control. Destructive actions need a clear
 confirmation. Focus returns to the triggering control when a dialog closes.
 The desktop console supports 1280px and above; below that, filter controls stack
 before the data table scrolls horizontally. Keyboard focus uses the green ring.
+
+## Theme modes and PrimeVue overrides
+Dark is the default. Light mode overrides `--po-bg`, `--po-surface`,
+`--po-text`, and `--po-action` for contrast. All PrimeVue overrides live in
+`client/src/assets/main.css`; do not add scoped overrides that compete with the
+global theme. Use PrimeIcons for shared icon names. Motion is limited to
+background, border, and colour transitions under 150ms.
 
 ## References and verification
 The source map and Figma file are references only. Run `npm test` and the
