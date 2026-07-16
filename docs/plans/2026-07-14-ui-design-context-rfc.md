@@ -165,6 +165,140 @@ include data-table rules for analytics, chart rules for trading, localization
 rules for multi-language products, and role-state rules for admin software.
 It should not add empty template sections.
 
+## Worked example
+
+The following fictional project, **ParcelOps Console**, shows how the three
+artifacts fit together. It is a review example, not a baseline that Jonggrang
+will copy into a project.
+
+### 1. Project guide: `.jonggrang/UI.md`
+
+```md
+---
+format: jonggrang-ui-guide/v1
+baseline: existing-project
+ui_framework: vue + primevue
+token_source: client/src/assets/main.css
+token_status: ready
+component_source: client/src/components/
+storybook: none
+references:
+  - https://figma.example.com/file/parcelops-console
+---
+
+# ParcelOps Console UI guide
+
+## Product and UX rationale
+ParcelOps is used by warehouse operators during a shift. They scan shipment
+exceptions, resolve them quickly, and move to the next item. The UI favours
+information density, keyboard use, and clear status over decorative space.
+
+## Visual direction and baseline
+Follow the existing console: dark by default, square corners, monospace labels,
+and one green primary action. Do not add marketing-card layouts, gradients, or
+rounded pills. PrimeVue is the component baseline; local components wrap it
+when the same pattern appears in more than one screen.
+
+## Source map
+- Tokens and global styles: `client/src/assets/main.css`
+- Shared components: `client/src/components/app/`
+- Existing exception screen: `client/src/views/ExceptionsView.vue`
+- Dialog example: `client/src/components/app/BaseModal.vue`
+- Visual reference: `https://figma.example.com/file/parcelops-console`
+- Storybook and visual regression: none
+
+## Token contract, typography, and spacing
+Use `--po-*` CSS variables from `main.css`. New colours need a semantic name;
+do not add raw hex values to a component. Use the mono font stack. Keep related
+controls 8px apart and separate groups by 16px. Interactive surfaces have
+`--po-radius: 0px`.
+
+## Components and layout patterns
+Use `BaseModal` for confirmation flows and the existing `StatusTag` for shipment
+status. Use the settings-section pattern for preference groups. Check the
+exception screen before creating a new table, filter, empty state, or toolbar.
+A new local component needs a story or an example screen when the project later
+adds Storybook.
+
+## Interaction, responsive, and accessibility rules
+Show save errors beside the affected control. Destructive actions need a clear
+confirmation. Focus returns to the triggering control when a dialog closes.
+The desktop console supports 1280px and above; below that, filter controls stack
+before the data table scrolls horizontally. Keyboard focus uses the green ring.
+
+## References and verification
+The source map and Figma file are references only. Run `npm test` and the
+existing lint command. There is no screenshot command yet.
+
+## Rules summary
+- Reuse local components before creating one.
+- Use semantic `--po-*` tokens.
+- Keep one primary action per viewport.
+- Put errors near the control that caused them.
+```
+
+### 2. Feature handoff: `.jonggrang/.output/features/alert-preferences/UI_HANDOFF.md`
+
+```md
+# UI handoff: alert preferences
+
+Guide: .jonggrang/UI.md
+Guide revision: sha256:8f20...b19c
+Baseline: existing-project
+Token source: client/src/assets/main.css (ready)
+Guide status: unchanged
+
+## Shared direction
+- Keep the exception-console density and settings-section layout.
+- Use existing `StatusTag`, `BaseModal`, and `--po-*` tokens.
+- The page has one primary action: Save preferences.
+
+## References
+- .jonggrang/UI.md#components-and-layout-patterns
+- .jonggrang/UI.md#interaction-responsive-and-accessibility-rules
+- client/src/views/ExceptionsView.vue
+- client/src/components/app/BaseModal.vue
+
+## Task task-003
+Scope: persist alert preferences and show the save result.
+States: loading, saved, save-error.
+Decision: use explicit Save. Changes affect warehouse notifications immediately.
+Check: npm test
+```
+
+### 3. Task context: `jonggrang-tasks.json`
+
+```json
+{
+  "id": "task-003",
+  "title": "Persist alert preferences and render save feedback",
+  "status": "pending",
+  "blocked_by": ["task-001"],
+  "ui_context": {
+    "handoff": ".jonggrang/.output/features/alert-preferences/UI_HANDOFF.md",
+    "sections": ["Shared direction", "Task task-003"],
+    "guide": ".jonggrang/UI.md",
+    "guide_revision": "sha256:8f20...b19c",
+    "guide_sections": [
+      "Components and layout patterns",
+      "Interaction, responsive, and accessibility rules"
+    ],
+    "baseline": "existing-project",
+    "token_source": "client/src/assets/main.css",
+    "source_files": [
+      "client/src/views/ExceptionsView.vue",
+      "client/src/components/app/BaseModal.vue"
+    ],
+    "states": ["loading", "saved", "save-error"],
+    "verification": ["npm test"]
+  }
+}
+```
+
+The task prompt receives the `ui_context` object and the two named handoff
+sections. It reads the root-guide sections or source files only when the
+handoff is not enough to make an implementation decision.
+
 ## Baselines when the user has no preference
 
 A baseline is a starting point for a guide and, when needed, an initial token
