@@ -1,7 +1,9 @@
 # UI guide, feature handoff, and task context
 
-**Status:** proposal only; this branch does not change Jonggrang runtime behavior.<br>
-**Tracking:** [#89](https://github.com/porcupine-md/jonggrang/issues/89)<br>
+**Status:** proposal only; this branch does not change Jonggrang runtime behavior.
+
+**Tracking:** [#89](https://github.com/porcupine-md/jonggrang/issues/89)
+
 **Date:** 2026-07-14
 
 ## The decision
@@ -35,13 +37,16 @@ in the feature.
 The guide borrows the useful parts of several approaches without making all of
 them mandatory:
 
-| Source | What the guide keeps |
-|---|---|
-| Existing [`docs/UI.md`](../UI.md) | Philosophy, tokens, typography, components, layout patterns, and a rules summary |
-| Google `DESIGN.md` | Design rationale, structured identity, references, and clear do/don't rules |
-| `designtoken.md` | A practical coverage checklist: colour, type, spacing, component states, and visual references |
-| DTCG | A canonical typed token source when a project needs to transform tokens across targets |
-| Storybook and Code Connect | Optional links to real components and their code mapping |
+- Existing [`docs/UI.md`](../UI.md) contributes philosophy, tokens, typography,
+  components, layout patterns, and a rules summary.
+- Google `DESIGN.md` contributes design rationale, structured identity,
+  references, and clear do/don't rules.
+- `designtoken.md` contributes a practical coverage checklist: colour, type,
+  spacing, component states, and visual references.
+- DTCG supplies a canonical typed token source when a project needs to
+  transform tokens across targets.
+- Storybook and Code Connect supply optional links to real components and their
+  code mapping.
 
 `.jonggrang/UI.md` therefore contains rationale and token-use rules. It does
 not copy a full CSS file, DTCG JSON, or Storybook into Markdown. Token values
@@ -54,15 +59,20 @@ The project guide should borrow the level of specificity in the existing
 can implement it without guessing. A layout rule is useful when it shows the
 spacing, state, or source component that makes the pattern recognisable.
 
-| Existing `docs/UI.md` detail | Equivalent in `.jonggrang/UI.md` |
-|---|---|
-| Philosophy such as terminal-first, sharp corners, and density | Product rationale plus visual direction, including explicit do/don't rules |
-| Colour, surface, text, and light-mode token values | Token contract with canonical source, mode rules, and a small representative snippet |
-| Font stack, type scale, and spacing values | Typography and spacing table with the values agents should reuse |
-| Button, input, dialog, tag, and tab recipes | Component entries with use case, source path, variants/states, and a concrete usage or CSS sample |
-| Sidebar, settings section, Kanban, and timeline layouts | Layout-pattern entries with markup/CSS and a representative screen path |
-| Dark/light handling, icons, motion, and PrimeVue overrides | Conditional integration sections when the repository uses modes, icon libraries, animation, or a framework component library |
-| Rules summary | Short fallback injected or referenced by UI tasks |
+- **Philosophy:** terminal-first, sharp-corner, and density guidance becomes
+  product rationale plus visual direction and explicit do/don't rules.
+- **Tokens:** colour, surface, text, and light-mode values become a token
+  contract with canonical source, mode rules, and a representative snippet.
+- **Typography:** the font stack, type scale, and spacing values become a table
+  of values agents should reuse.
+- **Component recipes:** buttons, inputs, dialogs, tags, and tabs become
+  entries with a use case, source path, variants/states, and concrete usage or
+  CSS.
+- **Layout patterns:** sidebar, settings, Kanban, and timeline patterns become
+  markup/CSS entries with a representative screen path.
+- **Framework integration:** dark/light handling, icons, motion, and PrimeVue
+  overrides become conditional sections when the project uses them.
+- **Rules summary:** a short fallback is injected or referenced by UI tasks.
 
 A guide does not need every dashboard-specific section from `docs/UI.md`. It
 does need the same directness for the components and patterns that matter to
@@ -73,11 +83,14 @@ its own product.
 A single guide is enough for the product system. It cannot carry every decision
 for every feature. A task needs even less context than a feature.
 
-| Location | Contains | Changes when |
-|---|---|---|
-| `.jonggrang/UI.md` | Product rationale, baseline, source map, and reusable rules | A durable product rule changes |
-| `.jonggrang/.output/features/<id>/UI_HANDOFF.md` | Approved feature decisions and selected guide references | A plan is approved, revised, or extended |
-| `jonggrang-tasks.json` `ui_context` | A task's selected handoff sections, files, states, and checks | Tasks are broken down or appended |
+- `.jonggrang/UI.md` contains product rationale, baseline, source map, and
+  reusable rules. It changes when a durable product rule changes.
+- `.jonggrang/.output/features/<id>/UI_HANDOFF.md` contains approved feature
+  decisions and selected guide references. It changes when the plan is
+  approved, revised, or extended.
+- `jonggrang-tasks.json` `ui_context` contains a task's selected handoff
+  sections, files, states, and checks. It changes when tasks are broken down or
+  appended.
 
 `docs/UI.md` remains the human-facing dashboard documentation in this
 repository. `.jonggrang/UI.md` is the guide read by Jonggrang inside any
@@ -249,268 +262,6 @@ The current user request and approved feature handoff set the work scope. The
 root guide sets product policy. The token and component source files are the
 implementation evidence. A baseline pack and optional user-level guide only
 supply defaults before the project guide is approved.
-
-## Worked example
-
-The following fictional project, **ParcelOps Console**, shows how the three
-artifacts fit together. It is a review example, not a baseline that Jonggrang
-will copy into a project.
-
-### 1. Project guide: `.jonggrang/UI.md`
-
-```md
----
-format: jonggrang-ui-guide/v1
-baseline: existing-project
-ui_framework: vue + primevue
-token_source: client/src/assets/main.css
-token_status: ready
-component_source: client/src/components/
-storybook: none
-references:
-  - https://figma.example.com/file/parcelops-console
----
-
-# ParcelOps Console UI guide
-
-## Product and UX rationale
-ParcelOps is used by warehouse operators during a shift. They scan shipment
-exceptions, resolve them quickly, and move to the next item. The UI favours
-information density, keyboard use, and clear status over decorative space.
-
-## Visual direction and baseline
-Follow the existing console: dark by default, square corners, monospace labels,
-and one green primary action. Do not add marketing-card layouts, gradients, or
-rounded pills. PrimeVue is the component baseline; local components wrap it
-when the same pattern appears in more than one screen.
-
-## Source map
-- Tokens and global styles: `client/src/assets/main.css`
-- Shared components: `client/src/components/app/`
-- Existing exception screen: `client/src/views/ExceptionsView.vue`
-- Dialog example: `client/src/components/app/BaseModal.vue`
-- Visual reference: `https://figma.example.com/file/parcelops-console`
-- Storybook and visual regression: none
-
-## Token contract, typography, and spacing
-Use `--po-*` CSS variables from `main.css`. New colours need a semantic name;
-do not add raw hex values to a component.
-
-```css
-:root {
-  --po-bg: oklch(0.165 0.014 245);
-  --po-surface: oklch(0.195 0.014 245);
-  --po-border: oklch(0.32 0.014 245);
-  --po-text: oklch(0.92 0.006 95);
-  --po-text-muted: oklch(0.60 0.008 95);
-  --po-action: oklch(0.78 0.16 145);
-  --po-danger: oklch(0.68 0.18 25);
-  --po-radius: 0px;
-}
-```
-
-Use the mono font stack at 13px/1.6 for body text. Keep related controls 8px
-apart and separate groups by 16px.
-
-| Use | Size | Weight | Token |
-|---|---:|---:|---|
-| Section heading | 11px | 600 | `--po-text-muted` |
-| Body and controls | 13px | 400 | `--po-text` |
-| Metadata | 11px | 400 | `--po-text-muted` |
-
-A new token belongs in `main.css` with a semantic name and a dark/light value
-when the application supports both modes. Use `color-mix()` for faded status
-backgrounds instead of introducing a raw alpha colour.
-
-## Components and layout patterns
-
-### Primary action
-
-Use PrimeVue `Button` with the local primary class for the one action that
-commits the current screen. The loading state belongs on the button; do not add
-a second spinner beside it.
-
-```vue
-<Button
-  label="Save preferences"
-  :loading="saving"
-  class="po-button-primary"
-  @click="save"
-/>
-```
-
-```css
-.po-button-primary {
-  background: var(--po-action);
-  color: var(--po-bg);
-  border: 1px solid var(--po-action);
-  border-radius: var(--po-radius);
-}
-```
-
-### Shipment status
-
-Use the existing `StatusTag` component rather than a hand-written coloured
-badge. It maps known statuses to semantic tokens and keeps the label readable.
-
-```vue
-<StatusTag :status="shipment.status" />
-```
-
-Source: `client/src/components/app/StatusTag.vue`.
-
-### Confirmation dialog
-
-Use `BaseModal` for destructive or irreversible actions. It owns focus return
-and escape handling. The caller supplies the action text and button callback.
-
-```vue
-<BaseModal v-model:open="confirming" title="Cancel shipment">
-  <p>This cannot be undone after the carrier pickup is confirmed.</p>
-  <template #actions>
-    <Button severity="secondary" @click="confirming = false">Keep shipment</Button>
-    <Button severity="danger" @click="cancelShipment">Cancel shipment</Button>
-  </template>
-</BaseModal>
-```
-
-Source: `client/src/components/app/BaseModal.vue`.
-
-### Settings section
-
-Use this layout for a small group of related preferences. Do not create a new
-card pattern for a single form section.
-
-```vue
-<section class="po-settings-section">
-  <header>
-    <h2>Alert preferences</h2>
-    <p>Choose which warehouse exceptions need immediate attention.</p>
-  </header>
-  <!-- controls go here -->
-</section>
-```
-
-```css
-.po-settings-section {
-  background: var(--po-surface);
-  border: 1px solid var(--po-border);
-  border-radius: var(--po-radius);
-  padding: 20px;
-}
-```
-
-### When there is a gap
-
-Check `ExceptionsView.vue` and the shared component directory first. Add a
-variant to an existing component when its behaviour fits. Create a local
-component when the same pattern will be reused or when it needs its own focus,
-keyboard, or state handling. Add the component path and its states to this
-guide; add a Storybook story when Storybook exists.
-
-## Interaction, responsive, and accessibility rules
-Show save errors beside the affected control. Destructive actions need a clear
-confirmation. Focus returns to the triggering control when a dialog closes.
-The desktop console supports 1280px and above; below that, filter controls stack
-before the data table scrolls horizontally. Keyboard focus uses the green ring.
-
-## Theme modes and PrimeVue overrides
-Dark is the default. Light mode overrides `--po-bg`, `--po-surface`,
-`--po-text`, and `--po-action` for contrast. All PrimeVue overrides live in
-`client/src/assets/main.css`; do not add scoped overrides that compete with the
-global theme. Use PrimeIcons for shared icon names. Motion is limited to
-background, border, and colour transitions under 150ms.
-
-## References and verification
-The source map and Figma file are references only. Run `npm test` and the
-existing lint command. There is no screenshot command yet.
-
-## Rules summary
-- Reuse local components before creating one.
-- Use semantic `--po-*` tokens.
-- Keep one primary action per viewport.
-- Put errors near the control that caused them.
-```
-
-### 2. Feature handoff: `.jonggrang/.output/features/alert-preferences/UI_HANDOFF.md`
-
-```md
-# UI handoff: alert preferences
-
-Guide: .jonggrang/UI.md
-Guide revision: sha256:8f20...b19c
-Baseline: existing-project
-Token source: client/src/assets/main.css (ready)
-Guide status: unchanged
-
-## Feature intent
-Warehouse operators choose which exception alerts need attention during a shift.
-They must understand the effect before saving and return to scanning quickly.
-
-## Shared direction
-- Keep the exception-console density and settings-section layout.
-- Use existing `StatusTag`, `BaseModal`, and `--po-*` tokens.
-- The page has one primary action: Save preferences.
-
-## References
-- .jonggrang/UI.md#components-and-layout-patterns
-- .jonggrang/UI.md#interaction-responsive-and-accessibility-rules
-- client/src/views/ExceptionsView.vue
-- client/src/components/app/BaseModal.vue
-
-## Task task-003
-Objective: persist preferences and make the result obvious without a page reload.
-Use: existing primary `Button`; no new toast or alert component.
-Change: wire Save to the preference endpoint and place feedback below the
-settings section header.
-
-States:
-- loading: Save is disabled and shows its built-in loading state.
-- saved: show a short green inline message for five seconds.
-- save-error: keep the user's selections and show the API message inline.
-
-Do not: autosave, navigate away, or add a second primary button.
-Acceptance: keyboard users can activate Save and focus stays on the button
-while feedback appears. The error message is linked to the settings section.
-Sources: `client/src/views/ExceptionsView.vue`,
-`client/src/components/app/BaseModal.vue`.
-Check: npm test
-```
-
-### 3. Task context: `jonggrang-tasks.json`
-
-```json
-{
-  "id": "task-003",
-  "title": "Persist alert preferences and render save feedback",
-  "status": "pending",
-  "blocked_by": ["task-001"],
-  "ui_context": {
-    "handoff": ".jonggrang/.output/features/alert-preferences/UI_HANDOFF.md",
-    "sections": ["Feature intent", "Shared direction", "Task task-003"],
-    "guide": ".jonggrang/UI.md",
-    "guide_revision": "sha256:8f20...b19c",
-    "guide_sections": [
-      "Components and layout patterns",
-      "Interaction, responsive, and accessibility rules"
-    ],
-    "baseline": "existing-project",
-    "read_order": ["handoff", "guide_sections", "source_files"],
-    "on_conflict": "report UI_GUIDE_DRIFT",
-    "token_source": "client/src/assets/main.css",
-    "source_files": [
-      "client/src/views/ExceptionsView.vue",
-      "client/src/components/app/BaseModal.vue"
-    ],
-    "states": ["loading", "saved", "save-error"],
-    "verification": ["npm test"]
-  }
-}
-```
-
-The task prompt receives the `ui_context` object and the two named handoff
-sections. It reads the root-guide sections or source files only when the
-handoff is not enough to make an implementation decision.
 
 ## Baselines when the user has no preference
 
@@ -813,7 +564,7 @@ extensions do not change the root-guide, handoff, or task-context contract.
 ## Sources checked
 
 | Source | Why it was used | Retrieved |
-|---|---|---|
+| --- | --- | --- |
 | [Google Labs `DESIGN.md`](https://github.com/google-labs-code/design.md) | Guide format, rationale, linting, and export ideas | 2026-07-14 |
 | [DTCG 2025.10](https://www.w3.org/community/design-tokens/2025/10/28/design-tokens-specification-reaches-first-stable-version/) | Typed token format when a project needs cross-target tokens | 2026-07-14 |
 | [Style Dictionary token docs](https://github.com/style-dictionary/style-dictionary/blob/main/docs/src/content/docs/info/tokens.md) | Token transforms for projects using DTCG | 2026-07-14 |
@@ -822,3 +573,265 @@ extensions do not change the root-guide, handoff, or task-context contract.
 | [Moodle design system](https://github.com/moodlehq/design-system) | Component documentation and agent lookup practice | 2026-07-14 |
 | [CMS design system](https://github.com/CMSgov/design-system) | Storybook and visual-test practice | 2026-07-14 |
 | [designtoken.md](https://designtoken.md/) | Markdown token-sheet format; vendor claims treated as unverified | 2026-07-14 |
+
+## Worked example
+
+The following fictional project, **ParcelOps Console**, shows how the three
+artifacts fit together. It is a review example, not a baseline that Jonggrang
+will copy into a project.
+
+### 1. Project guide: `.jonggrang/UI.md`
+
+````md
+---
+format: jonggrang-ui-guide/v1
+baseline: existing-project
+ui_framework: vue + primevue
+token_source: client/src/assets/main.css
+token_status: ready
+component_source: client/src/components/
+storybook: none
+references:
+  - https://figma.example.com/file/parcelops-console
+---
+
+# ParcelOps Console UI guide
+
+## Product and UX rationale
+ParcelOps is used by warehouse operators during a shift. They scan shipment
+exceptions, resolve them quickly, and move to the next item. The UI favours
+information density, keyboard use, and clear status over decorative space.
+
+## Visual direction and baseline
+Follow the existing console: dark by default, square corners, monospace labels,
+and one green primary action. Do not add marketing-card layouts, gradients, or
+rounded pills. PrimeVue is the component baseline; local components wrap it
+when the same pattern appears in more than one screen.
+
+## Source map
+- Tokens and global styles: `client/src/assets/main.css`
+- Shared components: `client/src/components/app/`
+- Existing exception screen: `client/src/views/ExceptionsView.vue`
+- Dialog example: `client/src/components/app/BaseModal.vue`
+- Visual reference: `https://figma.example.com/file/parcelops-console`
+- Storybook and visual regression: none
+
+## Token contract, typography, and spacing
+Use `--po-*` CSS variables from `main.css`. New colours need a semantic name;
+do not add raw hex values to a component.
+
+```css
+:root {
+  --po-bg: oklch(0.165 0.014 245);
+  --po-surface: oklch(0.195 0.014 245);
+  --po-border: oklch(0.32 0.014 245);
+  --po-text: oklch(0.92 0.006 95);
+  --po-text-muted: oklch(0.60 0.008 95);
+  --po-action: oklch(0.78 0.16 145);
+  --po-danger: oklch(0.68 0.18 25);
+  --po-radius: 0px;
+}
+```
+
+Use the mono font stack at 13px/1.6 for body text. Keep related controls 8px
+apart and separate groups by 16px.
+
+| Use | Size | Weight | Token |
+|---|---:|---:|---|
+| Section heading | 11px | 600 | `--po-text-muted` |
+| Body and controls | 13px | 400 | `--po-text` |
+| Metadata | 11px | 400 | `--po-text-muted` |
+
+A new token belongs in `main.css` with a semantic name and a dark/light value
+when the application supports both modes. Use `color-mix()` for faded status
+backgrounds instead of introducing a raw alpha colour.
+
+## Components and layout patterns
+
+### Primary action
+
+Use PrimeVue `Button` with the local primary class for the one action that
+commits the current screen. The loading state belongs on the button; do not add
+a second spinner beside it.
+
+```vue
+<Button
+  label="Save preferences"
+  :loading="saving"
+  class="po-button-primary"
+  @click="save"
+/>
+```
+
+```css
+.po-button-primary {
+  background: var(--po-action);
+  color: var(--po-bg);
+  border: 1px solid var(--po-action);
+  border-radius: var(--po-radius);
+}
+```
+
+### Shipment status
+
+Use the existing `StatusTag` component rather than a hand-written coloured
+badge. It maps known statuses to semantic tokens and keeps the label readable.
+
+```vue
+<StatusTag :status="shipment.status" />
+```
+
+Source: `client/src/components/app/StatusTag.vue`.
+
+### Confirmation dialog
+
+Use `BaseModal` for destructive or irreversible actions. It owns focus return
+and escape handling. The caller supplies the action text and button callback.
+
+```vue
+<BaseModal v-model:open="confirming" title="Cancel shipment">
+  <p>This cannot be undone after the carrier pickup is confirmed.</p>
+  <template #actions>
+    <Button severity="secondary" @click="confirming = false">Keep shipment</Button>
+    <Button severity="danger" @click="cancelShipment">Cancel shipment</Button>
+  </template>
+</BaseModal>
+```
+
+Source: `client/src/components/app/BaseModal.vue`.
+
+### Settings section
+
+Use this layout for a small group of related preferences. Do not create a new
+card pattern for a single form section.
+
+```vue
+<section class="po-settings-section">
+  <header>
+    <h2>Alert preferences</h2>
+    <p>Choose which warehouse exceptions need immediate attention.</p>
+  </header>
+  <!-- controls go here -->
+</section>
+```
+
+```css
+.po-settings-section {
+  background: var(--po-surface);
+  border: 1px solid var(--po-border);
+  border-radius: var(--po-radius);
+  padding: 20px;
+}
+```
+
+### When there is a gap
+
+Check `ExceptionsView.vue` and the shared component directory first. Add a
+variant to an existing component when its behaviour fits. Create a local
+component when the same pattern will be reused or when it needs its own focus,
+keyboard, or state handling. Add the component path and its states to this
+guide; add a Storybook story when Storybook exists.
+
+## Interaction, responsive, and accessibility rules
+Show save errors beside the affected control. Destructive actions need a clear
+confirmation. Focus returns to the triggering control when a dialog closes.
+The desktop console supports 1280px and above; below that, filter controls stack
+before the data table scrolls horizontally. Keyboard focus uses the green ring.
+
+## Theme modes and PrimeVue overrides
+Dark is the default. Light mode overrides `--po-bg`, `--po-surface`,
+`--po-text`, and `--po-action` for contrast. All PrimeVue overrides live in
+`client/src/assets/main.css`; do not add scoped overrides that compete with the
+global theme. Use PrimeIcons for shared icon names. Motion is limited to
+background, border, and colour transitions under 150ms.
+
+## References and verification
+The source map and Figma file are references only. Run `npm test` and the
+existing lint command. There is no screenshot command yet.
+
+## Rules summary
+- Reuse local components before creating one.
+- Use semantic `--po-*` tokens.
+- Keep one primary action per viewport.
+- Put errors near the control that caused them.
+````
+
+### 2. Feature handoff: `.jonggrang/.output/features/alert-preferences/UI_HANDOFF.md`
+
+```md
+# UI handoff: alert preferences
+
+Guide: .jonggrang/UI.md
+Guide revision: sha256:8f20...b19c
+Baseline: existing-project
+Token source: client/src/assets/main.css (ready)
+Guide status: unchanged
+
+## Feature intent
+Warehouse operators choose which exception alerts need attention during a shift.
+They must understand the effect before saving and return to scanning quickly.
+
+## Shared direction
+- Keep the exception-console density and settings-section layout.
+- Use existing `StatusTag`, `BaseModal`, and `--po-*` tokens.
+- The page has one primary action: Save preferences.
+
+## References
+- .jonggrang/UI.md#components-and-layout-patterns
+- .jonggrang/UI.md#interaction-responsive-and-accessibility-rules
+- client/src/views/ExceptionsView.vue
+- client/src/components/app/BaseModal.vue
+
+## Task task-003
+Objective: persist preferences and make the result obvious without a page reload.
+Use: existing primary `Button`; no new toast or alert component.
+Change: wire Save to the preference endpoint and place feedback below the
+settings section header.
+
+States:
+- loading: Save is disabled and shows its built-in loading state.
+- saved: show a short green inline message for five seconds.
+- save-error: keep the user's selections and show the API message inline.
+
+Do not: autosave, navigate away, or add a second primary button.
+Acceptance: keyboard users can activate Save and focus stays on the button
+while feedback appears. The error message is linked to the settings section.
+Sources: `client/src/views/ExceptionsView.vue`,
+`client/src/components/app/BaseModal.vue`.
+Check: npm test
+```
+
+### 3. Task context: `jonggrang-tasks.json`
+
+```json
+{
+  "id": "task-003",
+  "title": "Persist alert preferences and render save feedback",
+  "status": "pending",
+  "blocked_by": ["task-001"],
+  "ui_context": {
+    "handoff": ".jonggrang/.output/features/alert-preferences/UI_HANDOFF.md",
+    "sections": ["Feature intent", "Shared direction", "Task task-003"],
+    "guide": ".jonggrang/UI.md",
+    "guide_revision": "sha256:8f20...b19c",
+    "guide_sections": [
+      "Components and layout patterns",
+      "Interaction, responsive, and accessibility rules"
+    ],
+    "baseline": "existing-project",
+    "read_order": ["handoff", "guide_sections", "source_files"],
+    "on_conflict": "report UI_GUIDE_DRIFT",
+    "token_source": "client/src/assets/main.css",
+    "source_files": [
+      "client/src/views/ExceptionsView.vue",
+      "client/src/components/app/BaseModal.vue"
+    ],
+    "states": ["loading", "saved", "save-error"],
+    "verification": ["npm test"]
+  }
+}
+```
+
+The task prompt receives the `ui_context` object and the two named handoff
+sections. It reads the root-guide sections or source files only when the
+handoff is not enough to make an implementation decision.
