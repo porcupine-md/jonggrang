@@ -49,16 +49,25 @@ git checkout -b docs/whats-updated    # documentation
 
 ### 3. Commit
 
-We use conventional commits. It keeps the changelog readable and the bots happy:
+We use a **structured commit convention** so git history doubles as an agent communication layer — a fresh-context agent can recover *why* a change was made, not just *what* changed. See [`docs/COMMIT-CONVENTION.md`](docs/COMMIT-CONVENTION.md) for the full reference.
+
+**Agent commits are a contract** (enforced by a lifecycle hook). **Human commits are exempt** but encouraged to follow.
 
 ```
-feat: add --deep mode support for plan staging
-fix: compaction gate crash on empty context window
-docs: update QUICKSTART with troubleshooting
-refactor: extract feedback loop to separate file
+<type>: <summary>
+
+Context: <feature/plan this belongs to, narrative — not an ID>
+What: <the change intent in prose — don't list files, MANIFEST tracks that>
+Why: <rationale for the change>
+Tradeoff: <what was sacrificed, or "none">
+Caveats: <what the next agent should know, or "none">
+
+Co-authored-by: jonggrang <koko@jonggrang.dev>
 ```
 
-Commit messages in **English please**. Doesn't need to be Shakespeare — just clear enough that someone six months from now won't curse your name.
+All 5 fields are required for agent commits — use `none` if genuinely N/A (typo fixes, version bumps). The `Co-authored-by:` trailer (auto-injected) marks a commit as agent-authored and triggers validation.
+
+Commit messages in **English please**. Doesn't need to be Shakespeare — just clear enough that an agent six months from now can rebuild your rationale.
 
 ### 4. Test & check
 

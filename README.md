@@ -149,6 +149,7 @@ Two-layer config: `~/.jonggrang/settings.json` (your defaults) → `.jonggrang/j
 | [WORKFLOW.md](docs/WORKFLOW.md) | Grok the 16-phase pipeline |
 | [SKILLS.md](docs/SKILLS.md) | Teach the agents new tricks |
 | [CONFIG.md](docs/CONFIG.md) | Tweak every knob |
+| [COMMIT-CONVENTION.md](docs/COMMIT-CONVENTION.md) | Write agent-readable commit messages |
 
 ---
 

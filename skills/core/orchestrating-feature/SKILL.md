@@ -92,7 +92,7 @@ Before starting, classify the work type and determine active phases:
 
 **Phase 16 — Completion**
 1. Final MANIFEST status → `completed`
-2. Create git commit with conventional format
+2. Create git commit with the **structured commit convention** (see [docs/COMMIT-CONVENTION.md](../../../docs/COMMIT-CONVENTION.md)). All 5 fields required (`Context`, `What`, `Why`, `Tradeoff`, `Caveats`) — use `"none"` if a field is genuinely N/A. End with `Co-authored-by: jonggrang <koko@jonggrang.dev>` (auto-injected).
 3. (Optional) Create PR
 
 ## Compaction Gate Protocol

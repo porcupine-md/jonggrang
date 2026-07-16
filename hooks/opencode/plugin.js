@@ -67,20 +67,23 @@ function createPlugin(projectRoot) {
     return false;
   }
 
-  // Blocked bash command patterns — mirrors block-secret-commands.sh
-  // Splits on common chain/subshell delimiters so `; env`, `&& env`, `$(env)` don't bypass.
-  function isSecretCommand(command) {
-    if (!command) return false;
-    // Lift command-substitution and backtick contents into their own segments
-    // so `echo $(env)` and `echo \`env\`` are checked, not just the outer command.
-    const lifted = command
+  // Split a command into individually-checkable segments: lift $()/backtick
+  // contents onto their own lines, split on chain operators, strip shell
+  // wrappers (`bash -c`, quotes). Mirrors the awk chain-split in commit-convention.sh.
+  function splitCommandSegments(command) {
+    return command
       .replace(/\$\(([^)]*)\)/g, '\n$1\n')
       .replace(/`([^`]*)`/g, '\n$1\n')
-      .replace(/[()]/g, ' ');
-    const segments = lifted
+      .replace(/[()]/g, ' ')
       .split(/&&|\|\||;|\||\n/)
       .map(s => s.trim().replace(/^(bash|sh|zsh|dash)\s+-c\s+['"]?/, '').replace(/^["']/, ''))
       .filter(Boolean);
+  }
+
+  // Blocked bash command patterns — mirrors block-secret-commands.sh
+  function isSecretCommand(command) {
+    if (!command) return false;
+    const segments = splitCommandSegments(command);
 
     const READERS = '(?:cat|head|tail|less|more|xxd|od|hexdump|strings|awk|sed|cp|mv|tar|zip|base64|openssl|grep|rg|fgrep|egrep|nl|tac|view|vim|vi|nano|emacs|code|subl)';
     const SECRETPATH = '(credentials|\\.pem(\\s|$)|\\.key(\\s|$)|id_rsa|id_ed25519|id_ecdsa|id_ed25519_sk|id_ecdsa_sk|id_dsa|identity|ssh_host_.*_key|\\.ssh/|\\.aws/credentials|authorized_keys)';
@@ -95,6 +98,64 @@ function createPlugin(projectRoot) {
       if (/\becho\s+\$[A-Za-z_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD)/i.test(seg)) return true;
     }
     return false;
+  }
+
+  // ── Commit Convention Check — mirrors commit-convention.sh ─────────────
+  // Soft-guide: when an agent invokes `git commit` with a Co-authored-by
+  // trailer, validate the 5 required fields. If any are missing, throw
+  // with guidance so the agent can reason and retry.
+  const COMMIT_REQUIRED_FIELDS = ['Context:', 'What:', 'Why:', 'Tradeoff:', 'Caveats:'];
+
+  function extractCommitMessage(command) {
+    if (!command) return '';
+    // -m / --message (single or multiple; joined by newline per git convention)
+    const m = command.matchAll(/(?:-m|--message)\s+["']((?:[^"'\\]|\\.)*)["']/g);
+    const parts = [];
+    for (const x of m) {
+      let v = x[1]
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t')
+        .replace(/\\(["'\\])/g, '$1');
+      parts.push(v);
+    }
+    if (parts.length > 0) return parts.join('\n');
+    // -F / --file (handles `-F path`, `--file path`, `--file=path`, `-F=path`)
+    const f = command.match(/--?(?:F|file)(?:\s+|\s*=\s*)["']?([^\s"']+)["']?/);
+    if (f) {
+      const filePath = path.resolve(projectRoot, f[1]);
+      if (fs.existsSync(filePath)) return fs.readFileSync(filePath, 'utf8');
+    }
+    // --amend — read the last commit's message
+    if (/(?:^|\s)--amend\b/.test(command)) {
+      try {
+        return require('child_process').execSync('git log -1 --pretty=%B', { cwd: projectRoot, encoding: 'utf8' });
+      } catch {}
+    }
+    return '';
+  }
+
+  function checkAgentCommit(command) {
+    const segments = splitCommandSegments(command);
+    if (!segments.some(s => /^git\s+commit\b/.test(s))) return null;
+
+    const message = extractCommitMessage(command);
+    if (!message) return null;
+
+    // Human commit = no Co-authored-by trailer → skip validation
+    if (!/^[\s]*Co-authored-by:/im.test(message)) return null;
+
+    const missing = COMMIT_REQUIRED_FIELDS.filter(
+      f => !new RegExp(`^[\\s]*${f.replace(':', '\\:')}`, 'im').test(message)
+    );
+    if (missing.length === 0) return null;
+
+    return (
+      `COMMIT CONVENTION: agent commit is missing required structured field(s):\n` +
+      missing.map(f => `  - ${f}`).join('\n') + '\n\n' +
+      `All 5 fields are required for agent commits. Use "none" if a field is genuinely N/A.\n\n` +
+      `Format:\n  <type>: <short summary>\n\n  Context: <narrative — NOT an ID>\n  What:    <change intent in prose>\n  Why:     <rationale>\n  Tradeoff:<what was sacrificed, or 'none'>\n  Caveats: <next-agent note, or 'none'>\n\n  Co-authored-by: jonggrang <koko@jonggrang.dev>\n\n` +
+      `See docs/COMMIT-CONVENTION.md (or CONTRIBUTING.md §3) for the full spec.`
+    );
   }
 
   // Redact secrets from a string — mirrors sanitize-output.sh
@@ -246,6 +307,12 @@ function createPlugin(projectRoot) {
             `SECRET COMMAND BLOCKED: Command '${command}' may expose secrets.\n` +
             `Use 'run-with-secrets <profile> <cmd>' to access credentials safely.`
           );
+        }
+
+        // ── Commit Convention Check (mirrors commit-convention.sh) ──
+        if (isShellOp && command) {
+          const commitError = checkAgentCommit(command);
+          if (commitError) throw new Error(commitError);
         }
 
         // ── Compaction Gate (Task = agent spawning) ─────────────────
