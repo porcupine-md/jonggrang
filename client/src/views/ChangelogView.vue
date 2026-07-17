@@ -15,6 +15,7 @@
 <script setup>
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { useRoute } from 'vue-router';
+import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useWsStore } from '../stores/ws.js';
 
@@ -28,7 +29,8 @@ const loading = ref(true);
 const bodyEl = ref(null);
 
 const rendered = computed(() => {
-  try { return marked.parse(content.value || ''); } catch { return content.value; }
+  try { return DOMPurify.sanitize(marked.parse(content.value || '')); }
+  catch { return DOMPurify.sanitize(content.value || ''); }
 });
 
 function scrollToBottom() {
