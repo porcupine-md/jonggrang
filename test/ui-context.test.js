@@ -271,6 +271,15 @@ ${extra}`;
   });
   assert.match(taskPrompt, /ui_context/);
   assert.match(taskPrompt, /Objective,\nUse, Change, States, Do not, Acceptance, Sources, and Check/);
+
+  const deepPrompt = lib.buildDeepPlanAnalysisPrompt(
+    'operations dashboard',
+    '# Discovery',
+    path.join(root, 'analysis.md'),
+    null,
+    { ui: { prompt: 'UI planning contract' } },
+  );
+  assert.match(deepPrompt, /```\n\nUI planning contract\n\n## Your Task/);
 })();
 
 console.log('ui-context tests: ok');

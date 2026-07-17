@@ -419,6 +419,7 @@ import Button from 'primevue/button';
 import Textarea from 'primevue/textarea';
 import Select from 'primevue/select';
 import Dialog from 'primevue/dialog';
+import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useLogTerminal } from '../../composables/useLogTerminal.js';
 import { useWsStore } from '../../stores/ws.js';
@@ -515,17 +516,22 @@ const reviseInputEl = ref(null);
 const showDiscussPanel = ref(false);
 const discussTool = computed(() => selectedTool.value || 'jonggrang');
 
-// Rendered markdown for viewer
+// Rendered markdown for viewer. Plans and UI artifacts may contain agent-authored
+// raw HTML, so sanitize every markdown surface before passing it to v-html.
+function renderMarkdown(content) {
+  return DOMPurify.sanitize(marked.parse(content || ''));
+}
+
 const renderedContent = computed(() => {
   const plan = selectedPlan.value;
   if (!plan) return '';
-  return marked.parse(plan.content || '');
+  return renderMarkdown(plan.content);
 });
 
-const renderedDraftContent = computed(() => marked.parse(planContent.value || ''));
-const renderedUiHandoff = computed(() => marked.parse(selectedPlan.value?.ui?.handoff_content || ''));
-const renderedUiGuide = computed(() => marked.parse(selectedPlan.value?.ui?.guide_content || ''));
-const renderedUiCurrentGuide = computed(() => marked.parse(selectedPlan.value?.ui?.current_guide_content || ''));
+const renderedDraftContent = computed(() => renderMarkdown(planContent.value));
+const renderedUiHandoff = computed(() => renderMarkdown(selectedPlan.value?.ui?.handoff_content));
+const renderedUiGuide = computed(() => renderMarkdown(selectedPlan.value?.ui?.guide_content));
+const renderedUiCurrentGuide = computed(() => renderMarkdown(selectedPlan.value?.ui?.current_guide_content));
 
 // Computed
 const isIdle = computed(() =>
