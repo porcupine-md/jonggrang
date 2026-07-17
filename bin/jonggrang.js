@@ -1172,27 +1172,17 @@ function verifyUiDraftPlan(planFile, sessionId) {
   if (guide.frontmatter.baseline !== fm.ui_baseline) {
     throw new Error(`Plan baseline (${fm.ui_baseline}) does not match UI guide baseline (${guide.frontmatter.baseline}).`);
   }
+  const baselinePack = uiContext.BASELINE_IDS.includes(fm.ui_baseline)
+    ? uiContext.loadBaselinePack(fm.ui_baseline)
+    : null;
   return {
     guideStatus,
     guidePath,
     guide,
+    baselinePack,
     handoffDraft,
     handoffContent,
   };
-}
-
-function setHandoffMetadata(content, fields) {
-  let updated = String(content || '');
-  for (const [label, value] of Object.entries(fields)) {
-    const line = `${label}: ${value}`;
-    const pattern = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:.*$`, 'm');
-    if (pattern.test(updated)) updated = updated.replace(pattern, line);
-    else {
-      const firstBreak = updated.indexOf('\n');
-      updated = firstBreak === -1 ? `${updated}\n\n${line}\n` : `${updated.slice(0, firstBreak + 1)}\n${line}${updated.slice(firstBreak + 1)}`;
-    }
-  }
-  return updated;
 }
 
 function displayUiDraftBox(sessionId) {
@@ -1657,11 +1647,11 @@ async function cmdPlan(args, opts = {}) {
   const questionsFile = lib.questionsFileFor(PROJECT_ROOT, sid);
   const answersFile = lib.answersFileFor(PROJECT_ROOT, sid);
   process.env.JONGGRANG_DRAFT_SESSION = sid;
-  const uiPlan = buildUiPlanContext(sid, description, srcPath);
+  let uiPlan = buildUiPlanContext(sid, description, srcPath);
   if (uiPlan) {
-    logInfo(`UI work detected — guide ${uiPlan.guideStatus}; baseline ${uiPlan.baseline || 'needs user choice'}.`);
-    if ((autoApprove || noAsk) && !uiPlan.baseline) {
-      logError('UI product shape is uncertain, so Jonggrang cannot select a baseline with --yes/--no-ask. Run interactive plan once or add a clear landing-page, dashboard, or mobile-app direction.');
+    logInfo(`UI work detected — guide ${uiPlan.guideStatus}; baseline recommendation ${uiPlan.baseline || 'needs user choice'}.`);
+    if ((autoApprove || noAsk) && (uiPlan.requiresBaselineConsent || !uiPlan.baseline)) {
+      logError('A starter baseline cannot be selected with --yes/--no-ask before the user confirms they have no preferred UI direction or reference. Run interactive plan once, provide answers, or explicitly name a baseline id in the request.');
       process.exit(1);
     }
   }
@@ -1686,7 +1676,13 @@ async function cmdPlan(args, opts = {}) {
       logInfo('Analyzing goal — the agent may ask clarifying questions first...');
       const qPrompt = lib.buildPlanQuestionsPrompt(description, CONFIG_FILE, srcPath, resolvedBase, { ui: uiPlan });
       await lib.runAgent(qPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
-      const q = lib.getPlanQuestions(questionsFile);
+      let q = lib.getPlanQuestions(questionsFile);
+      if (uiPlan && uiPlan.preferenceQuestion) {
+        q = lib.savePlanQuestions(questionsFile, {
+          goal_analysis: q.goal_analysis || `Plan UI work for: ${description}`,
+          questions: [uiPlan.preferenceQuestion, ...(q.questions || []).filter(item => item.id !== 'ui-preference')],
+        });
+      }
       if (q.questions && q.questions.length > 0) {
         if (isInteractiveTTY) {
           answers = await collectAnswersInteractive(q);
@@ -1703,6 +1699,10 @@ async function cmdPlan(args, opts = {}) {
       }
     }
     if (answers) {
+      if (uiPlan && uiPlan.requiresBaselineConsent) {
+        try { uiPlan = uiContext.resolveUiPreference(uiPlan, answers); }
+        catch (error) { logError(error.message); process.exit(1); }
+      }
       lib.savePlanAnswers(answersFile, answers);
       // Questions are now answered — drop the pending-questions marker so the web
       // (resolveActiveQuestionDraft) doesn't resurface this draft as unanswered.
@@ -2117,6 +2117,8 @@ async function cmdApprove(args, opts = {}) {
     baseline: approvedUi.baseline,
     tokenSource: approvedUi.tokenSource,
     tokenStatus: approvedUi.tokenStatus,
+    baselineGuideFragment: approvedUi.baselinePack ? approvedUi.baselinePack.guideFragment : null,
+    baselineTokenTemplate: approvedUi.baselinePack ? approvedUi.baselinePack.tokenTemplate : null,
     handoffDraftContent: isAppend && previousUiHandoff
       ? `${previousUiHandoff}\n\n<!-- Approved extension direction -->\n${approvedUi.handoffContent}`
       : approvedUi.handoffContent,
@@ -2165,7 +2167,7 @@ async function cmdApprove(args, opts = {}) {
       newTasks = taskData.tasks.filter(task => newIds.has(task.id));
 
       let handoffContent = fs.readFileSync(finalUiHandoffPath, 'utf8');
-      handoffContent = setHandoffMetadata(handoffContent, {
+      handoffContent = uiContext.setHandoffMetadata(handoffContent, {
         Guide: '.jonggrang/UI.md',
         'Guide revision': finalGuideRevision,
         Baseline: approvedUi.baseline,
@@ -2181,6 +2183,7 @@ async function cmdApprove(args, opts = {}) {
         guideDigest: finalGuideRevision,
         baseline: approvedUi.baseline,
         tokenStatus: approvedUi.tokenStatus,
+        tokenTemplate: approvedUi.baselinePack ? approvedUi.baselinePack.tokenTemplate : null,
         guideContent: finalGuideContent,
       });
       if (!handoff.valid) throw new Error(`final UI handoff invalid: ${handoff.errors.join('; ')}`);

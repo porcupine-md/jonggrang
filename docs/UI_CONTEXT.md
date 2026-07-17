@@ -28,9 +28,11 @@ Before asking questions, `jonggrang plan` audits local evidence:
 - `.jonggrang/UI.md` and the optional personal `~/.jonggrang/UI.md`.
 
 The audit does not invent missing resources. If the project already has a usable
-system, the plan follows it. Otherwise the planner asks only for material choices
-that code cannot reveal, including product shape when no baseline can be chosen
-confidently.
+system, the plan follows it. Before applying any built-in starter, planning asks
+whether the user has a preferred direction or reference. A custom answer wins;
+when there is no preference, the user may explicitly accept the recommended pack
+or decline starter packs. Keyword matching recommends a candidate but never
+counts as consent.
 
 A UI draft session may contain:
 
@@ -76,9 +78,12 @@ Jonggrang ships three versioned, deliberately opinionated starting points:
   interruption safety, no nested card stacks or gesture-only critical actions.
 
 The packs live under `templates/ui-baselines/`. Each has `manifest.yml`,
-`guide-fragment.md`, and `tokens.css.template`. A pack is copied only into an
-approved project token destination; projects then own that source. Guides and
-handoffs pin `id@version`, so pack updates cannot silently change active work.
+`guide-fragment.md`, and `tokens.css.template`. Planning may inspect a candidate,
+but does not apply it before consent. For a missing token source, the selected
+exact template is carried into the foundation task's bounded handoff section and
+copied to the approved project-relative destination; projects then own that
+source. Guides and handoffs pin `id@version`, so pack updates cannot silently
+change active work.
 
 Selection order:
 
@@ -88,8 +93,9 @@ Selection order:
 4. a matching built-in product-shape baseline;
 5. a focused question when the product shape is uncertain.
 
-`--yes` and `--no-ask` fail closed when a new UI project has no confident
-baseline. State the product shape or run one interactive plan instead.
+`--yes` and `--no-ask` fail closed when a starter pack still needs preference
+consent. Run one interactive plan, provide saved answers, or explicitly name the
+wanted baseline id in the request.
 
 ## Bounded runtime context
 

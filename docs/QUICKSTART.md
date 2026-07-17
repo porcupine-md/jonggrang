@@ -67,8 +67,10 @@ The AI writes a draft plan to `.jonggrang/.drafts/<session>/plan.md` (a per-sess
 
 For UI work, Jonggrang also audits existing tokens, components, screens, and
 verification tools. The draft may include a proposed `UI.md` and always includes
-feature direction in `UI_HANDOFF.md`. If a new project's product shape is unclear,
-answer the focused baseline question instead of using `--yes` on the first run.
+feature direction in `UI_HANDOFF.md`. Before a new project uses a built-in
+starter, answer the preference question: provide your own direction/reference,
+accept the recommendation, or decline starter packs. Do not use `--yes` until
+that choice is explicit.
 
 ---
 

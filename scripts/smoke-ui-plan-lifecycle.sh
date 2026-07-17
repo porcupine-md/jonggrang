@@ -208,6 +208,36 @@ export PATH="$FAKE_BIN:$PATH"
 export JONGGRANG_SMOKE_CLI="$ROOT/bin/jonggrang.js"
 export JONGGRANG_TOOL=opencode
 
+printf '\n== Missing UI system → preference gate before baseline ==\n'
+mkdir -p "$TMP/preference-project/.jonggrang"
+cat > "$TMP/preference-project/package.json" <<'JSON'
+{"name":"ui-preference-gate","dependencies":{"react":"^19.0.0"}}
+JSON
+cat > "$TMP/preference-project/.jonggrang/jonggrang.json" <<'JSON'
+{"name":"ui-preference-gate","project":{"stack":"react"},"tool":"opencode"}
+JSON
+printf '# Preference gate fixture\n' > "$TMP/preference-project/AGENTS.md"
+(
+  cd "$TMP/preference-project"
+  git init -q
+  git config user.name Smoke
+  git config user.email smoke@example.com
+  git add .
+  git commit -qm 'chore: preference fixture'
+  node "$ROOT/bin/jonggrang.js" plan "build an operations dashboard" >/tmp/jonggrang-ui-preference.log
+)
+PREFERENCE_FILE=$(find "$TMP/preference-project/.jonggrang/.drafts" -name plan-questions.json -type f | head -1)
+[ -n "$PREFERENCE_FILE" ]
+node - "$PREFERENCE_FILE" <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const questions = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).questions;
+assert.equal(questions[0].id, 'ui-preference');
+assert.match(questions[0].question, /own UI preference\/reference/i);
+assert.ok(questions[0].options.some(option => option.value === 'use:dashboard-operational@1'));
+NODE
+printf '  ✓ user preference is requested before the dashboard starter is selected\n'
+
 printf '\n== Plan → UI sidecars → approve → bounded task ==\n'
 (
   cd "$TMP/project"

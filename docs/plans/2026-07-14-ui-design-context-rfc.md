@@ -349,8 +349,11 @@ user anything. It looks for:
 
 When `.jonggrang/UI.md` is missing, the audit combines repository evidence
 with the optional `~/.jonggrang/UI.md` when it exists. The user-level guide is
-reference material, not a file copied unchanged into the project. The planner
-uses the existing `plan ask` flow only for information code cannot reveal:
+reference material, not a file copied unchanged into the project. A keyword
+match may recommend a starter pack, but it never selects one. Before using a
+built-in template, `plan ask` first offers a custom preference/reference; only a
+user with no preference is offered the recommendation for explicit consent.
+The planner uses the existing flow only for information code cannot reveal:
 
 1. What should the UI follow: an existing product, Figma, screenshots, a URL,
    or a new direction?
@@ -362,7 +365,9 @@ uses the existing `plan ask` flow only for information code cannot reveal:
 The draft plan contains the guide, baseline choice, token status, and feature
 plan. The user can edit any of them through the normal plan flow. Approval
 writes `.jonggrang/UI.md`, creates the feature handoff, and adds the
-UI-foundation task when the token status is `planned`.
+UI-foundation task when the token status is `planned`. For an approved built-in
+pack, the loader carries the exact token template into that task's bounded
+handoff section; the task copies rather than regenerates its values.
 
 When a guide already exists, the planner audits only relevant sections. It asks
 the user when a source path is stale, a needed rule is missing, or the request

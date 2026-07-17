@@ -107,6 +107,13 @@ ${extra}`;
   ]);
   assert.ok(packs.every(pack => pack.valid));
   assert.ok(packs.every(pack => Array.isArray(pack.avoid) && pack.avoid.length >= 4));
+  for (const pack of packs) {
+    const loaded = ui.loadBaselinePack(pack.key);
+    assert.equal(`${loaded.manifest.id}@${loaded.manifest.version}`, pack.key);
+    assert.match(loaded.guideFragment, /## Visual direction and baseline/);
+    assert.match(loaded.tokenTemplate, /--ui-action:/);
+    assert.match(loaded.semanticTokenContract, /semantic roles/i);
+  }
 })();
 
 (function detectsUiWorkAndRecommendsProductShape() {
@@ -129,6 +136,13 @@ ${extra}`;
   assert.ok(audit.components.includes('src/components/Button.tsx'));
   assert.deepStrictEqual(audit.references, []);
   assert.equal(audit.guide.status, 'missing');
+
+  fs.unlinkSync(path.join(root, 'src/styles/tokens.css'));
+  fs.writeFileSync(path.join(root, 'src/main.js'), 'import { createApp } from "vue";\n');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ dependencies: { vue: '^3.0.0' } }));
+  const withoutTokens = ui.auditUiProject(root, { userRoot: path.join(root, 'missing-home') });
+  assert.ok(!withoutTokens.token_sources.includes('src/main.js'));
+  assert.equal(ui.recommendBaseline('add a settings form', withoutTokens), null);
 })();
 
 (function validatesGuideContract() {
@@ -140,6 +154,64 @@ ${extra}`;
   assert.ok(invalid.errors.includes('missing section: Rules summary'));
   const planned = ui.validateUiGuide(root, guide({ tokenSource: 'src/styles/new-tokens.css', tokenStatus: 'planned', owner: 'task-001' }), { allowPlanned: false });
   assert.equal(planned.valid, true, planned.errors.join('; '));
+  const escaping = ui.validateUiGuide(root, guide({ tokenSource: '../../outside.css', tokenStatus: 'planned', owner: 'task-001' }), { allowPlanned: false });
+  assert.equal(escaping.valid, false);
+  assert.ok(escaping.errors.some(error => error.includes('escapes project root')));
+
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'jonggrang-ui-outside-'));
+  fs.symlinkSync(outside, path.join(root, 'src', 'linked-outside'));
+  const symlinkEscape = ui.validateUiGuide(root, guide({ tokenSource: 'src/linked-outside/tokens.css', tokenStatus: 'planned', owner: 'task-001' }), { allowPlanned: false });
+  assert.equal(symlinkEscape.valid, false);
+  assert.ok(symlinkEscape.errors.some(error => error.includes('escapes project root')));
+  fs.rmSync(outside, { recursive: true, force: true });
+})();
+
+(function asksForPreferenceBeforeApplyingAStarterPack() {
+  const root = tempRoot();
+  const audit = {
+    guide: { status: 'missing' }, user_guide: null,
+    token_sources: [], components: [], framework: [],
+  };
+  const planning = ui.buildPlanningContext(root, 'draft-ui', 'operations dashboard', audit);
+  assert.equal(planning.baseline, 'dashboard-operational@1');
+  assert.equal(planning.requiresBaselineConsent, true);
+  assert.equal(planning.preferenceQuestion.id, 'ui-preference');
+  assert.match(planning.prompt, /not permission to apply it/i);
+  assert.match(planning.prompt, /--ui-action:/);
+
+  const custom = ui.resolveUiPreference(planning, {
+    answers: [{ id: 'ui-preference', value: '__freetext__', freetext: 'Use our Figma file at https://example.com/design' }],
+  });
+  assert.equal(custom.baseline, 'existing-project');
+  assert.equal(custom.baselinePack, null);
+  assert.match(custom.prompt, /Do not copy any starter guide fragment/);
+  assert.doesNotMatch(custom.prompt, /--ui-row-height:/);
+
+  const explicit = ui.buildPlanningContext(root, 'draft-explicit', 'use dashboard-operational@1', audit);
+  assert.equal(explicit.requiresBaselineConsent, false);
+  assert.match(explicit.prompt, /Approved starter baseline/);
+
+  const personal = ui.buildPlanningContext(root, 'draft-personal', 'operations dashboard', {
+    ...audit,
+    user_guide: path.join(root, 'personal-UI.md'),
+  });
+  assert.equal(personal.baseline, 'existing-project');
+  assert.equal(personal.baselinePack, null);
+  assert.equal(personal.requiresBaselineConsent, false);
+
+  const uncertain = ui.buildPlanningContext(root, 'draft-uncertain', 'add a settings form', audit);
+  assert.equal(uncertain.baseline, null);
+  assert.equal(uncertain.requiresBaselineConsent, true);
+  assert.deepStrictEqual(
+    uncertain.preferenceQuestion.options.slice(0, 3).map(option => option.value),
+    ui.BASELINE_IDS.map(id => `use:${id}`),
+  );
+  const selected = ui.resolveUiPreference(uncertain, {
+    answers: [{ id: 'ui-preference', value: 'use:mobile-app-minimalist@1', freetext: null }],
+  });
+  assert.equal(selected.baseline, 'mobile-app-minimalist@1');
+  assert.match(selected.prompt, /Approved starter baseline/);
+  assert.match(selected.prompt, /--ui-target-min: 2\.75rem/);
 })();
 
 (function extractsSectionsWithoutLeakingFencedHeadings() {
@@ -222,6 +294,43 @@ ${extra}`;
     tokenStatus: 'planned', guideContent,
   });
   assert.equal(valid.valid, true, valid.errors.join('; '));
+
+  const template = ui.loadBaselinePack('dashboard-operational@1').tokenTemplate.trim();
+  const missingTemplate = ui.validateUiHandoff(root, hp, [foundation, dependent], {
+    featureId: 'feat-ui', guideDigest: digest, baseline: 'dashboard-operational@1',
+    tokenStatus: 'planned', tokenTemplate: template, guideContent,
+  });
+  assert.equal(missingTemplate.valid, false);
+  const handoffWithTemplate = fs.readFileSync(hp, 'utf8').replace(
+    '\n## Task task-002',
+    `\n\`\`\`css\n${template}\n\`\`\`\n\n## Task task-002`,
+  );
+  fs.writeFileSync(hp, handoffWithTemplate);
+  const withTemplate = ui.validateUiHandoff(root, hp, [foundation, dependent], {
+    featureId: 'feat-ui', guideDigest: digest, baseline: 'dashboard-operational@1',
+    tokenStatus: 'planned', tokenTemplate: template, guideContent,
+  });
+  assert.equal(withTemplate.valid, true, withTemplate.errors.join('; '));
+})();
+
+(function transactionRestoresEveryFileWhenAReplacementFails() {
+  const root = tempRoot();
+  const files = ['one', 'two', 'three'].map(name => path.join(root, `${name}.txt`));
+  for (const file of files) fs.writeFileSync(file, `old:${path.basename(file)}\n`);
+  const before = files.map(file => fs.readFileSync(file, 'utf8'));
+  let renames = 0;
+  assert.throws(() => ui.writeFilesTransaction(
+    files.map(file => ({ file, content: `new:${path.basename(file)}\n` })),
+    {
+      renameSync(from, to) {
+        renames += 1;
+        if (renames === 5) throw new Error('injected rename failure');
+        fs.renameSync(from, to);
+      },
+    },
+  ), /injected rename failure/);
+  assert.deepStrictEqual(files.map(file => fs.readFileSync(file, 'utf8')), before);
+  assert.deepStrictEqual(fs.readdirSync(root).filter(file => /\.(?:tmp|bak)\./.test(file)), []);
 })();
 
 (function foundationCompletionPromotesGuideHandoffAndTaskRevisions() {
@@ -271,6 +380,20 @@ ${extra}`;
   });
   assert.match(taskPrompt, /ui_context/);
   assert.match(taskPrompt, /Objective,\nUse, Change, States, Do not, Acceptance, Sources, and Check/);
+
+  const pack = ui.loadBaselinePack('dashboard-operational@1');
+  const plannedTaskPrompt = lib.buildTasksFromPlanPrompt('# Plan', null, root, 'feat-ui', null, {
+    ui: {
+      guideContent: guide({ tokenSource: 'src/styles/new-tokens.css', tokenStatus: 'planned' }),
+      guideRevision: 'sha256:test', baseline: 'dashboard-operational@1',
+      tokenSource: 'src/styles/new-tokens.css', tokenStatus: 'planned',
+      baselineTokenTemplate: pack.tokenTemplate, handoffDraftContent: '# draft',
+      handoffPath: '.jonggrang/.output/features/feat-ui/UI_HANDOFF.md',
+      handoffAbsolutePath: ui.featureHandoffPath(root, 'feat-ui'),
+    },
+  });
+  assert.match(plannedTaskPrompt, /must copy this exact/);
+  assert.match(plannedTaskPrompt, /--ui-row-height: 2\.25rem/);
 
   const deepPrompt = lib.buildDeepPlanAnalysisPrompt(
     'operations dashboard',

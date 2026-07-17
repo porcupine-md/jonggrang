@@ -382,6 +382,10 @@ approval, not a second design editor; manual changes use plan revision or the
 sidecar files. Missing Figma, Storybook, or screenshot resources are displayed
 as absent rather than synthesized.
 
+When a new project needs a starter decision, the `ui-preference` question has no
+preselected answer. Generate stays disabled until the user chooses a starter,
+declines starters, or types a direction/reference.
+
 ### Issues screen (top-level `/issues`)
 
 The **Issues** menu (top app nav, beside `projects`) lists GitHub/GitLab issues and picks them up as plans (feature #55).

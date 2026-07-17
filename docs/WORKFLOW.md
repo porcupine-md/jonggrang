@@ -131,8 +131,10 @@ jonggrang plan        # no description → shows list of pending + archived plan
 #### UI planning context
 
 UI-affecting plans follow the same two phases. The difference is that planning
-also audits local UI evidence and approval materializes three bounded levels:
-project `.jonggrang/UI.md`, feature `UI_HANDOFF.md`, and task `ui_context`.
+also audits local UI evidence. Before any built-in starter is selected, the user
+provides a preference/reference, explicitly accepts the recommendation, or
+declines starter packs. Approval then materializes three bounded levels: project
+`.jonggrang/UI.md`, feature `UI_HANDOFF.md`, and task `ui_context`.
 Backend-only tasks carry none of this context. A missing token source creates one
 UI-foundation task and blocks later UI work. Runtime prompts include only feature
 intent, shared direction, and the current task contract; agents read named guide

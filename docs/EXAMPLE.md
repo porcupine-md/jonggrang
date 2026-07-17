@@ -133,10 +133,10 @@ jonggrang approve
 # adds bounded ui_context only to UI tasks
 ```
 
-A brand-new UI request with an uncertain product shape cannot use `--yes` until
-the baseline is clear. Run the interactive plan once or state whether the product
-is a landing page, operational dashboard, or mobile app. See
-[UI_CONTEXT.md](UI_CONTEXT.md).
+A brand-new UI request cannot silently accept a starter pack. Run the interactive
+plan once to provide a preference/reference, accept the recommended pack, or
+decline starters. For automation, explicitly name the approved baseline id in
+the request. See [UI_CONTEXT.md](UI_CONTEXT.md).
 
 ### Step 4: Check Task Board
 

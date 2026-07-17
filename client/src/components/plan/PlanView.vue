@@ -407,7 +407,7 @@
     </div>
     <template #footer>
       <Button label="Cancel" text @click="cancelQuestions" />
-      <Button label="Generate Plan" icon="pi pi-sparkles" @click="submitAnswers" />
+      <Button label="Generate Plan" icon="pi pi-sparkles" :disabled="!canSubmitQuestionAnswers" @click="submitAnswers" />
     </template>
   </Dialog>
 </template>
@@ -478,6 +478,13 @@ const loadingModels = ref(false);
 const pendingQuestions = ref(null);   // { goal_analysis, questions:[] } or null
 const showQuestionForm = ref(false);
 const answerDraft = reactive({});     // keyed by question id
+const canSubmitQuestionAnswers = computed(() => {
+  const question = pendingQuestions.value?.questions?.find(item => item.id === 'ui-preference');
+  if (!question) return true;
+  const draft = answerDraft[question.id] || {};
+  if (!draft.choice) return false;
+  return draft.choice !== '__freetext__' || Boolean((draft.freetext || '').trim());
+});
 
 const TOOLS = [
   { label: 'OpenCode',      value: 'opencode' },
@@ -960,7 +967,10 @@ onMounted(async () => {
     Object.keys(answerDraft).forEach(k => delete answerDraft[k]);
     for (const q of (questions || [])) {
       if (q.type === 'multi_choice') answerDraft[q.id] = { choices: [], freetext: '', useFreetext: false };
-      else if (q.type === 'single_choice') answerDraft[q.id] = { choice: (q.options && q.options[0] ? q.options[0].value : ''), freetext: '' };
+      else if (q.type === 'single_choice') answerDraft[q.id] = {
+        choice: q.id === 'ui-preference' ? '' : (q.options && q.options[0] ? q.options[0].value : ''),
+        freetext: '',
+      };
       else answerDraft[q.id] = { freetext: '' };
     }
     pendingQuestions.value = { goal_analysis: goal_analysis || '', questions: questions || [] };
