@@ -51,6 +51,10 @@
           {
             "type": "command",
             "command": "bash \"JONGGRANG_HOOKS_DIR/block-secret-commands.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"JONGGRANG_HOOKS_DIR/commit-convention.sh\""
           }
         ]
       }

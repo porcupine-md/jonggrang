@@ -154,6 +154,7 @@ Two-layer config: `~/.jonggrang/settings.json` (your defaults) → `.jonggrang/j
 | [SKILLS.md](docs/SKILLS.md) | Teach the agents new tricks |
 | [CONFIG.md](docs/CONFIG.md) | Tweak every knob |
 | [UI_CONTEXT.md](docs/UI_CONTEXT.md) | Understand UI guides, baseline packs, and feature handoffs |
+| [COMMIT-CONVENTION.md](docs/COMMIT-CONVENTION.md) | Write agent-readable commit messages |
 
 ---
 

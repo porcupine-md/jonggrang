@@ -200,6 +200,7 @@ Hooks enforce quality gates outside the LLM's context. The same rules apply rega
 |-------|-------|-------------|----------|----------------|-------------|
 | 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `tool_call` | Block direct edits (agent-first) |
 | 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `tool_call` | Block agent spawn if context > 85% |
+| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `tool_call` | Block `git commit` if agent trailer present but structured fields missing ([COMMIT-CONVENTION.md](COMMIT-CONVENTION.md)) |
 | 6 | Post-tool | `PostToolUse` | `tool.execute.after` | `tool_result` | Set dirty bit when files modified |
 | 6 | File edit | `PostToolUse` | `file.edited` | `tool_result` | Track domain (backend/frontend/testing) |
 | 7 | Sub-stop | `SubagentStop` | `session.updated` | `agent_end` | Block exit if output in wrong location |
