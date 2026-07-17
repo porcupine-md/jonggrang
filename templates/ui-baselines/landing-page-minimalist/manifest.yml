@@ -4,6 +4,14 @@ intent: Focused landing pages that earn one conversion through clear hierarchy a
 product_shapes:
   - landing-page
   - marketing-site
+recommend_keywords:
+  - landing
+  - marketing
+  - homepage
+  - conversion
+  - campaign
+  - waitlist
+recommend_priority: 20
 framework_targets:
   - css
   - any

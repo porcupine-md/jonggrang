@@ -4,6 +4,18 @@ intent: Focused mobile products with short task flows, clear navigation, and cal
 product_shapes:
   - mobile-app
   - responsive-app
+recommend_keywords:
+  - mobile
+  - ios
+  - android
+  - react native
+  - react-native
+  - flutter
+  - expo
+recommend_frameworks:
+  - react-native
+  - flutter
+recommend_priority: 30
 framework_targets:
   - css
   - react-native

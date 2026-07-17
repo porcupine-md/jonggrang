@@ -98,14 +98,10 @@ Check: npm test
 ${extra}`;
 }
 
-(function baselineCatalogIsVersionedAndOpinionated() {
-  const packs = ui.listBaselinePacks();
-  assert.deepStrictEqual(packs.map(pack => pack.key), [
-    'dashboard-operational@1',
-    'landing-page-minimalist@1',
-    'mobile-app-minimalist@1',
-  ]);
-  assert.ok(packs.every(pack => pack.valid));
+(function baselineCatalogIsDynamicAndVersioned() {
+  const packs = ui.validBaselinePacks();
+  assert.deepStrictEqual(ui.baselineKeys(), packs.map(pack => pack.key));
+  assert.ok(packs.length >= 3);
   assert.ok(packs.every(pack => Array.isArray(pack.avoid) && pack.avoid.length >= 4));
   for (const pack of packs) {
     const loaded = ui.loadBaselinePack(pack.key);
@@ -114,6 +110,35 @@ ${extra}`;
     assert.match(loaded.tokenTemplate, /--ui-action:/);
     assert.match(loaded.semanticTokenContract, /semantic roles/i);
   }
+
+  const catalog = tempRoot();
+  fs.mkdirSync(path.join(catalog, 'core'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'core', 'guide-sections.md'), 'guide sections');
+  fs.writeFileSync(path.join(catalog, 'core', 'semantic-token-contract.md'), 'semantic roles');
+  const packDir = path.join(catalog, 'form-workflow');
+  fs.mkdirSync(packDir);
+  fs.writeFileSync(path.join(packDir, 'manifest.yml'), `id: form-workflow
+version: 1
+intent: Focused data-entry workflows.
+product_shapes: [form]
+recommend_keywords: [workflow, intake]
+recommend_priority: 5
+guide_fragment: guide-fragment.md
+token_template: tokens.css.template
+`);
+  fs.writeFileSync(path.join(packDir, 'guide-fragment.md'), '## Visual direction and baseline\nFocused forms.');
+  fs.writeFileSync(path.join(packDir, 'tokens.css.template'), ':root { --ui-action: blue; }');
+
+  assert.deepStrictEqual(ui.baselineKeys(catalog), ['form-workflow@1']);
+  assert.equal(ui.recommendBaseline('create an intake workflow', {}, ui.validBaselinePacks(catalog)), 'form-workflow@1');
+  assert.equal(ui.loadBaselinePack('form-workflow@1', catalog).key, 'form-workflow@1');
+  assert.deepStrictEqual(
+    ui.buildUiPreferenceQuestion({ baseline: null, availableBaselines: ui.baselineKeys(catalog) }).options.map(option => option.value),
+    ['use:form-workflow@1', 'no-starter'],
+  );
+
+  fs.cpSync(packDir, path.join(catalog, 'form-workflow-copy'), { recursive: true });
+  assert.deepStrictEqual(ui.baselineKeys(catalog), [], 'duplicate id@version entries must fail closed');
 })();
 
 (function detectsUiWorkAndRecommendsProductShape() {
@@ -203,8 +228,8 @@ ${extra}`;
   assert.equal(uncertain.baseline, null);
   assert.equal(uncertain.requiresBaselineConsent, true);
   assert.deepStrictEqual(
-    uncertain.preferenceQuestion.options.slice(0, 3).map(option => option.value),
-    ui.BASELINE_IDS.map(id => `use:${id}`),
+    uncertain.preferenceQuestion.options.slice(0, -1).map(option => option.value),
+    ui.baselineKeys().map(id => `use:${id}`),
   );
   const selected = ui.resolveUiPreference(uncertain, {
     answers: [{ id: 'ui-preference', value: 'use:mobile-app-minimalist@1', freetext: null }],

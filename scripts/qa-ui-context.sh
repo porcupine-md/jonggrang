@@ -22,18 +22,16 @@ section "Baseline catalog and repository audit"
 ROOT_UNDER_TEST="$ROOT" PROJECT_UNDER_TEST="$TMP" node <<'NODE'
 const assert = require('assert');
 const ui = require(process.env.ROOT_UNDER_TEST + '/lib/ui-context');
-const packs = ui.listBaselinePacks();
-assert.deepStrictEqual(packs.map(p => p.key), [
-  'dashboard-operational@1', 'landing-page-minimalist@1', 'mobile-app-minimalist@1',
-]);
-assert.ok(packs.every(p => p.valid));
+const packs = ui.validBaselinePacks();
+assert.ok(packs.length >= 3);
+assert.deepStrictEqual(ui.baselineKeys(), packs.map(p => p.key));
 const audit = ui.auditUiProject(process.env.PROJECT_UNDER_TEST, { userRoot: '/nonexistent' });
 assert.equal(audit.guide.status, 'missing');
 assert.ok(audit.framework.includes('react'));
 assert.ok(audit.token_sources.includes('src/styles/tokens.css'));
 assert.equal(ui.recommendBaseline('operations dashboard', audit), 'existing-project');
 NODE
-pass "three versioned packs load; local UI evidence wins over a starter"
+pass "valid dynamic packs load; local UI evidence wins over a starter"
 
 section "Approved guide, handoff, and task import"
 cat > "$TMP/.jonggrang/UI.md" <<'MD'

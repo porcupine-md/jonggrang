@@ -68,7 +68,8 @@ requires one designated foundation task; all later UI tasks depend on it.
 
 ## Starter baselines
 
-Jonggrang ships three versioned, deliberately opinionated starting points:
+Jonggrang discovers valid, versioned starter packs from
+`templates/ui-baselines/`. Current packs include:
 
 - `landing-page-minimalist@1` — one conversion, proof-led narrative, editorial
   hierarchy, no generic gradient/card wallpaper;
@@ -77,13 +78,14 @@ Jonggrang ships three versioned, deliberately opinionated starting points:
 - `mobile-app-minimalist@1` — focused one-handed flows, edge-to-edge grouping,
   interruption safety, no nested card stacks or gesture-only critical actions.
 
-The packs live under `templates/ui-baselines/`. Each has `manifest.yml`,
-`guide-fragment.md`, and `tokens.css.template`. Planning may inspect a candidate,
-but does not apply it before consent. For a missing token source, the selected
-exact template is carried into the foundation task's bounded handoff section and
-copied to the approved project-relative destination; projects then own that
-source. Guides and handoffs pin `id@version`, so pack updates cannot silently
-change active work.
+Each pack has `manifest.yml`, `guide-fragment.md`, and `tokens.css.template`.
+Its optional recommendation metadata may propose it from request keywords or an
+audited framework, but never applies it before consent. For a missing token
+source, the selected exact template is carried into the foundation task's
+bounded handoff section and copied to the approved project-relative destination;
+projects then own that source. Guides and handoffs pin `id@version`, so pack
+updates cannot silently change active work. See [UI baseline packs](UI_BASELINES.md)
+for the pack contract and contribution guide.
 
 Selection order:
 

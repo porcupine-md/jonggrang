@@ -140,9 +140,11 @@ UI-foundation task and blocks later UI work. Runtime prompts include only featur
 intent, shared direction, and the current task contract; agents read named guide
 sections and source files on demand. Conflicts fail closed as `UI_GUIDE_DRIFT`.
 
-The three built-in version-one packs are `landing-page-minimalist@1`,
+Valid baseline packs are discovered from `templates/ui-baselines/`; current
+version-one packs include `landing-page-minimalist@1`,
 `dashboard-operational@1`, and `mobile-app-minimalist@1`. They are optional
-starting points, not mandatory libraries. See [UI planning context](UI_CONTEXT.md).
+starting points, not mandatory libraries. See [UI planning context](UI_CONTEXT.md)
+and [UI baseline packs](UI_BASELINES.md).
 
 ---
 

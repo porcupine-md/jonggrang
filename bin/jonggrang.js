@@ -1172,7 +1172,7 @@ function verifyUiDraftPlan(planFile, sessionId) {
   if (guide.frontmatter.baseline !== fm.ui_baseline) {
     throw new Error(`Plan baseline (${fm.ui_baseline}) does not match UI guide baseline (${guide.frontmatter.baseline}).`);
   }
-  const baselinePack = uiContext.BASELINE_IDS.includes(fm.ui_baseline)
+  const baselinePack = uiContext.isBaselineKey(fm.ui_baseline)
     ? uiContext.loadBaselinePack(fm.ui_baseline)
     : null;
   return {

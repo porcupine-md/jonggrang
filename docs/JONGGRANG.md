@@ -181,10 +181,11 @@ jonggrang work --ignore-plan        # run existing tasks, skip pending plan warn
 For UI work, the platform uses a three-level context contract: tracked project
 `.jonggrang/UI.md`, tracked feature `UI_HANDOFF.md`, and per-task `ui_context`.
 The runtime injects only feature intent, shared direction, and the current task
-contract. Named guide sections and source files are read on demand. The built-in
-product-shape packs are `landing-page-minimalist@1`,
-`dashboard-operational@1`, and `mobile-app-minimalist@1`; existing project UI
-systems take precedence. See [UI_CONTEXT.md](UI_CONTEXT.md).
+contract. Named guide sections and source files are read on demand. Valid
+product-shape packs are discovered from `templates/ui-baselines/`; current packs
+include `landing-page-minimalist@1`, `dashboard-operational@1`, and
+`mobile-app-minimalist@1`. Existing project UI systems take precedence. See
+[UI_CONTEXT.md](UI_CONTEXT.md) and [UI_BASELINES.md](UI_BASELINES.md).
 
 Best for: well-understood tasks, boilerplate, incremental work.
 

@@ -5,6 +5,16 @@ product_shapes:
   - dashboard
   - admin
   - operations-console
+recommend_keywords:
+  - dashboard
+  - admin
+  - operation
+  - operations
+  - console
+  - backoffice
+  - internal tool
+  - data table
+recommend_priority: 10
 framework_targets:
   - css
   - any
