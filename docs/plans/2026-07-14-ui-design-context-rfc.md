@@ -1,6 +1,6 @@
 # UI guide, feature handoff, and task context
 
-**Status:** proposal only; this branch does not change Jonggrang runtime behavior.
+**Status:** accepted; implemented by the Issue #89 delivery branch.
 
 **Tracking:** [#89](https://github.com/porcupine-md/jonggrang/issues/89)
 
@@ -114,7 +114,7 @@ The lookup order is:
 project .jonggrang/UI.md
   > an explicit baseline or reference chosen for this project
   > optional ~/.jonggrang/UI.md
-  > built-in neutral-application@1
+  > the product-shape baseline recommended by Jonggrang
 ```
 
 ## `.jonggrang/UI.md` format
@@ -125,7 +125,7 @@ status easy to inspect.
 ```md
 ---
 format: jonggrang-ui-guide/v1
-baseline: neutral-application@1
+baseline: dashboard-operational@1
 ui_framework: vue + primevue
 token_source: client/src/assets/main.css
 token_status: ready
@@ -286,15 +286,15 @@ templates/ui-baselines/
   core/
     semantic-token-contract.md
     guide-sections.md
-  neutral-application/
+  landing-page-minimalist/
     manifest.yml
     guide-fragment.md
     tokens.css.template
-  dashboard/
+  dashboard-operational/
     manifest.yml
     guide-fragment.md
     tokens.css.template
-  marketing/
+  mobile-app-minimalist/
     manifest.yml
     guide-fragment.md
     tokens.css.template
@@ -305,12 +305,15 @@ framework targets, guide fragment, token template, and plan questions. The core
 contract keeps semantic names consistent. Each pack contributes only the rules
 and token values appropriate to its product shape.
 
-Jonggrang can ship one `neutral-application@1` pack first. More packs can be
-added without changing the plan flow. A guide and handoff pin the selected pack
-id and version, so a later pack release never silently changes an in-progress
-feature. External systems such as Chakra, Tailwind Plus, or a commercial design
-kit may be referenced by a pack, but their source is never copied without the
-project's license allowing it.
+Jonggrang ships three deliberately opinionated version-one packs:
+`landing-page-minimalist@1`, `dashboard-operational@1`, and
+`mobile-app-minimalist@1`. They cover three common product shapes without
+collapsing into one generic card-and-gradient aesthetic. More packs can be added
+without changing the plan flow. A guide and handoff pin the selected pack id and
+version, so a later pack release never silently changes an in-progress feature.
+External systems such as Chakra, Tailwind Plus, or a commercial design kit may
+be referenced by a pack, but their source is never copied without the project's
+license allowing it.
 
 ## When a token source is missing
 
@@ -389,7 +392,7 @@ required state behaves, what it must avoid, and how to verify it.
 
 Guide: .jonggrang/UI.md
 Guide revision: <content digest at approval>
-Baseline: neutral-application@1
+Baseline: dashboard-operational@1
 Token source: client/src/assets/main.css (ready)
 Guide status: unchanged
 
@@ -458,7 +461,7 @@ ui_context:
   guide_sections:
     - Components and layout patterns
     - Interaction, responsive, and accessibility rules
-  baseline: neutral-application@1
+  baseline: dashboard-operational@1
   read_order:
     - handoff
     - guide_sections
@@ -510,9 +513,9 @@ The implementation should cover the complete path, in this order.
 ### 1. Define the files and baseline-pack interface
 
 Add the `.jonggrang/UI.md` and feature `UI_HANDOFF.md` formats, the task
-`ui_context` schema, and a versioned baseline-pack manifest. Ship
-`neutral-application@1` first. The manifest and the guide both pin a pack id
-and version.
+`ui_context` schema, and a versioned baseline-pack manifest. Ship the three
+version-one product-shape packs together. The manifest and the guide both pin a
+pack id and version.
 
 ### 2. Detect UI work and audit the project
 
@@ -556,7 +559,7 @@ updates to the root guide; task agents cannot promote them themselves.
 
 ### 8. Grow baseline packs and optional integrations
 
-Add dashboard, marketing, and framework-specific packs through the pack
+Add further product-shape and framework-specific packs through the pack
 interface. Add Storybook lookup, component-index generation, Figma MCP, DTCG
 transforms, and visual-regression wiring only for projects that use them. These
 extensions do not change the root-guide, handoff, or task-context contract.

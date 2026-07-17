@@ -100,8 +100,11 @@ project-root/
 ├── .jonggrang/
 │   ├── jonggrang.json          # Project config
 │   ├── MEMORY.md               # Project-level curated memory (tracked; compact context, not instructions)
+│   ├── UI.md                   # Canonical project UI guide (tracked; UI projects only)
 │   ├── .drafts/<session>/      # Draft plans (gitignored, per-session — concurrent-safe)
-│   │   └── plan.md            # Pending plan (exists between plan → approve)
+│   │   ├── plan.md            # Pending plan (exists between plan → approve)
+│   │   ├── UI.md              # Proposed root-guide change (UI plans only)
+│   │   └── UI_HANDOFF.md      # Approved feature direction before task ids exist
 │   ├── plan-questions.json     # Clarifying questions the agent submitted via `plan ask`
 │   ├── plan-answers.json       # Your answers (reused on `plan --revise`)
 │   ├── .output/                # TRACKED in git — plans + manifests travel with each branch on push
@@ -111,6 +114,7 @@ project-root/
 │   │       ├── jonggrang-tasks.json  # Task board state (per-feature)
 │   │       ├── progress.txt         # Append-only agent learnings (per-feature)
 │   │       ├── MEMORY.md            # Feature-level curated memory (tracked; single-writer)
+│   │       ├── UI_HANDOFF.md        # Approved feature UI contracts (UI features only)
 │   │       └── [phase outputs]
 │   ├── .ephemeral/             # Cleared on restart (gitignored)
 │   │   ├── feedback-loop-state.json
@@ -140,12 +144,14 @@ jonggrang plan "feature"
     |
     v
 Phase 1 → AI writes .jonggrang/.drafts/<session>/plan.md  (high-level, human-editable)
+    |      UI plans also audit local design evidence and draft UI.md/UI_HANDOFF.md
     |      Interactive: Approve / Edit / Save / Abort
     v
 jonggrang approve   (or auto-triggered by --yes)
     |
     v
 Phase 2 → AI decomposes plan.md → .jonggrang/.output/features/{id}/jonggrang-tasks.json
+    |      UI plans add bounded ui_context and a validated feature UI_HANDOFF.md
     |      plan.md archived to .jonggrang/.output/features/<id>/plan.md
     v
 jonggrang work
@@ -171,6 +177,14 @@ jonggrang work --ignore-plan        # run existing tasks, skip pending plan warn
 ```
 
 > **Rule: completed tasks are immutable.** Any correction requires a new task.
+
+For UI work, the platform uses a three-level context contract: tracked project
+`.jonggrang/UI.md`, tracked feature `UI_HANDOFF.md`, and per-task `ui_context`.
+The runtime injects only feature intent, shared direction, and the current task
+contract. Named guide sections and source files are read on demand. The built-in
+product-shape packs are `landing-page-minimalist@1`,
+`dashboard-operational@1`, and `mobile-app-minimalist@1`; existing project UI
+systems take precedence. See [UI_CONTEXT.md](UI_CONTEXT.md).
 
 Best for: well-understood tasks, boilerplate, incremental work.
 

@@ -105,6 +105,10 @@ jonggrang work --feature feat-abc123 # Target a specific approved feature (multi
 > (pick an option — each carries its rationale — or type your own answer) so the
 > agent plans from real intent instead of guessing. The Q&A is saved with the plan
 > and reused on `plan --revise`. The web dashboard shows the same questions as a form.
+>
+> UI plans also audit the project's existing design system. They produce a tracked
+> `.jonggrang/UI.md`, a per-feature `UI_HANDOFF.md`, and bounded task context instead
+> of injecting a whole design guide into every agent. See [UI planning context](docs/UI_CONTEXT.md).
 
 ---
 
@@ -149,6 +153,7 @@ Two-layer config: `~/.jonggrang/settings.json` (your defaults) → `.jonggrang/j
 | [WORKFLOW.md](docs/WORKFLOW.md) | Grok the 16-phase pipeline |
 | [SKILLS.md](docs/SKILLS.md) | Teach the agents new tricks |
 | [CONFIG.md](docs/CONFIG.md) | Tweak every knob |
+| [UI_CONTEXT.md](docs/UI_CONTEXT.md) | Understand UI guides, baseline packs, and feature handoffs |
 
 ---
 
