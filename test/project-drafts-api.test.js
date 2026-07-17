@@ -76,6 +76,30 @@ test('project API lists all pending drafts by session id', async () => {
   }
 });
 
+test('project API returns UI guide proposal, current guide, and handoff with a draft', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jong-project-api-'));
+  try {
+    const sid = 'draft-ui';
+    writeDraft(root, sid, '---\nfeature: ui\nui: true\nui_guide_status: update proposed\nui_baseline: dashboard-operational@1\nui_token_status: ready\n---\n# UI Plan');
+    fs.writeFileSync(path.join(root, '.jonggrang', 'UI.md'), '# Current guide');
+    fs.writeFileSync(path.join(lib.draftDirFor(root, sid), 'UI.md'), '# Proposed guide');
+    fs.writeFileSync(path.join(lib.draftDirFor(root, sid), 'UI_HANDOFF.md'), '# UI handoff draft');
+
+    await withServer(root, async (base) => {
+      const res = await fetch(`${base}/api/projects/p1/plans`);
+      assert.equal(res.status, 200);
+      const plans = await res.json();
+      assert.equal(plans[0].ui.guide_status, 'update proposed');
+      assert.equal(plans[0].ui.baseline, 'dashboard-operational@1');
+      assert.equal(plans[0].ui.guide_content, '# Proposed guide');
+      assert.equal(plans[0].ui.current_guide_content, '# Current guide');
+      assert.equal(plans[0].ui.handoff_content, '# UI handoff draft');
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('project API edits only the requested draft session', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jong-project-api-'));
   try {

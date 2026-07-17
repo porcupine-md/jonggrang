@@ -216,6 +216,39 @@
                 />
               </div>
 
+              <section v-if="selectedPlan.ui" class="ui-context-review">
+                <header class="ui-context-header">
+                  <div>
+                    <div class="ui-context-title">UI planning context</div>
+                    <div class="ui-context-path">Review with the plan before approval</div>
+                  </div>
+                  <div class="ui-context-badges">
+                    <span class="ui-context-badge">{{ selectedPlan.ui.guide_status }}</span>
+                    <span v-if="selectedPlan.ui.baseline" class="ui-context-badge">{{ selectedPlan.ui.baseline }}</span>
+                    <span v-if="selectedPlan.ui.token_status" class="ui-context-badge">tokens: {{ selectedPlan.ui.token_status }}</span>
+                  </div>
+                </header>
+
+                <details v-if="selectedPlan.ui.handoff_content" open class="ui-context-details">
+                  <summary>Feature handoff · {{ selectedPlan.ui.handoff_path }}</summary>
+                  <div class="ui-context-markdown" v-html="renderedUiHandoff" />
+                </details>
+
+                <details v-if="selectedPlan.ui.guide_content || selectedPlan.ui.current_guide_content" class="ui-context-details">
+                  <summary>Project guide {{ selectedPlan.ui.current_guide_content && selectedPlan.ui.guide_content ? 'comparison' : '' }} · {{ selectedPlan.ui.guide_path }}</summary>
+                  <div class="ui-guide-compare" :class="{ 'ui-guide-compare--single': !selectedPlan.ui.current_guide_content || !selectedPlan.ui.guide_content }">
+                    <div v-if="selectedPlan.ui.current_guide_content" class="ui-guide-version">
+                      <div class="ui-guide-version-label">Current</div>
+                      <div class="ui-context-markdown" v-html="renderedUiCurrentGuide" />
+                    </div>
+                    <div v-if="selectedPlan.ui.guide_content" class="ui-guide-version">
+                      <div class="ui-guide-version-label">Proposed</div>
+                      <div class="ui-context-markdown" v-html="renderedUiGuide" />
+                    </div>
+                  </div>
+                </details>
+              </section>
+
               <!-- Revise bar -->
               <div v-if="showReviseBar" class="revise-bar">
                 <input
@@ -490,6 +523,9 @@ const renderedContent = computed(() => {
 });
 
 const renderedDraftContent = computed(() => marked.parse(planContent.value || ''));
+const renderedUiHandoff = computed(() => marked.parse(selectedPlan.value?.ui?.handoff_content || ''));
+const renderedUiGuide = computed(() => marked.parse(selectedPlan.value?.ui?.guide_content || ''));
+const renderedUiCurrentGuide = computed(() => marked.parse(selectedPlan.value?.ui?.current_guide_content || ''));
 
 // Computed
 const isIdle = computed(() =>
@@ -1082,6 +1118,28 @@ onUnmounted(() => {
 .plan-editor-body { flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; }
 .plan-editor-body :deep(.plan-editor-textarea) { flex: 1; height: 100% !important; resize: none; border: none !important; border-radius: 0 !important; font-size: 13px !important; line-height: 1.7 !important; padding: 16px !important; background: var(--jg-bg) !important; color: var(--jg-text) !important; }
 .plan-editor-body :deep(.plan-editor-textarea:focus) { box-shadow: none !important; outline: none !important; }
+
+/* UI guide + handoff review */
+.ui-context-review { max-height: 46%; overflow-y: auto; border-top: 1px solid var(--jg-border); background: var(--jg-card); flex-shrink: 0; }
+.ui-context-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--jg-border); background: var(--jg-card); }
+.ui-context-title { font-size: 12px; font-weight: 700; color: var(--jg-text); }
+.ui-context-path { margin-top: 2px; font-size: 10px; color: var(--jg-text-faint); }
+.ui-context-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ui-context-badge { padding: 2px 6px; border: 1px solid var(--jg-border); color: var(--jg-cyan); font-size: 10px; }
+.ui-context-details { border-bottom: 1px solid var(--jg-border); }
+.ui-context-details summary { cursor: pointer; padding: 8px 16px; color: var(--jg-text-dim); font-size: 11px; font-weight: 600; }
+.ui-context-details summary:hover { color: var(--jg-text); background: var(--jg-hover); }
+.ui-guide-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border-top: 1px solid var(--jg-border); }
+.ui-guide-compare--single { grid-template-columns: minmax(0, 1fr); }
+.ui-guide-version { min-width: 0; padding: 0 14px 14px; overflow-x: auto; }
+.ui-guide-version + .ui-guide-version { border-left: 1px solid var(--jg-border); }
+.ui-guide-version-label { position: sticky; top: 0; padding: 8px 0 6px; background: var(--jg-card); color: var(--jg-text-faint); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+.ui-context-markdown { padding: 0 16px 12px; color: var(--jg-text-dim); font-size: 11px; line-height: 1.6; }
+.ui-guide-version .ui-context-markdown { padding: 0; }
+.ui-context-markdown :deep(h1), .ui-context-markdown :deep(h2), .ui-context-markdown :deep(h3) { margin: 12px 0 6px; color: var(--jg-text); font-size: 12px; }
+.ui-context-markdown :deep(p), .ui-context-markdown :deep(ul) { margin: 0 0 8px; }
+.ui-context-markdown :deep(pre) { overflow-x: auto; padding: 8px; border: 1px solid var(--jg-border); background: var(--jg-bg); }
+.ui-context-markdown :deep(code) { font-family: var(--font-mono); font-size: 10px; }
 
 /* Revise bar */
 .revise-bar {

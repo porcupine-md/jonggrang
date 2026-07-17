@@ -365,6 +365,23 @@ The Plan screen can show multiple pending draft rows. Each draft row uses the dr
 
 All draft actions (save, discard, revise, discuss, approve) must carry the selected `sessionId`; the UI must never assume there is only one root draft.
 
+### UI planning context review
+
+When a draft carries `ui: true`, the editor shows a bounded review panel below
+the plan text before approval:
+
+- header badges for guide status, pinned baseline, and token status;
+- expanded feature handoff rendered from the draft `UI_HANDOFF.md`;
+- a collapsed project-guide comparison with **Current** and **Proposed** columns
+  when `UI.md` changes, or one column when only one version exists.
+
+The panel uses the existing card surface and straight borders. It is capped at
+46% of the editor height and scrolls independently, so the plan remains editable.
+Metadata stays visible in a sticky header. The comparison is evidence for plan
+approval, not a second design editor; manual changes use plan revision or the
+sidecar files. Missing Figma, Storybook, or screenshot resources are displayed
+as absent rather than synthesized.
+
 ### Issues screen (top-level `/issues`)
 
 The **Issues** menu (top app nav, beside `projects`) lists GitHub/GitLab issues and picks them up as plans (feature #55).
