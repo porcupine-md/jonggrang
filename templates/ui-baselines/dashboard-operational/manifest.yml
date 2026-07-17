@@ -1,0 +1,24 @@
+id: dashboard-operational
+version: 1
+intent: Dense operational software for repeated scanning, filtering, and exception handling.
+product_shapes:
+  - dashboard
+  - admin
+  - operations-console
+framework_targets:
+  - css
+  - any
+flavor:
+  density: compact
+  geometry: crisp
+  typography: utilitarian
+avoid:
+  - oversized metric cards
+  - decorative gradients
+  - hidden critical actions
+  - colour as the only status signal
+guide_fragment: guide-fragment.md
+token_template: tokens.css.template
+plan_questions:
+  - Which decision or exception must operators see first?
+  - Which actions must remain keyboard reachable during repeated work?
