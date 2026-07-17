@@ -56,19 +56,21 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { VueFlow, MarkerType } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { MiniMap } from '@vue-flow/minimap';
 import { buildTaskGraph } from '../utils/taskGraph.js';
+import { useTasksStore } from '../stores/tasks.js';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id);
 const featureId = computed(() => route.params.featureId);
 
-const tasks = ref([]);
+const tasksStore = useTasksStore();
+const tasks = computed(() => tasksStore.visible);
 const loading = ref(false);
 const error = ref('');
 const runningId = ref(null);
@@ -102,10 +104,7 @@ const canRun = (status) => !['completed', 'done', 'skipped', 'in_progress'].incl
 async function load() {
   loading.value = true; error.value = '';
   try {
-    const res = await fetch(`/api/projects/${projectId.value}/tasks?feature_id=${encodeURIComponent(featureId.value)}`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || 'Failed to load tasks');
-    tasks.value = data.tasks || [];
+    await tasksStore.fetchTasks(projectId.value);
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -131,8 +130,19 @@ async function runTask(taskId) {
   runningId.value = null;
 }
 
-onMounted(load);
-watch(featureId, load);
+onMounted(() => {
+  tasksStore.setFeatureFilter(featureId.value);
+  load();
+});
+
+watch(featureId, (fid) => {
+  tasksStore.setFeatureFilter(fid);
+  load();
+});
+
+onUnmounted(() => {
+  tasksStore.setFeatureFilter(null);
+});
 </script>
 
 <style scoped>
