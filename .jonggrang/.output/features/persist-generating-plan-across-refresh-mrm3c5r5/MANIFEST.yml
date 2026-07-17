@@ -1,0 +1,120 @@
+feature_id: persist-generating-plan-across-refresh-mrm3c5r5
+description: persist-generating-plan-across-refresh
+work_type: BUGFIX
+created_at: '2026-07-15T13:03:15.234Z'
+updated_at: '2026-07-15T13:32:34.726Z'
+status: completed
+current_phase: null
+active_phases:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 8
+  - 11
+  - 12
+  - 14
+  - 15
+  - 16
+  - 17
+phases:
+  '1':
+    name: setup
+    status: completed
+    started_at: null
+    completed_at: '2026-07-15T13:09:34.757Z'
+    agent_id: null
+    output:
+      source: approve
+    output_files: []
+  '2':
+    name: triage
+    status: completed
+    started_at: null
+    completed_at: '2026-07-15T13:09:34.759Z'
+    agent_id: null
+    output:
+      source: approve
+    output_files: []
+  '3':
+    name: codebase-discovery
+    status: completed
+    started_at: null
+    completed_at: '2026-07-15T13:09:34.761Z'
+    agent_id: null
+    output:
+      source: approve
+    output_files: []
+  '4':
+    name: skill-discovery
+    status: completed
+    started_at: null
+    completed_at: '2026-07-15T13:09:34.762Z'
+    agent_id: null
+    output:
+      source: approve
+    output_files: []
+  '8':
+    name: implementation
+    status: completed
+    started_at: '2026-07-15T13:09:50.949Z'
+    completed_at: '2026-07-15T13:32:34.724Z'
+    agent_id: null
+    output:
+      source: work-loop
+    output_files: []
+  '11':
+    name: domain-compliance
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+  '12':
+    name: code-quality
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+  '14':
+    name: testing
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+  '15':
+    name: coverage
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+  '16':
+    name: test-quality
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+  '17':
+    name: completion
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+agents: {}
+validation:
+  review_passed: false
+  tests_passed: false
+  coverage_met: false
+locks: []
+context_usage: null

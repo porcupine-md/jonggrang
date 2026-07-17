@@ -123,13 +123,20 @@
       <!-- RIGHT: content panel -->
       <div class="plan-content">
 
-        <!-- Progress log: generating / revising / approving -->
-        <div v-if="generating || revising || approving" class="plan-log-wrap">
+        <!-- Progress log: generating / revising / approving, or (refresh-only) a
+             "questions ready" continuation that precedes the QA dialog. -->
+        <div v-if="generating || revising || approving || questionsReady" class="plan-log-wrap">
           <div class="plan-log-title">
-            <i class="pi pi-spin pi-spinner" />
-            {{ generating ? 'Generating plan...' : revising ? 'Revising plan with AI...' : 'Decomposing plan into tasks...' }}
+            <template v-if="generating || revising || approving">
+              <i class="pi pi-spin pi-spinner" />
+              {{ generating ? 'Generating plan...' : revising ? 'Revising plan with AI...' : 'Decomposing plan into tasks...' }}
+            </template>
+            <template v-else>
+              <i class="pi pi-check-circle" />
+              Plan questions ready — answer them to continue generating
+            </template>
           </div>
-          <div ref="genLogRef" class="plan-log-terminal" />
+          <div v-if="generating || revising || approving" ref="genLogRef" class="plan-log-terminal" />
         </div>
 
         <!-- New plan form -->
@@ -389,6 +396,7 @@ import Dialog from 'primevue/dialog';
 import { marked } from 'marked';
 import { useLogTerminal } from '../../composables/useLogTerminal.js';
 import { useWsStore } from '../../stores/ws.js';
+import { useProcessStore } from '../../stores/process.js';
 import { useOrchestrationStore } from '../../stores/orchestration.js';
 import { usePickupStore } from '../../stores/pickup.js';
 import ProviderIcon from '../ProviderIcon.vue';
@@ -397,6 +405,7 @@ import PlanDiscuss from './PlanDiscuss.vue';
 const route = useRoute();
 const projectId = computed(() => route.params.id);
 const ws = useWsStore();
+const proc = useProcessStore();
 const orch = useOrchestrationStore();
 const pickup = usePickupStore();
 
@@ -456,8 +465,62 @@ const TOOLS = [
 const generating = ref(false);
 const approving = ref(false);
 const revising = ref(false);
+// Refresh-only: a Pass A run already produced clarifying questions and is waiting
+// for answers. There's no live process to show a spinner for, so this flag renders
+// a "questions ready" continuation of the (now-finished) generating context — the
+// QA dialog then reads as a follow-on, never a bare dialog appearing from nowhere.
+const questionsReady = ref(false);
 const genLog = ref('');
 const genError = ref('');
+
+// Restore the active-op spinner from server truth (the process store, hydrated
+// from the subscribe snapshot). Lets a generate/revise/extend/approve op survive
+// a browser refresh instead of silently dropping the spinner + log region.
+// Maps the server command kind → the matching local flag.
+function restorePlanProcessState(info) {
+  const command = info?.command;
+  if (command === 'plan' || command === 'plan-extend') generating.value = true;
+  else if (command === 'plan-revise') revising.value = true;
+  else if (command === 'approve') approving.value = true;
+}
+
+// Populate the QA form state from a questions payload (goal + question list).
+// Shared by the live `plan.questions` socket event and the refresh restore path
+// so both build answerDraft identically.
+function applyPlanQuestions(goal_analysis, questions) {
+  Object.keys(answerDraft).forEach(k => delete answerDraft[k]);
+  for (const q of (questions || [])) {
+    if (q.type === 'multi_choice') answerDraft[q.id] = { choices: [], freetext: '', useFreetext: false };
+    else if (q.type === 'single_choice') answerDraft[q.id] = { choice: (q.options && q.options[0] ? q.options[0].value : ''), freetext: '' };
+    else answerDraft[q.id] = { freetext: '' };
+  }
+  pendingQuestions.value = { goal_analysis: goal_analysis || '', questions: questions || [] };
+  showQuestionForm.value = true;
+}
+
+// Refresh path: the subscribe snapshot flags that a Pass A run left unanswered
+// clarifying questions. Fetch them and surface the QA dialog — but only as a
+// continuation of a visible "questions ready" context (established here before
+// the dialog), so it never appears cold. If a plan op is still running with no
+// questions yet, this no-ops and restorePlanProcessState shows the spinner alone.
+async function restorePlanQuestions() {
+  const pq = ws.planQuestions;
+  if (!pq || pq.projectId !== projectId.value || !pq.pending) return;
+  // Don't fight the live Pass A→questions flow or an already-open form.
+  if (showQuestionForm.value || pendingQuestions.value) return;
+  try {
+    const url = pq.sessionId
+      ? `/api/projects/${projectId.value}/plan/questions?session=${encodeURIComponent(pq.sessionId)}`
+      : `/api/projects/${projectId.value}/plan/questions`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || !data.exists || !Array.isArray(data.questions) || !data.questions.length) return;
+    // Establish the generating→questions-ready continuation BEFORE the dialog.
+    questionsReady.value = true;
+    applyPlanQuestions(data.goal_analysis, data.questions);
+  } catch { /* leave the user on the idle/plan view rather than a bare dialog */ }
+}
 
 // Extend-an-existing-plan (append) state
 const showExtendForm = ref(false);
@@ -493,7 +556,7 @@ const renderedDraftContent = computed(() => marked.parse(planContent.value || ''
 
 // Computed
 const isIdle = computed(() =>
-  plans.value.length === 0 && !generating.value && !showNewPlanForm.value
+  plans.value.length === 0 && !generating.value && !questionsReady.value && !showNewPlanForm.value
 );
 
 const canAddNewPlan = computed(() => true);
@@ -770,6 +833,7 @@ async function submitAnswers() {
   genError.value = '';
   genLog.value = '';
   generating.value = true;
+  questionsReady.value = false;
   showQuestionForm.value = false;
   const goal_analysis = pendingQuestions.value.goal_analysis || '';
   pendingQuestions.value = null;
@@ -799,6 +863,7 @@ function cancelQuestions() {
   showQuestionForm.value = false;
   pendingQuestions.value = null;
   generating.value = false;
+  questionsReady.value = false;
   showNewPlanForm.value = true; // let the user edit the request and try again
 }
 
@@ -878,6 +943,16 @@ onMounted(async () => {
   loadBranches();
   applyPickupPrefill();
 
+  // Restore the active plan-op spinner + log region from server truth. The
+  // subscribe snapshot (via the process store) may land before or after this
+  // mount, so react immediately to the current value and to later hydration.
+  watch(() => proc.running, restorePlanProcessState, { immediate: true });
+
+  // Restore the pending clarifying-questions dialog from server truth, sequenced
+  // after a visible generating context. Like the spinner restore, the snapshot
+  // may land before or after mount, so react immediately and to later hydration.
+  watch(() => ws.planQuestions, restorePlanQuestions, { immediate: true });
+
   // Live run badges: always re-hydrate from the server so a group that
   // finished while on another view doesn't keep a stale "live" badge.
   try {
@@ -915,14 +990,9 @@ onMounted(async () => {
 
   socket.on('plan.questions', ({ project_id, goal_analysis, questions }) => {
     if (project_id !== projectId.value) return;
-    Object.keys(answerDraft).forEach(k => delete answerDraft[k]);
-    for (const q of (questions || [])) {
-      if (q.type === 'multi_choice') answerDraft[q.id] = { choices: [], freetext: '', useFreetext: false };
-      else if (q.type === 'single_choice') answerDraft[q.id] = { choice: (q.options && q.options[0] ? q.options[0].value : ''), freetext: '' };
-      else answerDraft[q.id] = { freetext: '' };
-    }
-    pendingQuestions.value = { goal_analysis: goal_analysis || '', questions: questions || [] };
-    showQuestionForm.value = true;
+    applyPlanQuestions(goal_analysis, questions);
+    // Live flow: the generating spinner the user already sees hands off to the
+    // dialog. (questionsReady is a refresh-only fallback, so leave it untouched.)
     generating.value = false;
   });
 
