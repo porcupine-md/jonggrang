@@ -2077,6 +2077,10 @@ async function cmdApprove(args, opts = {}) {
 
   // Snapshot existing task IDs IN THIS FEATURE so we can detect what the agent
   // added (append continues this feature's own numbering; a new feature is empty).
+  const approvalTasksFile = lib.tasksFileFor(PROJECT_ROOT, featureId);
+  const previousTasksContent = fs.existsSync(approvalTasksFile)
+    ? fs.readFileSync(approvalTasksFile, 'utf8')
+    : null;
   const existingTaskIds = new Set(
     (lib.getAllTasks(PROJECT_ROOT)?.tasks || [])
       .filter(t => t.feature_id === featureId)
@@ -2099,10 +2103,8 @@ async function cmdApprove(args, opts = {}) {
       return;
     }
     try {
-      const tasksFile = lib.tasksFileFor(PROJECT_ROOT, featureId);
-      const data = lib.getTasks(tasksFile);
-      data.tasks = (data.tasks || []).filter(task => existingTaskIds.has(task.id));
-      lib.writeJSON(tasksFile, data);
+      if (previousTasksContent == null) fs.unlinkSync(approvalTasksFile);
+      else fs.writeFileSync(approvalTasksFile, previousTasksContent, 'utf8');
     } catch {}
     try {
       if (previousUiHandoff == null) fs.unlinkSync(finalUiHandoffPath);
