@@ -1,0 +1,102 @@
+{
+    "tasks": [
+        {
+            "id": "task-001",
+            "title": "Add server-side activePlan registry and register/deregister around all plan-family spawns",
+            "description": "Mirror the existing activeWork pattern for plan operations.\n\nIn apis/projects/index.js: declare `const activePlan = new Map();` alongside `const activeWork = new Map();` (near line 16) and add `activePlan` to the `deps` object (near line 265, next to `activeWork`). Also add `activePlan` to the shutdown/cleanup loop that iterates `activeWork` (near line 309) so running plan children are killed on server shutdown.\n\nIn apis/projects/plan.js: for EACH plan-family spawn, register the child in `activePlan` keyed by project id with its command kind, and deregister on close. The four spawn sites are: (1) revise at line ~191-192 — kind `plan-revise`; (2) generate/Pass A at line ~320-321 — kind `plan`; (3) answers/Pass B at line ~402-403 — kind `plan`; (4) extend at line ~444-445 — kind `plan-extend`. For each, after `const child = spawnForProject(...)` and `wireProjectProcess(...)`, add `activePlan.set(project.id, { child, command: <kind> });` and `child.on('close', () => activePlan.delete(project.id));`. Destructure `activePlan` from `deps` at the top of the module (line 17). Store the command kind so the client can restore the correct spinner label.\n\nIn apis/projects/approve.js: destructure `activePlan` from `deps` (line 7). At the approve spawn (line ~26-27), after wiring, add `activePlan.set(project.id, { child, command: 'approve' });` and `child.on('close', () => activePlan.delete(project.id));`.\n\nAcceptance criteria: activePlan is a Map exposed via deps; every plan-family spawn registers itself with the correct kind and deregisters on close; server shutdown kills tracked plan children. Do NOT change snapshot reporting yet (that is task-002). Existing behavior (wireProjectProcess emitting process.log/process.exited) must remain unchanged.",
+            "priority": 1,
+            "status": "completed",
+            "feature_id": "persist-generating-plan-across-refresh-mrm3c5r5",
+            "skill": null,
+            "blocked_by": [],
+            "passes": true,
+            "files": [
+                "apis/projects/index.js",
+                "apis/projects/plan.js",
+                "apis/projects/approve.js"
+            ],
+            "started_at": "2026-07-15T13:09:58.413Z",
+            "completed_at": "2026-07-15T13:12:36.992Z",
+            "error_log": []
+        },
+        {
+            "id": "task-002",
+            "title": "Report running plan op and pending-questions signal in the subscribe snapshot",
+            "description": "Extend the subscribe snapshot in apis/projects/index.js (socket subscribe handler, lines ~205-243).\n\nCurrently the snapshot sets `process: running ? { command: 'work' } : null` where `running = activeWork.has(project_id)` (line 224/235). Update so that:\n1. If `activeWork.has(project_id)` → `process: { command: 'work' }` (unchanged precedence — work takes priority if somehow both).\n2. Else if `activePlan.has(project_id)` → `process: { command: <the stored command kind> }` (e.g. 'plan', 'plan-revise', 'plan-extend', 'approve'), reading the kind from the registry entry stored in task-001.\n3. Else → `process: null`.\n\nAlso add a pending-questions signal to the snapshot so the client can distinguish \"still generating\" from \"questions ready\". Using the already-resolved active draft session `sid` (line 213) and `lib.questionsFileFor(project.path, sid)` (see plan.js line ~336 for the helper), determine whether a produced-but-unanswered clarifying-questions draft exists (questions file present). Add a boolean field to the snapshot, e.g. `plan_questions_pending: <bool>` (and optionally include the sessionId), set true only when the questions file exists for the active draft. Keep the field null/false when no questions are pending.\n\nAcceptance criteria: snapshot.process reflects a running plan op with its command kind when no work is running; snapshot carries a pending-questions flag derived from the questions file on disk. No client changes in this task.",
+            "priority": 2,
+            "status": "completed",
+            "feature_id": "persist-generating-plan-across-refresh-mrm3c5r5",
+            "skill": null,
+            "blocked_by": [
+                "task-001"
+            ],
+            "passes": true,
+            "files": [
+                "apis/projects/index.js"
+            ],
+            "started_at": null,
+            "completed_at": "2026-07-15T13:14:22.223Z",
+            "error_log": []
+        },
+        {
+            "id": "task-003",
+            "title": "Restore plan spinner + progress log on refresh from the snapshot (ws/process stores + PlanView)",
+            "description": "Thread the plan process/kind from the snapshot through the client stores and restore PlanView spinner state on mount/subscribe.\n\nIn client/src/stores/ws.js (subscribed handler, lines ~27-36): today `if (snapshot.process) proc.setRunning(snapshot.process)` already forwards the process descriptor. Ensure the full descriptor including `command` kind (plan/plan-revise/plan-extend/approve/work) reaches the process store, and forward the new `plan_questions_pending` signal from task-002 so it is available to PlanView (either via the process store, a dedicated ws-store field, or emit a synthetic event). Do not break existing work-process handling.\n\nIn client/src/stores/process.js: `running` already holds `{ command, pid, startedAt }` (line 5) via `setRunning` (line 18). Confirm/extend it to carry the plan command kind so consumers can map kind→spinner. Add a getter if helpful (e.g. `isPlanRunning`).\n\nIn client/src/components/plan/PlanView.vue (onMounted lines ~873-892, and near the local refs generating/approving/revising at lines 456-458): on mount and on (re)subscribe, read the restored process from the process store and set the correct local flag: command 'plan' or 'plan-revise' or 'plan-extend' → set `generating`/`revising` appropriately (map 'plan-revise'→revising, 'plan'/'plan-extend'→generating), command 'approve'→approving. Re-attach the progress log region (the `genLog`/`genLogRef` terminal at lines 126-132) so it shows during restored state (log tail may resume from reconnect per Out-of-Scope; only the active state must be restored). Ensure these flags are set from server truth rather than always defaulting to false.\n\nAcceptance criteria: refreshing the browser during a generate/revise/approve/extend plan op restores the matching spinner and log region from the snapshot; the spinner clears correctly on the subsequent process.exited event (existing handler lines ~936-956). Questions-dialog sequencing is handled in task-004.",
+            "priority": 3,
+            "status": "completed",
+            "feature_id": "persist-generating-plan-across-refresh-mrm3c5r5",
+            "skill": null,
+            "blocked_by": [
+                "task-002"
+            ],
+            "passes": true,
+            "files": [
+                "client/src/stores/ws.js",
+                "client/src/stores/process.js",
+                "client/src/components/plan/PlanView.vue"
+            ],
+            "started_at": "2026-07-15T13:14:58.070Z",
+            "completed_at": "2026-07-15T13:19:03.776Z",
+            "error_log": []
+        },
+        {
+            "id": "task-004",
+            "title": "Sequence the plan-questions dialog to follow a visible generating context on refresh",
+            "description": "Ensure the 'plan ask' clarifying-questions dialog only ever appears as a continuation of a visible generating context, never cold on refresh.\n\nContext: On refresh while Pass A has already produced questions, the server relays `plan.questions` (index.js lines ~79-104 emit; PlanView handler lines ~916-927 which sets pendingQuestions + showQuestionForm and clears generating). Previously the spinner was lost so the dialog appeared from nowhere.\n\nIn client/src/components/plan/PlanView.vue: using the `plan_questions_pending` signal restored in task-003, when the snapshot indicates a running plan op AND/OR pending questions, render a visible generating context first (spinner or a clear \"questions ready\" continuation) and then surface the questions dialog. Concretely: on mount/subscribe, if pending-questions is signalled, fetch the questions (GET /api/projects/:id/plan/questions, see plan.js line ~326) and populate pendingQuestions/answerDraft (mirror the logic in the plan.questions handler at lines 916-927) so the QA body (lines 333-337) renders — but only after establishing the generating context so the transition reads as generating → questions ready, not a bare dialog. If a plan op is still running (no questions yet), show the spinner only. Ensure the plan.questions live event still behaves correctly (it should continue to appear following the visible generating spinner the user already sees).\n\nAcceptance criteria: after refresh, the user never sees a questions dialog appear out of nowhere — they see either the generating spinner (still running) or a clear questions-ready continuation that visibly follows from a generating context; the live Pass A→questions flow (no refresh) is unchanged.",
+            "priority": 4,
+            "status": "completed",
+            "feature_id": "persist-generating-plan-across-refresh-mrm3c5r5",
+            "skill": null,
+            "blocked_by": [
+                "task-003"
+            ],
+            "passes": true,
+            "files": [
+                "client/src/components/plan/PlanView.vue"
+            ],
+            "started_at": "2026-07-15T13:19:57.752Z",
+            "completed_at": "2026-07-15T13:23:47.377Z",
+            "error_log": []
+        },
+        {
+            "id": "task-005",
+            "title": "Verify refresh persistence across all plan operations and run the test suite",
+            "description": "Verification phase for the persist-generating-plan-across-refresh feature.\n\n1. Run the existing test suite (`npm test`), paying particular attention to the plan/drafts-related tests: test/project-drafts-api.test.js and test/draft-placement.test.js. All tests must pass. If any fail due to the changes in task-001..task-004, fix the regression (only within the feature's touched files) or report a bug per the CLAUDE.md bug protocol if out of scope.\n\n2. Manually exercise refresh during EACH plan operation and confirm the correct spinner/state is restored from server truth:\n   - Generate (Pass A) in flight → refresh shows generating spinner.\n   - Pass A produced questions → refresh shows generating context then the questions dialog (never a bare dialog).\n   - Answers/Pass B in flight → refresh shows generating spinner.\n   - Revise in flight → refresh shows revising spinner.\n   - Approve & Decompose in flight → refresh shows approving/decomposing spinner.\n   - Extend in flight → refresh shows generating spinner.\n   Confirm the spinner clears correctly when the underlying process exits.\n\n3. Confirm no regressions to Work Mode / orchestration-run tracking (that pattern was only reused, not modified).\n\nAcceptance criteria: full test suite green; all six refresh scenarios behave per the plan's Clarifications (spinner survives refresh; questions dialog only ever follows a visible generating context). Document verification results in .jonggrang/progress.txt.",
+            "priority": 5,
+            "status": "completed",
+            "feature_id": "persist-generating-plan-across-refresh-mrm3c5r5",
+            "skill": null,
+            "blocked_by": [
+                "task-004"
+            ],
+            "passes": true,
+            "files": [
+                "test/project-drafts-api.test.js",
+                "apis/projects/index.js"
+            ],
+            "started_at": "2026-07-15T13:24:38.490Z",
+            "completed_at": "2026-07-15T13:31:04.117Z",
+            "error_log": []
+        }
+    ]
+}

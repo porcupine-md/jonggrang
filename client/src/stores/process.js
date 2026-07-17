@@ -9,7 +9,12 @@ export const useProcessStore = defineStore('process', () => {
   const MAX_LOG = 2000;
   const MAX_TASK_LOG = 500;
 
+  const PLAN_COMMANDS = ['plan', 'plan-revise', 'plan-extend', 'approve'];
   const isRunning = computed(() => !!running.value);
+  // Which plan-family op (if any) is running — lets consumers map kind→spinner.
+  const planCommand = computed(() =>
+    PLAN_COMMANDS.includes(running.value?.command) ? running.value.command : null);
+  const isPlanRunning = computed(() => planCommand.value !== null);
   const elapsed = computed(() => {
     if (!running.value) return 0;
     return Date.now() - running.value.startedAt;
@@ -47,7 +52,7 @@ export const useProcessStore = defineStore('process', () => {
 
   return {
     running, globalLog, taskLogs, lastSeq,
-    isRunning, elapsed,
+    isRunning, planCommand, isPlanRunning, elapsed,
     setRunning, setExited, appendLog, appendTaskLog, clearLogs,
     taskLogPreview, taskLogFull,
   };

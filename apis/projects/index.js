@@ -14,6 +14,7 @@ module.exports = function register(app, io, ctx) {
     // ── Local state ──────────────────────────────────────────────
     const projectWatchers = new Map();
     const activeWork = new Map();
+    const activePlan = new Map();
     const activeRuns = new Map();
     const lastActivity = new Map();
 
@@ -222,6 +223,30 @@ module.exports = function register(app, io, ctx) {
                     planMtime = fs.statSync(planPath).mtimeMs;
                 }
                 const running = activeWork.has(project_id);
+                const planEntry = activePlan.get(project_id);
+                // process precedence: work wins if somehow both, then a running
+                // plan-family op reports its stored command kind, else null.
+                let process = null;
+                if (running) {
+                    process = { command: 'work' };
+                } else if (planEntry) {
+                    process = { command: planEntry.command };
+                }
+                // Pending-questions signal: a produced-but-unanswered clarifying
+                // -questions draft exists when its questions file is present on
+                // disk. A mid Pass-A draft has questions but NO plan.md yet, so
+                // resolveActiveDraft() (plan.md-gated) can't see it — resolve the
+                // questions-bearing draft the same way GET /plan/questions does
+                // (newest questions-file, else the active draft). Distinguishes
+                // "still generating" from "questions ready" for the client.
+                let planQuestionsPending = false;
+                let planQuestionsSid = null;
+                try {
+                    planQuestionsSid = lib.resolveActiveQuestionDraft(project.path) || sid;
+                    if (planQuestionsSid) {
+                        planQuestionsPending = fs.existsSync(lib.questionsFileFor(project.path, planQuestionsSid));
+                    }
+                } catch { planQuestionsPending = false; planQuestionsSid = null; }
                 const orchView = deps.orchestrationRunView ? deps.orchestrationRunView(project) : null;
                 socket.emit('subscribed', {
                     project_id,
@@ -232,7 +257,9 @@ module.exports = function register(app, io, ctx) {
                         plan_session_id: sid || null,
                         plan_content: planContent,
                         plan_mtime: planMtime,
-                        process: running ? { command: 'work' } : null,
+                        process,
+                        plan_questions_pending: planQuestionsPending,
+                        plan_questions_session_id: planQuestionsPending ? planQuestionsSid : null,
                         orchestration: orchView,
                     },
                 });
@@ -263,6 +290,7 @@ module.exports = function register(app, io, ctx) {
         fs,
         path,
         activeWork,
+        activePlan,
         activeRuns,
         lastActivity,
         projectWatchers,
@@ -308,6 +336,10 @@ module.exports = function register(app, io, ctx) {
     return function cleanup() {
         for (const [, child] of activeWork) {
             if (!child.killed) try { child.kill('SIGKILL'); } catch {}
+        }
+        for (const [, entry] of activePlan) {
+            const child = entry && entry.child;
+            if (child && !child.killed) try { child.kill('SIGKILL'); } catch {}
         }
         for (const [, run] of activeRuns) {
             for (const group of Object.values(run.groups || {})) {
