@@ -1,0 +1,62 @@
+{
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Wire TaskGraphView to shared Pinia tasksStore",
+      "description": "Replace the local `tasks` ref in TaskGraphView with a reactive computed property sourced from the shared Pinia `useTasksStore`, matching the pattern already used by KanbanBoard.\n\n**Current state:** TaskGraphView (client/src/views/TaskGraphView.vue) uses a local `ref([])` named `tasks` that is populated by a direct HTTP GET to `/api/projects/:id/tasks?feature_id=...` in the `load()` function. It never subscribes to WebSocket `tasks.update` events, so task status changes during orchestration are invisible until a manual refresh.\n\n**Changes:**\n1. Import `useTasksStore` from `../stores/tasks.js` (already available, see KanbanBoard.vue for the import pattern).\n2. Replace `const tasks = ref([])` with `const tasksStore = useTasksStore()` and `const tasks = computed(() => tasksStore.visible)`.\n3. Replace the direct fetch in `load()` with `await tasksStore.fetchTasks(projectId.value)`. Remove the manual query-param construction.\n4. Add `setFeatureFilter` lifecycle management:\n   - In `onMounted`: call `tasksStore.setFeatureFilter(featureId.value)` before `load()`.\n   - In `watch(featureId)`: call `tasksStore.setFeatureFilter(fid)` before `load()`.\n   - Add `onUnmounted`: call `tasksStore.setFeatureFilter(null)` to clean up when navigating away.\n5. Add `onUnmounted` to the import from `vue` alongside existing imports.\n6. Keep the existing `graph` computed, `canRun`, `runTask`, and all template/styling untouched — they already accept a reactive array and will work correctly with the store-backed computed.\n\n**Acceptance criteria:**\n- No local `ref([])` for tasks; all task data flows through `useTasksStore().visible`.\n- `fetchTasks` is called through the store, not via raw fetch.\n- `setFeatureFilter` is called on mount (to scope to the current plan), on featureId change (to re-scope), and on unmount (to clear the filter).\n- The component follows the exact same lifecycle pattern as KanbanBoard.vue (onMounted → setFeatureFilter + fetchTasks; watch featureId → setFeatureFilter; onUnmounted → setFeatureFilter(null)).\n- No changes to server-side code or to `buildTaskGraph` utility.",
+      "priority": 1,
+      "status": "completed",
+      "feature_id": "fix-task-graph-live-update-mrp18v0m",
+      "skill": null,
+      "blocked_by": [],
+      "passes": true,
+      "files": [
+        "client/src/views/TaskGraphView.vue"
+      ],
+      "started_at": "2026-07-17T14:32:10.534Z",
+      "completed_at": "2026-07-17T14:33:00.569Z",
+      "error_log": []
+    },
+    {
+      "id": "task-002",
+      "title": "Verify reactive graph re-render on task status changes",
+      "description": "Confirm that the VueFlow graph receives updated `nodes` and `edges` props when the computed task list changes reactively, and that edge styles update per-task without a full page reload.\n\n**Verification checks:**\n1. Trace the reactive chain: `patchTask`/`replaceAll` in tasksStore → `tasks.value` ref update → `visible` computed re-evaluates → `tasks` computed (graph input) re-evaluates → `graph` computed re-evaluates → VueFlow receives new `:nodes` and `:edges` props.\n2. Confirm that `buildTaskGraph` (client/src/utils/taskGraph.js) is called with `tasks.value` from the store `visible` computed, not a stale local copy. It already accepts any array — no changes needed.\n3. Verify edge styling logic in the `graph` computed:\n   - `animated: target?.status === \"in_progress\"` — edges leading to in-progress tasks should animate.\n   - `stroke` color is derived from `STATUS_STROKE[target.status]` — completed tasks should show green (`#4ade80`), in-progress yellow (`#fbbf24`), blocked/failed red (`#f87171`).\n   - `markerEnd` arrow color matches the stroke color.\n4. Confirm that VueFlow receives new array references (`graph.nodes`, `graph.edges`) on each recomputation (the computed always returns a fresh object from `buildTaskGraph`). VueFlow diffs by node/edge ID, so task identity via `task.id` is critical — verify `buildTaskGraph` uses `task.id` as the node `id` field (line ~68: `id: task.id`).\n5. Check for potential reactivity pitfalls:\n   - The `visible` computed filters by `feature_id === featureFilter.value`. Ensure tasks have a `feature_id` field that matches the filter.\n   - The store `replaceAll` uses `shallowEqual` to preserve object identity when nothing changed — this is safe because a status change produces a different object.\n   - The store `patchTask` mutates `tasks.value[idx] = { ...tasks.value[idx], ...patch }` which triggers Vue 3 Proxy reactivity.\n\n**Acceptance criteria:**\n- All nodes and edges in the reactive chain are confirmed to re-evaluate when the store task data changes.\n- Edge styles (animated, color) update per-task status without manual refresh.\n- If any break in the reactive chain is discovered during verification, it must be fixed within the same task (only in the files listed below).\n- No regressions to the KanbanBoard or other store consumers.",
+      "priority": 2,
+      "status": "completed",
+      "feature_id": "fix-task-graph-live-update-mrp18v0m",
+      "skill": null,
+      "blocked_by": [
+        "task-001"
+      ],
+      "passes": true,
+      "files": [
+        "client/src/views/TaskGraphView.vue",
+        "client/src/utils/taskGraph.js",
+        "client/src/stores/tasks.js"
+      ],
+      "started_at": null,
+      "completed_at": "2026-07-17T14:36:31.903Z",
+      "error_log": []
+    },
+    {
+      "id": "task-003",
+      "title": "Run test suite and manual smoke test for task graph live update",
+      "description": "Execute the full test suite and perform a manual smoke test to validate that task graph live updates work end-to-end.\n\n**Test suite:**\n1. Run `npm test` from the project root. All existing tests must pass.\n2. Pay particular attention to:\n   - `test/task-numbering.test.js` — task-related tests.\n   - `test/orchestration-output-files.test.js` — orchestration-related tests (tasks are written during orchestration).\n   - `test/codemap.test.js` — codebase analysis test.\n3. If any tests fail, investigate whether the failure is caused by the changes in task-001/task-002 or is a pre-existing issue. Pre-existing failures should be reported via `jonggrang bug` (see AGENTS.md bug protocol).\n\n**Manual smoke test:**\n1. Start the dev server (`npm run dev`).\n2. Navigate to a project with an existing plan that has tasks, then go to the task graph view (`/projects/:id/plans/:featureId/graph`).\n3. Start an orchestration run (click \"Run\" in the Work Mode sidebar).\n4. Observe the graph during the run — verify that:\n   - Task nodes change status colors as they transition from pending → in_progress → completed.\n   - Edges become animated when the target task is in_progress.\n   - Edges turn green when the target task is completed.\n   - These changes happen without manually clicking the refresh button.\n5. Navigate away from the graph to another tab (e.g., Tasks) and back — confirm the graph still shows current statuses (not stale data from a previous fetch).\n6. Switch between different plan features and verify each shows its own tasks correctly.\n\n**Acceptance criteria:**\n- `npm test` exits with code 0 (all tests pass).\n- Manual smoke test confirms: nodes update colors live during orchestration, edges animate for in-progress targets and turn green for completed targets, no manual refresh required.\n- Test results and observations are documented in `.jonggrang/progress.txt`.",
+      "priority": 3,
+      "status": "completed",
+      "feature_id": "fix-task-graph-live-update-mrp18v0m",
+      "skill": null,
+      "blocked_by": [
+        "task-002"
+      ],
+      "passes": true,
+      "files": [
+        "client/src/views/TaskGraphView.vue",
+        ".jonggrang/progress.txt"
+      ],
+      "started_at": null,
+      "completed_at": "2026-07-17T14:39:35.729Z",
+      "error_log": []
+    }
+  ]
+}

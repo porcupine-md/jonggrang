@@ -1,0 +1,120 @@
+feature_id: fix-task-graph-live-update-mrp18v0m
+description: fix-task-graph-live-update
+work_type: BUGFIX
+created_at: '2026-07-17T14:28:00.650Z'
+updated_at: '2026-07-17T14:40:29.932Z'
+status: completed
+current_phase: null
+active_phases:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 8
+  - 11
+  - 12
+  - 14
+  - 15
+  - 16
+  - 17
+phases:
+  '1':
+    name: setup
+    status: completed
+    started_at: null
+    completed_at: '2026-07-17T14:31:49.111Z'
+    agent_id: null
+    output:
+      source: approve
+    output_files: []
+  '2':
+    name: triage
+    status: completed
+    started_at: null
+    completed_at: '2026-07-17T14:31:49.112Z'
+    agent_id: null
+    output:
+      source: approve
+    output_files: []
+  '3':
+    name: codebase-discovery
+    status: completed
+    started_at: null
+    completed_at: '2026-07-17T14:31:49.114Z'
+    agent_id: null
+    output:
+      source: approve
+    output_files: []
+  '4':
+    name: skill-discovery
+    status: completed
+    started_at: null
+    completed_at: '2026-07-17T14:31:49.115Z'
+    agent_id: null
+    output:
+      source: approve
+    output_files: []
+  '8':
+    name: implementation
+    status: completed
+    started_at: '2026-07-17T14:32:02.065Z'
+    completed_at: '2026-07-17T14:40:29.930Z'
+    agent_id: null
+    output:
+      source: work-loop
+    output_files: []
+  '11':
+    name: domain-compliance
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+  '12':
+    name: code-quality
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+  '14':
+    name: testing
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+  '15':
+    name: coverage
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+  '16':
+    name: test-quality
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+  '17':
+    name: completion
+    status: skipped
+    started_at: null
+    completed_at: null
+    agent_id: null
+    output: null
+    output_files: []
+agents: {}
+validation:
+  review_passed: false
+  tests_passed: false
+  coverage_met: false
+locks: []
+context_usage: null

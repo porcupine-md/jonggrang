@@ -1,0 +1,110 @@
+# Progress: fix-task-graph-live-update-mrp18v0m
+
+## 2026-07-17 — task-001: Wire TaskGraphView to shared Pinia tasksStore
+
+### What Done
+The implementation was already present in the working tree when this session started. The changes (replacing local `ref([])` with store-backed `computed`, routing `fetchTasks` through the store, adding `setFeatureFilter` lifecycle hooks matching KanbanBoard pattern) were exactly as specified. Ran `npm run check` (28 passed, 0 failed) and `npm test` (all pass), committed, and marked the task done.
+
+### Learnings
+- The `tasks.js` store's `visible` computed filters by `featureFilter.value` — the `setFeatureFilter(fid)` call on mount/featureId change ensures the graph only shows tasks for the current plan feature.
+- The `onUnmounted(() => tasksStore.setFeatureFilter(null))` cleanup is important to avoid stale filters when navigating between projects or features.
+- `buildTaskGraph` accepts any reactive array and produces fresh `nodes`/`edges` on each recomputation — no changes needed.
+- WebSocket `tasks.update` events are handled by `ws.js` store which calls `tasksStore.replaceAll()`, updating `tasks.value`. Since `visible` is a computed derived from `tasks.value`, and the graph's `tasks` is computed from `tasksStore.visible`, the reactive chain re-triggers automatically.
+
+### Tradeoffs
+None — pure refactor from local state to shared store, no behavior removed.
+
+### Next
+task-002 (Verify reactive graph re-render) is now unblocked and ready.
+
+## 2026-07-17 — task-002: Verify reactive graph re-render on task status changes
+
+### What Done
+Performed a thorough code trace of the full reactive chain across all three files (`TaskGraphView.vue`, `taskGraph.js`, `tasks.js`) plus the WebSocket store (`ws.js`) and parent view (`ProjectDetailView.vue`). All five verification checks passed — no breaks found. No code changes were needed.
+
+### Verification Results
+
+**Check 1 — Reactive chain trace:**
+- WebSocket `task.started/completed/failed` → `patchTask(id, patch)` → `tasks.value[idx] = { ...spread }` triggers Vue 3 Proxy.
+- WebSocket `tasks.update` → `replaceAll(tasks)` → `tasks.value = incoming.map(...)` assigns a new array.
+- `visible` computed reads `tasks.value` → re-evaluates → filters by `feature_id === featureFilter.value`.
+- TaskGraphView's `tasks` computed (`computed(() => tasksStore.visible)`) → re-evaluates.
+- `graph` computed calls `buildTaskGraph(tasks.value)` → returns fresh `{ nodes, edges }`.
+- VueFlow `:nodes`/`:edges` receive new array references → diff by node/edge ID.
+
+**Check 2 — No stale copy:** Confirmed `buildTaskGraph` receives `tasks.value` which is `tasksStore.visible.value` — the live filtered array, not a local snapshot.
+
+**Check 3 — Edge styling:**
+- `animated: target?.status === 'in_progress'` — edges leading to in-progress tasks animate.
+- `stroke` from `STATUS_STROKE`: completed=#4ade80 (green), in_progress=#fbbf24 (yellow), blocked/failed=#f87171 (red).
+- `markerEnd.color: stroke` — arrow color matches stroke.
+- The `graph` computed's `g.edges.map(...)` fully overwrites the initial `animated`/`style` from `buildTaskGraph`, so only the TaskGraphView-side styling matters at render time.
+
+**Check 4 — Fresh array references:** `buildTaskGraph` always returns new `nodes[]` and `edges[]` arrays. Node `id: task.id` and edge `id: e-${blockerId}-${task.id}` are stable across recomputations, enabling VueFlow ID-based diffing.
+
+**Check 5 — Reactivity pitfalls:**
+- `visible` filter (`feature_id === featureFilter.value`) works correctly — `featureFilter` is set by `setFeatureFilter` called in `onMounted`/`watch(featureId)`/`onUnmounted`.
+- `replaceAll`'s `shallowEqual` gate: status changes produce different objects, so the new object passes through to `tasks.value`.
+- `patchTask`'s spread mutation (`tasks.value[idx] = { ...tasks.value[idx], ...patch }`) correctly triggers Vue 3 Proxy reactivity.
+- `tasksStore.projectId` is properly initialized via `ProjectDetailView.setProject(id)` on mount and project-ID watch, ensuring the WebSocket `tasks.update` handler's `projectId` guard passes.
+
+### KanbanBoard Regressions
+KanbanBoard uses the same `useTasksStore().visible` computed for its columns. The store's `replaceAll`/`patchTask` functions are shared — no per-consumer logic was added, so KanbanBoard is unaffected.
+
+### Tradeoffs
+None — verification only. The initial edge `animated`/`style` in `buildTaskGraph` is technically dead code (overwritten by `graph` computed), but removing it was out of scope per the task description.
+
+### What Next
+Phase 3 (task-003): Run test suite and manual smoke test — verify the task graph updates live when tasks transition through pending → in_progress → completed during an orchestration run.
+
+## 2026-07-17 — task-003: Run test suite and manual smoke test for task graph live update
+
+### What Done
+Executed the full test suite (`npm test`), the full check suite (`npm run check`), and API-level smoke tests against the live dev server. All tests pass with 0 failures.
+
+### Test Suite Results
+- **Total suites: 11**, all passed (0 failures).
+- `test/backend-args.test.js`: 17 passed
+- `test/orchestration-output-files.test.js`: 20 passed
+- `test/codemap.test.js`: 29 passed
+- `test/base-branch.test.js`: 3 passed
+- `test/src-flag.test.js`: 7 passed
+- `test/legacy-watchers.test.js`: 1 passed
+- `test/draft-placement.test.js`: 12 passed
+- `test/project-drafts-api.test.js`: 9 passed
+- `test/task-numbering.test.js`: 10 passed
+- `test/memory.test.js`: 8 passed
+- `test/memory-cli.test.js`: 4 passed
+- **Total: 120 passed, 0 failed**
+
+### Key Tests (as specified in task)
+- `test/task-numbering.test.js` — 10 passed, tasks decorated with feature-scoped IDs
+- `test/orchestration-output-files.test.js` — 20 passed, output tracking and phase context
+- `test/codemap.test.js` — 29 passed, deterministic codemap generation
+
+### Check Suite (typecheck + lint + Vite build)
+- `npm run check`: 28 passed, 0 failed. Syntax check on all server + client files, Vite production build succeeded.
+
+### Manual Smoke Test (API-level)
+- **Dev server**: Started on http://127.0.0.1:7777 — responsive, serves API.
+- **Projects API**: `/api/projects` returns project list with derived_state including tasks.
+- **Tasks API**: `/api/projects/proj_76b7508d6771/tasks` returns 7 tasks with valid structure (id, status, feature_id, blocked_by).
+- **WebSocket**: Connected successfully, `subscribe` to project returns snapshot with state and all 7 tasks — confirms the event pathway that feeds the reactive store.
+- **Reactive chain verification (re-confirmed from task-002)**:
+  - `ws.js` `task.started/completed/failed` handlers → `patchTask(id, { status: ... })`
+  - `ws.js` `tasks.update` handler → `replaceAll(tasks)`
+  - `tasksStore.visible` computed filters by `featureFilter`
+  - `TaskGraphView.tasks` computed = `tasksStore.visible`
+  - `TaskGraphView.graph` computed = `buildTaskGraph(tasks.value)` with edge styling
+  - Edge `animated: target?.status === 'in_progress'` and `stroke` from `STATUS_STROKE` map
+  - Lifecycle: `setFeatureFilter` on mount/watch/unmount mirrors KanbanBoard pattern
+- **UI verification**: Cannot perform full browser-based smoke test in this environment. However, the reactive chain from WebSocket → Pinia store → VueFlow props is complete and verified through code trace. The code changes in task-001 (the only code change in this feature) are minimal — swapping a local ref for a store-backed computed — and the test + typecheck results confirm no regressions.
+
+### Pre-existing Issues Identified
+- `test/draft-placement.test.js` prints two `fatal: not a git repository (or any of the parent directories): .git` warnings to stderr, but all 12 subtests pass. This is a pre-existing issue (git-dependent tests running in a non-git repo) and does not affect test outcomes.
+
+### Tradeoffs
+None — testing and verification only, no code changes.
+
+### What Next
+Feature `fix-task-graph-live-update-mrp18v0m` is now complete. All three phases (task-001 implementation, task-002 verification, task-003 testing) are done. The feature is ready for merge.
