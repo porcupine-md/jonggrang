@@ -10,7 +10,26 @@ export const useTasksStore = defineStore('tasks', () => {
   function setProject(id) { projectId.value = id; }
   function setFeatureFilter(fid) { featureFilter.value = fid || null; }
 
-  function replaceAll(next) { tasks.value = next; }
+  // Merge by id so unchanged tasks keep their object identity and position.
+  // A wholesale array swap on every socket push made the kanban TransitionGroup
+  // re-diff and replay enter/move animations, causing cards to visibly overlap.
+  function replaceAll(next) {
+    const incoming = next || [];
+    const prevById = new Map(tasks.value.map(t => [t.id, t]));
+    tasks.value = incoming.map(t => {
+      const prev = prevById.get(t.id);
+      // Reuse the existing reference when nothing changed to avoid needless re-render.
+      if (prev && shallowEqual(prev, t)) return prev;
+      return t;
+    });
+  }
+
+  function shallowEqual(a, b) {
+    const ka = Object.keys(a);
+    const kb = Object.keys(b);
+    if (ka.length !== kb.length) return false;
+    return ka.every(k => a[k] === b[k]);
+  }
 
   function patchTask(id, patch) {
     const idx = tasks.value.findIndex(t => t.id === id);

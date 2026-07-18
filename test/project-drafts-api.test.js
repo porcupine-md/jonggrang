@@ -38,6 +38,7 @@ async function withServer(root, fn) {
     orchestration: { readManifest: () => null },
     spawnForProject: (_project, args) => { spawned.push(args); return { on() {} }; },
     wireProjectProcess: () => {},
+    activePlan: new Map(),
   };
 
   const app = express();
@@ -204,6 +205,59 @@ test('plan answers endpoint reuses the pending-questions draft via --session', a
       assert.equal(args[si + 1], 'draft-pending');
       assert.ok(args.includes('--answers-inline'), 'answers still passed inline');
     });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Mirror the subscribe-snapshot pending-questions resolution in apis/projects/
+// index.js: a mid Pass-A draft (questions, no plan.md) must still be reported as
+// plan_questions_pending on refresh so PlanView restores the questions dialog as
+// a continuation of a generating context — never a bare dialog appearing cold.
+// resolveActiveDraft() is plan.md-gated and can't see such a draft, so the
+// snapshot must fall back to resolveActiveQuestionDraft() (as GET /plan/questions
+// does). Regression guard for the scenario-2 refresh path.
+function snapshotPendingQuestions(root) {
+  const sid = lib.resolveActiveDraft(root);
+  let pending = false;
+  let questionsSid = null;
+  try {
+    questionsSid = lib.resolveActiveQuestionDraft(root) || sid;
+    if (questionsSid) pending = fs.existsSync(lib.questionsFileFor(root, questionsSid));
+  } catch { pending = false; questionsSid = null; }
+  return { plan_questions_pending: pending, plan_questions_session_id: pending ? questionsSid : null };
+}
+
+test('subscribe snapshot reports pending questions for a mid Pass-A draft (no plan.md yet)', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jong-project-api-'));
+  try {
+    writeQuestions(root, 'draft-pending', {
+      goal_analysis: 'clarify', questions: [{ id: 'q1', question: 'Which UI?', type: 'text' }],
+    });
+
+    // The plan.md-gated resolver can't see it — the exact gap the fix closes.
+    assert.equal(lib.resolveActiveDraft(root), null,
+      'resolveActiveDraft is plan.md-gated so a questions-only draft is invisible to it');
+
+    const snap = snapshotPendingQuestions(root);
+    assert.equal(snap.plan_questions_pending, true,
+      'refresh during a pending-questions state must flag plan_questions_pending');
+    assert.equal(snap.plan_questions_session_id, 'draft-pending',
+      'the questions draft session id must be carried so the client GETs the right session');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('subscribe snapshot reports no pending questions once answered (questions file cleared)', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jong-project-api-'));
+  try {
+    // Pass B has run: the draft now has plan.md and the questions file is gone.
+    writeDraft(root, 'draft-done', '---\nfeature: done\n---\n# Plan');
+    const snap = snapshotPendingQuestions(root);
+    assert.equal(snap.plan_questions_pending, false,
+      'an answered/plain draft must not resurface a questions dialog on refresh');
+    assert.equal(snap.plan_questions_session_id, null);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

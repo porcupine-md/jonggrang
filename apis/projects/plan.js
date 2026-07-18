@@ -7,15 +7,15 @@ const uiContext = require('../../lib/ui-context');
 const sandbox = require('../../lib/sandbox');
 const { STATIC_EFFORTS } = require('../models');
 
-const VALID_PLAN_TOOL   = ['claude', 'opencode', 'codex', 'jonggrang'];
+const VALID_PLAN_TOOL = ['claude', 'opencode', 'codex', 'jonggrang'];
 // Effort levels are backend-specific (see apis/models.js STATIC_EFFORTS — the
 // same set the UI's effort dropdown is populated from). Validate per-tool, and
 // fall back to the union of all backends when no tool is given on the request.
 const ALL_EFFORTS = [...new Set(Object.values(STATIC_EFFORTS).flat())];
-const MAX_STRING_LEN    = 100;
+const MAX_STRING_LEN = 100;
 
-module.exports = function(deps) {
-    const { fs, path, webState, orchestration, spawnForProject, wireProjectProcess } = deps;
+module.exports = function (deps) {
+    const { fs, path, webState, orchestration, spawnForProject, wireProjectProcess, activePlan } = deps;
     const router = Router();
 
     // Extract a source-issue link from plan content (feature #55). Tries the
@@ -30,7 +30,7 @@ module.exports = function(deps) {
                 if (o && o.provider && o.repo && o.number) {
                     return { provider: o.provider, repo: o.repo, number: o.number, url: o.url || null };
                 }
-            } catch {}
+            } catch { }
         }
         const gh = content.match(/https?:\/\/github\.com\/([^/\s)]+\/[^/\s)]+)\/issues\/(\d+)/);
         if (gh) return { provider: 'github', repo: gh[1], number: parseInt(gh[2], 10), url: gh[0] };
@@ -123,7 +123,7 @@ module.exports = function(deps) {
                     ui: uiPlanArtifacts(project, draft.sessionId, content),
                     source_issue: parseSourceIssue(content),
                 });
-            } catch {}
+            } catch { }
         }
 
         // 2. Archived plans from .output/features/*/plan.md
@@ -134,7 +134,7 @@ module.exports = function(deps) {
             try {
                 const view = deps.orchestrationRunView ? deps.orchestrationRunView(project) : null;
                 for (const g of (view?.groups || [])) runGroups[g.feature_id] = g;
-            } catch {}
+            } catch { }
 
             // Read a feature's task statuses from its LIVE source: the isolated
             // work-mode worktree while a run is active there, else the main snapshot
@@ -170,7 +170,7 @@ module.exports = function(deps) {
                             else if (ms === 'running' || ms === 'paused') status = 'in_progress';
                             else if (ms === 'failed') status = 'failed';
                         }
-                    } catch {}
+                    } catch { }
 
                     // The web work-loop drives TASK status, not the manifest phase
                     // machine, so the manifest can read "running" long after the
@@ -189,7 +189,7 @@ module.exports = function(deps) {
                     }
 
                     let branch = null;
-                    try { branch = lib.parsePlanFrontmatter(planPath).branch || null; } catch {}
+                    try { branch = lib.parsePlanFrontmatter(planPath).branch || null; } catch { }
 
                     const rg = runGroups[name];
                     plans.push({
@@ -201,7 +201,7 @@ module.exports = function(deps) {
                         source_issue: parseSourceIssue(content),
                     });
                 }
-            } catch {}
+            } catch { }
         }
 
         res.json(plans);
@@ -221,6 +221,8 @@ module.exports = function(deps) {
         const args = ['plan', '--revise', instruction, '--session', draft.sessionId];
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan-revise');
+        activePlan.set(project.id, { child, command: 'plan-revise' });
+        child.on('close', () => activePlan.delete(project.id));
         res.status(202).json({ job_id: project.id });
     });
 
@@ -259,7 +261,7 @@ module.exports = function(deps) {
                     try {
                         const mPath = path.join(featuresDir, name, 'MANIFEST.yaml');
                         if (fs.existsSync(mPath)) manifest = orchestration.readManifest(mPath);
-                    } catch {}
+                    } catch { }
 
                     return res.json({
                         exists: true,
@@ -344,13 +346,15 @@ module.exports = function(deps) {
         } else {
             args.push(description);
         }
-        if (deep)   args.push('--deep');
-        if (tool)   args.push('--tool', tool);
-        if (model)  args.push('--model', model);
+        if (deep) args.push('--deep');
+        if (tool) args.push('--tool', tool);
+        if (model) args.push('--model', model);
         if (effort) args.push('--effort', effort);
-        if (base)   args.push('--base', base);
+        if (base) args.push('--base', base);
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan');
+        activePlan.set(project.id, { child, command: 'plan' });
+        child.on('close', () => activePlan.delete(project.id));
         res.status(202).json({ job_id: project.id });
     });
 
@@ -426,13 +430,15 @@ module.exports = function(deps) {
         const sid = requestedSession(req) || lib.resolveActiveQuestionDraft(project.path);
 
         const args = ['plan', description, ...(deep ? ['--deep'] : []), '--answers-inline', inline];
-        if (sid)    args.push('--session', sid);
-        if (tool)   args.push('--tool', tool);
-        if (model)  args.push('--model', model);
+        if (sid) args.push('--session', sid);
+        if (tool) args.push('--tool', tool);
+        if (model) args.push('--model', model);
         if (effort) args.push('--effort', effort);
-        if (base)   args.push('--base', base);
+        if (base) args.push('--base', base);
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan');
+        activePlan.set(project.id, { child, command: 'plan' });
+        child.on('close', () => activePlan.delete(project.id));
         res.status(202).json({ job_id: project.id });
     });
 
@@ -470,11 +476,13 @@ module.exports = function(deps) {
         }
 
         const args = ['plan', '--append', featureId, description, ...(deep ? ['--deep'] : [])];
-        if (tool)   args.push('--tool', tool);
-        if (model)  args.push('--model', model);
+        if (tool) args.push('--tool', tool);
+        if (model) args.push('--model', model);
         if (effort) args.push('--effort', effort);
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan-extend');
+        activePlan.set(project.id, { child, command: 'plan-extend' });
+        child.on('close', () => activePlan.delete(project.id));
         res.status(202).json({ job_id: project.id });
     });
 
