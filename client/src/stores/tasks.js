@@ -7,6 +7,9 @@ export const useTasksStore = defineStore('tasks', () => {
   // Work Mode scope: when set, columns/stats only show this plan's tasks.
   const featureFilter = ref(null);
 
+  const loading = ref(false);
+  const error = ref(null);
+
   function setProject(id) { projectId.value = id; }
   function setFeatureFilter(fid) { featureFilter.value = fid || null; }
 
@@ -54,11 +57,25 @@ export const useTasksStore = defineStore('tasks', () => {
   });
 
   async function fetchTasks(id) {
-    const res = await window.fetch(`/api/projects/${id}/tasks`);
-    if (!res.ok) return;
-    const data = await res.json();
-    replaceAll(data.tasks || []);
+    loading.value = true;
+    error.value = null;
+    try {
+      const res = await window.fetch(`/api/projects/${id}/tasks`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const msg = typeof data.error === 'string' ? data.error : (data.error?.message || `Failed to fetch tasks (${res.status})`);
+        throw new Error(msg);
+      }
+      const data = await res.json();
+      replaceAll(data.tasks || []);
+      return data.tasks;
+    } catch (err) {
+      error.value = err.message;
+      throw err;
+    } finally {
+      loading.value = false;
+    }
   }
 
-  return { tasks, projectId, featureFilter, visible, columns, stats, setProject, setFeatureFilter, replaceAll, patchTask, fetchTasks };
+  return { tasks, projectId, featureFilter, loading, error, visible, columns, stats, setProject, setFeatureFilter, replaceAll, patchTask, fetchTasks };
 });
