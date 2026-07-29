@@ -520,7 +520,7 @@ module.exports = function (deps) {
 
         const draft = resolveDraft(project, requestedSession(req));
         try {
-            if (draft) fs.rmSync(lib.draftDirFor(project.path, draft.sessionId), { recursive: true, force: true });
+            if (draft) sandbox.removeDraftDir(project, lib.draftDirFor(project.path, draft.sessionId));
             res.status(204).send();
         } catch (err) {
             res.status(500).json({ error: err.message });

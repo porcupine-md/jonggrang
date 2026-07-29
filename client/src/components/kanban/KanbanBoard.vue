@@ -1,6 +1,7 @@
 <template>
   <div class="kanban-root">
     <KanbanHeader :projectId="projectId" :featureId="featureId" />
+    <p v-if="error" class="kanban-error">{{ error }}</p>
     <div class="kanban-body">
       <div v-if="!tasks.visible.length && state === 'idle'" class="kanban-empty">
         <div>No tasks yet. Generate a plan first.</div>
@@ -43,12 +44,25 @@ const projects = useProjectsStore();
 const project = computed(() => projects.byId[projectId.value]);
 const state = computed(() => project.value?.derived_state?.state || 'idle');
 const selectedTask = ref(null);
+const loading = ref(false);
+const error = ref('');
 
 function openTask(task) { selectedTask.value = task; }
 
+async function load() {
+  loading.value = true; error.value = '';
+  try {
+    await tasks.fetchTasks(projectId.value);
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    loading.value = false;
+  }
+}
+
 onMounted(() => {
   tasks.setFeatureFilter(featureId.value);
-  tasks.fetchTasks(projectId.value);
+  load();
 });
 
 watch(featureId, fid => tasks.setFeatureFilter(fid));
@@ -57,6 +71,7 @@ onUnmounted(() => tasks.setFeatureFilter(null));
 
 <style scoped>
 .kanban-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.kanban-error { color: var(--jg-red); font-size: 12px; margin: 8px 16px 0; }
 .kanban-body { display: flex; flex: 1; gap: 12px; padding: 16px; overflow: hidden; }
 .kanban-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; color: var(--jg-text-muted); text-align: center; }
 </style>
