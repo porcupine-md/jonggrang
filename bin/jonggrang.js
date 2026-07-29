@@ -531,6 +531,17 @@ async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, 
     // ── Max retries hit — ask user ────────────────────────────
     logError(`Tests still failing after ${TEST_RETRY_LIMIT} attempts.`);
     console.log('\n--- Test output ---\n' + output + '\n---\n');
+
+    // Non-interactive runs (web dashboard, `docker exec -i`, CI — anything
+    // where stdin is a pipe, not a TTY) have no human to answer the prompt.
+    // Calling askUserFeedback here would block on readline forever and hang
+    // the worker. Mark the task blocked and move on instead.
+    if (!process.stdin.isTTY) {
+      logError(`Task ${taskId} marked as blocked after ${TEST_RETRY_LIMIT} failed test retries (non-interactive — no feedback possible).`);
+      updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
+      return false;
+    }
+
     const userInput = await askUserFeedback(
       'Provide feedback for the agent (or press Enter to mark task blocked): '
     );
