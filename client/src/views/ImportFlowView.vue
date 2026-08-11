@@ -37,14 +37,43 @@
           <InputText v-model="gitUrl" type="url" placeholder="https://github.com/user/repo.git" fluid />
         </div>
 
+        <div v-if="sourceType === 'git'" class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="isMonorepo" @change="onMonorepoToggle" />
+            Monorepo — only check out selected directories (sparse checkout)
+          </label>
+        </div>
+
+        <div v-if="sourceType === 'git' && isMonorepo" class="form-group">
+          <div v-if="loadingDirectories" class="dir-loading">
+            <i class="pi pi-spin pi-spinner" /> Fetching directory list...
+          </div>
+          <div v-else-if="dirError" class="error-text">{{ dirError }}</div>
+          <div v-else-if="availableDirectories.length > 0">
+            <label>Select directories to check out</label>
+            <div class="dir-picker">
+              <label v-for="dir in availableDirectories" :key="dir" class="dir-option">
+                <input type="checkbox" :value="dir" v-model="sparseDirectories" />
+                <i class="pi pi-folder" /> {{ dir }}
+              </label>
+            </div>
+            <div v-if="sparseDirectories.length > 0" class="dir-selected">
+              {{ sparseDirectories.length }} director{{ sparseDirectories.length === 1 ? 'y' : 'ies' }} selected
+            </div>
+          </div>
+          <div v-else-if="!gitUrl.trim()" class="dir-hint">
+            Enter a Git URL above, then check the monorepo box to fetch directories.
+          </div>
+        </div>
+
         <div v-if="sourceType === 'local'" class="form-group">
           <label>Local folder path</label>
           <InputText v-model="localPath" placeholder="/Users/you/my-project" fluid />
         </div>
 
         <div v-if="sourceType === 'fresh'" class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" v-model="freshGitInit" style="flex-shrink:0" />
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="freshGitInit" />
             Initialize git repository
           </label>
         </div>
@@ -72,6 +101,7 @@
         <div class="wizard-section-title">Initialize Jonggrang</div>
         <div class="detected-info" v-if="detected">
           <Tag :value="`Detected: ${detected.stack} · ${detected.type}`" severity="info" />
+          <Tag v-if="detected.is_monorepo" :value="`Monorepo: ${detected.workspace_type}`" severity="warn" class="mono-tag" />
         </div>
         <InitWizard :project="currentProject" :detected="detected" @done="onInitDone" @cancel="goHome" />
       </div>
@@ -131,6 +161,13 @@ onMounted(() => {
   }
 });
 
+// Monorepo / sparse checkout state
+const isMonorepo = ref(false);
+const sparseDirectories = ref([]);
+const availableDirectories = ref([]);
+const loadingDirectories = ref(false);
+const dirError = ref('');
+
 const sourceOptions = [
   { type: 'git',   icon: 'pi-link',   label: 'Git Repository', desc: 'Clone from GitHub, GitLab, etc.' },
   { type: 'local', icon: 'pi-folder', label: 'Local Folder',   desc: 'Use an existing project on disk' },
@@ -140,12 +177,50 @@ const sourceOptions = [
 const canNext = computed(() => {
   if (!name.value.trim()) return false;
   if (sourceType.value === 'git' && !gitUrl.value.trim()) return false;
+  if (sourceType.value === 'git' && isMonorepo.value && sparseDirectories.value.length === 0) return false;
   if (sourceType.value === 'local' && !localPath.value.trim()) return false;
   return true;
 });
 
+async function onMonorepoToggle() {
+  dirError.value = '';
+  sparseDirectories.value = [];
+  availableDirectories.value = [];
+  if (!isMonorepo.value) return;
+  const url = gitUrl.value.trim();
+  if (!url) return;
+  loadingDirectories.value = true;
+  try {
+    const res = await window.fetch('/api/projects/git-tree', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      dirError.value = err.error?.message || 'Failed to fetch directories';
+      return;
+    }
+    const data = await res.json();
+    availableDirectories.value = data.directories || [];
+    if (availableDirectories.value.length === 0) {
+      dirError.value = 'No directories found in repository root.';
+    }
+  } catch (e) {
+    dirError.value = e.message;
+  } finally {
+    loadingDirectories.value = false;
+  }
+}
+
 function buildSource() {
-  if (sourceType.value === 'git') return { type: 'git', url: gitUrl.value.trim() };
+  if (sourceType.value === 'git') {
+    const src = { type: 'git', url: gitUrl.value.trim() };
+    if (isMonorepo.value && sparseDirectories.value.length > 0) {
+      src.sparse = { enabled: true, directories: [...sparseDirectories.value] };
+    }
+    return src;
+  }
   if (sourceType.value === 'local') return { type: 'local', path: localPath.value.trim(), link_mode: 'reference' };
   return { type: 'fresh', git_init: freshGitInit.value };
 }
@@ -242,6 +317,9 @@ function goHome() {
 .source-label { font-size: 12px; font-weight: 600; color: var(--jg-text); margin-bottom: 2px; }
 .source-desc { font-size: 11px; color: var(--jg-text-faint); }
 
+.checkbox-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; }
+.checkbox-label input[type="checkbox"] { flex-shrink: 0; }
+
 .wizard-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--jg-border); }
 .wizard-actions :deep(.p-button) { padding-block: 9px !important; min-height: 36px; }
 
@@ -251,5 +329,22 @@ function goHome() {
   max-height: 200px; overflow-y: auto; color: var(--jg-text-muted);
 }
 .progress-line { line-height: 1.6; }
-.detected-info { margin-bottom: 16px; }
+.detected-info { margin-bottom: 16px; display: flex; gap: 6px; flex-wrap: wrap; }
+.mono-tag { margin-left: 2px; }
+
+/* Directory picker */
+.dir-picker {
+  background: var(--jg-bg); border: 1px solid var(--jg-border); border-radius: var(--radius);
+  padding: 8px; max-height: 200px; overflow-y: auto; margin-top: 6px;
+}
+.dir-option {
+  display: flex; align-items: center; gap: 6px; padding: 4px 6px; font-size: 12px;
+  color: var(--jg-text); cursor: pointer; border-radius: 3px;
+}
+.dir-option:hover { background: var(--jg-hover); }
+.dir-option input[type="checkbox"] { flex-shrink: 0; }
+.dir-option .pi-folder { color: var(--jg-text-faint); font-size: 12px; }
+.dir-selected { font-size: 11px; color: var(--jg-green); margin-top: 6px; }
+.dir-loading { font-size: 12px; color: var(--jg-text-muted); display: flex; align-items: center; gap: 6px; }
+.dir-hint { font-size: 11px; color: var(--jg-text-faint); font-style: italic; }
 </style>

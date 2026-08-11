@@ -54,6 +54,86 @@ module.exports = function(deps) {
         });
     }
 
+    function runGitTreeList(url, ref) {
+        const os = require('os');
+        const tmpDir = deps.fs.mkdtempSync(deps.path.join(os.tmpdir(), 'jg-git-tree-'));
+        return new Promise((resolve, reject) => {
+            const args = ['clone', '--filter=blob:none', '--sparse', '--no-checkout', '--depth=1'];
+            if (ref) args.push('--branch', ref);
+            args.push(url, tmpDir);
+            const child = spawn('git', args, {
+                env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+                stdio: ['pipe', 'pipe', 'pipe'],
+            });
+            child.on('error', err => { cleanup(); reject(err); });
+            child.on('close', code => {
+                if (code !== 0) { cleanup(); return reject(new Error(`git clone failed (exit ${code})`)); }
+                const ls = spawn('git', ['ls-tree', '--name-only', '-d', 'HEAD'], { cwd: tmpDir, stdio: ['pipe', 'pipe', 'pipe'] });
+                let stdout = '';
+                ls.stdout.on('data', d => { stdout += d.toString(); });
+                ls.on('error', err => { cleanup(); reject(err); });
+                ls.on('close', lsCode => {
+                    cleanup();
+                    if (lsCode !== 0) return reject(new Error('git ls-tree failed'));
+                    const dirs = stdout.trim().split('\n').filter(d => d && !d.startsWith('.'));
+                    resolve(dirs);
+                });
+            });
+            function cleanup() {
+                try { deps.fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+            }
+            // Timeout after 30s
+            setTimeout(() => { try { child.kill(); } catch {} cleanup(); reject(new Error('git-tree timed out')); }, 30000);
+        });
+    }
+
+    router.post('/projects/git-tree', async (req, res) => {
+        const { url, ref } = req.body || {};
+        if (!url) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'url required' } });
+        try {
+            const directories = await runGitTreeList(url, ref);
+            res.json({ directories });
+        } catch (err) {
+            res.status(500).json({ error: { code: 'GIT_TREE_FAILED', message: err.message } });
+        }
+    });
+
+    function runGitCloneSparse(url, ref, directories, targetPath, onProgress) {
+        return new Promise((resolve, reject) => {
+            const args = ['clone', '--filter=blob:none', '--sparse', '--progress'];
+            if (ref) args.push('--branch', ref);
+            args.push(url, targetPath);
+            const child = spawn('git', args, {
+                env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+                stdio: ['pipe', 'pipe', 'pipe'],
+            });
+            let lastStderr = '';
+            child.stderr.on('data', d => {
+                const msg = d.toString().trim();
+                if (msg) { lastStderr = msg; onProgress(msg); }
+            });
+            child.on('error', reject);
+            child.on('close', code => {
+                if (code !== 0) return reject(new Error(`git clone --sparse failed (exit ${code}): ${lastStderr}`));
+                // Init cone mode + set directories
+                onProgress('Configuring sparse checkout...');
+                const init = spawn('git', ['sparse-checkout', 'init', '--cone'], { cwd: targetPath, stdio: 'pipe' });
+                init.on('error', reject);
+                init.on('close', initCode => {
+                    if (initCode !== 0) return reject(new Error('git sparse-checkout init failed'));
+                    const setArgs = ['sparse-checkout', 'set', ...directories];
+                    const set = spawn('git', setArgs, { cwd: targetPath, stdio: 'pipe' });
+                    set.on('error', reject);
+                    set.on('close', setCode => {
+                        if (setCode !== 0) return reject(new Error('git sparse-checkout set failed'));
+                        onProgress(`Sparse checkout: ${directories.join(', ')}`);
+                        resolve();
+                    });
+                });
+            });
+        });
+    }
+
     function runGitInit(cwd) {
         return new Promise((resolve, reject) => {
             const child = spawn('git', ['init'], { cwd, stdio: 'pipe' });
@@ -119,7 +199,11 @@ module.exports = function(deps) {
                 emit('prepare', 'Preparing project...');
 
                 if (source.type === 'git') {
-                    await runGitClone(source.url, source.ref, targetPath, msg => emit('clone', msg));
+                    if (source.sparse?.enabled && Array.isArray(source.sparse.directories) && source.sparse.directories.length > 0) {
+                        await runGitCloneSparse(source.url, source.ref, source.sparse.directories, targetPath, msg => emit('clone', msg));
+                    } else {
+                        await runGitClone(source.url, source.ref, targetPath, msg => emit('clone', msg));
+                    }
                 } else if (source.type === 'fresh') {
                     fs.mkdirSync(targetPath, { recursive: true });
                     if (source.git_init !== false) await runGitInit(targetPath);
