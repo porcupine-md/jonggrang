@@ -29,6 +29,13 @@ self-contained: manifest + tokens + components + live preview, all local.
   recommends them — full reuse of PR #93 selection/validation/bounded-context.
 - **v1 scope:** the **full studio** ships in v1 — CLI + storage format + plan
   integration + the interactive Design tab (chat + live preview + agent authoring).
+- **Studio chat = each tool's native interactive TUI, in UNSAFE mode.** The left
+  pane is NOT a custom chat UI — it embeds the selected backend's own interactive
+  harness as a **pty-backed xterm terminal** (reusing `apis/projects/pty.js` +
+  `TerminalView`/xterm), launched with skip-permissions/yolo so the agent edits the
+  template freely: `claude --dangerously-skip-permissions`, `opencode` TUI, `codex`
+  (full-auto), `jonggrang agent` (Pi TUI). CWD = the template dir. Unsafe is
+  acceptable because it runs sandboxed by default (below).
 - **Execution mode:** the studio agent runs in a **sandbox (Docker) by default**,
   with a per-studio toggle to run on the host. Sandbox default matches the rest of
   jonggrang, isolates agent writes to the template dir, and avoids the host
@@ -107,10 +114,12 @@ projects/issues/secrets/settings), not a project sub-tab.
 - **`DesignListView.vue`:** gallery of templates (name, thumbnail preview,
   source badge built-in|personal), "New template", "Promote from project…".
 - **`DesignStudioView.vue`** (`/design/:name`) — the studio, two panes:
-  - **Left — Chat** (reuse the `PlanDiscuss.vue` streaming pattern + backend
-    selection like Plan/Work): user describes/edits; the agent edits
-    manifest/tokens/components. Tool = the project/global selected backend
-    (claude|opencode|jonggrang|codex).
+  - **Left — Tool TUI** (pty-backed xterm, reusing `apis/projects/pty.js` +
+    `TerminalView`): embeds the selected backend's **native interactive TUI in
+    unsafe mode** (`claude --dangerously-skip-permissions`, `opencode`, `codex`
+    full-auto, `jonggrang agent`), CWD = the template dir. The user talks to the
+    tool's own harness; jonggrang does not wrap the chat. Backend picker + a
+    "Sandbox on/off" toggle sit in the studio header.
   - **Right — Live preview** (sandboxed `<iframe>`): renders the template's
     components with its `tokens.css.template`; toolbar for light/dark, viewport
     width, and a component picker (button/card/…); a Tokens editor drawer.
@@ -126,18 +135,21 @@ projects/issues/secrets/settings), not a project sub-tab.
 | `POST /api/design/:name` | Create/update template files. |
 | `DELETE /api/design/:name` | Remove template. |
 | `GET /api/design/:name/preview?component=&theme=&width=` | Return a self-contained HTML doc (tokens + component) for the iframe. |
-| `POST /api/design/:name/chat` | One studio turn: spawn the selected backend with a **design-authoring** prompt/skill; stream output; agent writes to the template dir. |
+| `pty` (socket.io, reuse `apis/projects/pty.js`) | Design scope: spawn the selected backend's interactive TUI in **unsafe** mode, CWD = template dir (host or container). Streams `pty.data`/`pty.input`/`pty.resize`. This replaces a custom chat endpoint. |
 | `POST /api/design/promote` | `{ name, fromProjectPath }` → build template from a project's UI.md/tokens/components. |
 | `GET /api/design/:name/events` (WS) | Push file-change events → preview refresh. |
 
-## Agent authoring (studio chat)
+## Agent authoring (via the tool's own TUI)
 
-- New skill `skills/core/authoring-design-template` (or a prompt in `lib/design.js`)
-  that instructs the agent: work only inside `~/.jonggrang/design/<name>/`, keep the
-  8 canonical guide sections, use `--ui-*` token roles only, write components as
-  HTML fragments, keep `manifest.components` in sync, never inline raw hex.
-- Reuse `runAgent()` (backend-agnostic) with the design dir as CWD; stream to the
-  chat pane; the preview refreshes on file writes.
+The user drives the selected tool's **native interactive TUI** (unsafe) in the left
+pane; jonggrang does not wrap the conversation. To steer it toward the template
+contract, seed the tool's CWD (`~/.jonggrang/design/<name>/`) with an `AGENTS.md`
+(and a `.claude/` skill stub) written by `design new`/`promote`, instructing: work
+only inside this dir, keep the 8 canonical guide sections, use `--ui-*` token roles
+only, write components as HTML fragments referenced from `manifest.components`, never
+inline raw hex. The preview refreshes on file writes (watch → WS). Because the TUI is
+the tool's own harness, per-tool features (claude skills, opencode agents) work
+natively; jonggrang only provides the seeded contract + sandboxed CWD.
 
 ## Sandbox vs host execution (default: sandbox)
 
