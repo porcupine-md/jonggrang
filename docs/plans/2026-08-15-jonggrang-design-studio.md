@@ -229,6 +229,25 @@ the container. No build step — pure HTML/CSS with tokens.
 - **Versioning UX** — how a user bumps `version` (fork) vs edits in place; propose:
   edit-in-place for drafts, explicit `design <name> bump` to pin a new `id@version`.
 
+## Prior art — open-design (nexu-io/open-design)
+
+"Open-source Claude Design alternative"; strongly validates our direction and adds ideas:
+- **`DESIGN.md` = a brand contract that shapes every output.** Confirms our approach —
+  our seeded per-template contract (guide-fragment 8 sections + tokens + AGENTS.md rules)
+  should read like a strong DESIGN.md the TUI agent obeys.
+- **`spawn(cli, [...], { cwd: managed project cwd })`** — they spawn each backend CLI in a
+  managed project cwd. Exactly our pty-in-template-dir decision; confirms it.
+- **Backend-agnostic, 26+ CLIs (Claude Code/Codex/OpenCode/Cursor/Gemini/Qwen/Pi…)**,
+  BYOK — mirrors our tool-agnostic pty/runAgent.
+- **`/api/artifacts/{save,lint}`** — a lint pass on generated artifacts. Adopt: run
+  `validateTemplate` on save in the studio and surface warnings (raw colors, missing
+  component refs, non-canonical sections).
+- **`od mcp install <agent>`** exposes design ops to the agent via MCP. Enhancement (v2):
+  expose `jonggrang design get/save/lint` as an MCP tool so the studio agent pulls
+  tokens/components and self-lints natively — complements the `design … get` CLI.
+- Their outputs span slides/PDF/MP4; we deliberately scope to HTML/CSS+token components
+  so a template is reusable as a `plan` baseline. Different goal, same engine shape.
+
 ## Out of scope (v1)
 
 - Publishing/sharing templates to a remote registry (local-only for now).
