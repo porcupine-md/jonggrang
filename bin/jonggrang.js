@@ -17,6 +17,7 @@ const hooksLib = require('../lib/hooks');
 const compaction = require('../lib/compaction');
 const feedback = require('../lib/feedback');
 const uiContext = require('../lib/ui-context');
+const design = require('../lib/design');
 
 // ============================================================
 // CONFIGURATION
@@ -4728,6 +4729,156 @@ Examples:
 }
 
 // ============================================================
+// DESIGN — global design templates (~/.jonggrang/design/<name>)
+// ============================================================
+
+function cmdDesign(args) {
+  const subcommand = args[0];
+  const subArgs = args.slice(1);
+  if (!subcommand || subcommand === 'help' || subcommand === '--help') { cmdDesignHelp(); return; }
+
+  const flags = {};
+  const positional = [];
+  let j = 0;
+  while (j < subArgs.length) {
+    if (subArgs[j] === '--from')          { flags.from = subArgs[++j]; }
+    else if (subArgs[j] === '--intent')   { flags.intent = subArgs[++j]; }
+    else if (subArgs[j] === '--shapes')   { flags.shapes = subArgs[++j]; }
+    else if (subArgs[j] === '--keywords') { flags.keywords = subArgs[++j]; }
+    else if (subArgs[j] === '--variant')  { flags.variant = subArgs[++j]; }
+    else if (subArgs[j] === '--force')    { flags.force = true; }
+    else if (subArgs[j] === '--json')     { flags.json = true; }
+    else { positional.push(subArgs[j]); }
+    j++;
+  }
+  const pretty = !flags.json && process.stdout.isTTY;
+
+  try {
+    switch (subcommand) {
+      case 'list':     designList(pretty); break;
+      case 'new':      designNew(positional[0], flags, pretty); break;
+      case 'promote':  designPromote(positional[0], flags, pretty); break;
+      case 'show':     designShow(positional[0], pretty); break;
+      case 'validate': designValidate(positional[0], pretty); break;
+      case 'remove':
+      case 'rm':       designRemove(positional[0], pretty); break;
+      case 'get':      designGet(positional[0], positional[1], flags); break; // design get <name> <what>
+      default:
+        // design <name> get <what>
+        if (positional[0] === 'get') designGet(subcommand, positional[1], flags);
+        else designShow(subcommand, pretty);
+    }
+  } catch (err) {
+    if (pretty) logError(err.message);
+    else console.log(JSON.stringify({ error: err.message }));
+    process.exit(1);
+  }
+}
+
+function designList(pretty) {
+  const templates = design.listTemplates();
+  if (!pretty) { console.log(JSON.stringify(templates.map(t => ({ id: t.id, key: t.key, valid: t.valid, source: t.source })))); return; }
+  console.log(`Design templates  ${DIM}(${design.designRoot()})${NC}`);
+  if (!templates.length) { console.log('  (none) — create one with: jonggrang design new <name>'); return; }
+  for (const t of templates) {
+    const mark = t.valid ? `${GREEN}✓${NC}` : `${RED}✗${NC}`;
+    console.log(`  ${mark} ${t.key}${t.intent ? `  ${DIM}${t.intent}${NC}` : ''}`);
+    if (!t.valid) console.log(`      ${RED}${(t.errors || []).join('; ')}${NC}`);
+  }
+}
+
+function designNew(name, flags, pretty) {
+  if (!name) throw new Error('Usage: jonggrang design new <name> [--intent "..."] [--shapes a,b] [--keywords a,b]');
+  const res = design.newTemplate(name, {
+    intent: flags.intent,
+    product_shapes: flags.shapes ? flags.shapes.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    recommend_keywords: flags.keywords ? flags.keywords.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    force: flags.force,
+  });
+  if (pretty) logSuccess(`Created design template ${name} at ${res.dir}`);
+  else console.log(JSON.stringify(res));
+}
+
+function designPromote(name, flags, pretty) {
+  if (!name) throw new Error('Usage: jonggrang design promote <name> [--from <project-path>]');
+  const projectRoot = flags.from ? path.resolve(flags.from) : PROJECT_ROOT;
+  const res = design.promoteFromProject(name, projectRoot, { force: flags.force });
+  if (pretty) {
+    logSuccess(`Promoted ${projectRoot} → design template ${name}`);
+    console.log(`  ${DIM}${res.dir}${NC}`);
+    if (res.tokenSource) console.log(`  token source: ${res.tokenSource}`);
+  } else console.log(JSON.stringify(res));
+}
+
+function designShow(name, pretty) {
+  if (!name) throw new Error('Usage: jonggrang design show <name>');
+  const t = design.loadTemplate(name);
+  if (!pretty) { console.log(JSON.stringify({ key: t.key, manifest: t.manifest, components: t.components.map(c => ({ id: c.id, variants: c.variants })) })); return; }
+  console.log(`${t.key}  ${DIM}${t.manifest.intent || ''}${NC}`);
+  console.log(`  dir:        ${t.dir}`);
+  console.log(`  shapes:     ${(t.manifest.product_shapes || []).join(', ')}`);
+  console.log(`  components:  ${t.components.length ? t.components.map(c => c.id).join(', ') : '(none)'}`);
+  const sections = uiContext.markdownSections(t.guideFragment).sections.filter(s => s.level === 2).map(s => s.title);
+  console.log(`  guide:      ${sections.length} sections`);
+  const v = design.validateTemplate(name);
+  console.log(`  valid:      ${v.valid ? `${GREEN}yes${NC}` : `${RED}no — ${v.errors.join('; ')}${NC}`}`);
+  if (v.warnings.length) console.log(`  warnings:   ${YELLOW}${v.warnings.join('; ')}${NC}`);
+}
+
+function designValidate(name, pretty) {
+  if (!name) throw new Error('Usage: jonggrang design validate <name>');
+  const v = design.validateTemplate(name);
+  if (!pretty) { console.log(JSON.stringify(v)); if (!v.valid) process.exit(1); return; }
+  if (v.valid) logSuccess(`${name} is valid`);
+  else { logError(`${name} invalid:`); v.errors.forEach(e => console.log(`  - ${e}`)); }
+  if (v.warnings.length) { console.log(`${YELLOW}warnings:${NC}`); v.warnings.forEach(w => console.log(`  - ${w}`)); }
+  if (!v.valid) process.exit(1);
+}
+
+function designRemove(name, pretty) {
+  if (!name) throw new Error('Usage: jonggrang design remove <name>');
+  design.removeTemplate(name);
+  if (pretty) logSuccess(`Removed design template ${name}`);
+  else console.log(JSON.stringify({ removed: name }));
+}
+
+// design <name> get <tokens|guide|manifest|component>  — RAW output (agent-facing)
+function designGet(name, what, flags) {
+  if (!name || !what) throw new Error('Usage: jonggrang design <name> get <tokens|guide|manifest|component-id>');
+  process.stdout.write(design.getArtifact(name, what, { variant: flags.variant }));
+  if (process.stdout.isTTY) process.stdout.write('\n');
+}
+
+function cmdDesignHelp() {
+  console.log(`jonggrang design — global, reusable design templates (~/.jonggrang/design/<name>)
+
+A design template is a superset of a UI baseline pack: manifest.yml + guide-fragment.md
++ tokens.css.template + framework-agnostic HTML/token components. Personal templates are
+selectable in \`plan\` exactly like built-in baseline packs.
+
+Usage: jonggrang design <subcommand> [options]
+
+Subcommands:
+  list                          List templates in ~/.jonggrang/design
+  new <name> [--intent "..."]   Scaffold a new template (--shapes a,b --keywords a,b)
+  promote <name> [--from <dir>] Build a template from a project's .jonggrang/UI.md + tokens
+  show <name>                   Show manifest, components, guide sections, validity
+  validate <name>               Validate against the pack + component contract
+  <name> get <what>             Emit tokens | guide | manifest | <component-id> (raw, agent-facing)
+  remove <name>                 Delete a template
+
+Options: --from <dir>  --intent  --shapes a,b  --keywords a,b  --variant <v>  --force  --json
+
+Examples:
+  jonggrang design new acme --intent "Acme brand" --shapes dashboard
+  jonggrang design promote acme --from ~/work/acme-app
+  jonggrang design acme get button
+  jonggrang design acme get tokens > acme-tokens.css
+  jonggrang design list
+`);
+}
+
+// ============================================================
 // HELP
 // ============================================================
 
@@ -4758,6 +4909,7 @@ Commands:
   task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
   memory <subcommand>     Repo-tracked memory (read, recall, fragment add, compact, promote) (#79)
   manifest [sub]          Inspect output-file manifests (list, show, add)
+  design <sub>            Global design templates (list, new, promote, show, get, validate, remove)
   codemap [opts]          Show/refresh deterministic codebase map (LLM-free)
   agent                   Start interactive chat with the AI agent (Pi TUI)
   login                   Add provider credentials (OAuth subscription or API key)
@@ -4968,6 +5120,11 @@ async function main() {
 
   if (command === 'issues') {
     await cmdIssues(rest);
+    return;
+  }
+
+  if (command === 'design') {
+    cmdDesign(rest);
     return;
   }
 
