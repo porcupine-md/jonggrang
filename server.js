@@ -54,6 +54,9 @@ webState.initVolumes();
 const projectsCtx = { JONGGRANG_HOME, webState, orchestration, server };
 const cleanupProjects = require('./apis/projects')(app, io, projectsCtx);
 
+// Global design-template studio API (~/.jonggrang/design)
+const cleanupDesign = require('./apis/design')(app, io, { JONGGRANG_HOME });
+
 // ── FRONTEND ──────────────────────────────────────────────────
 // Production (default): serve the built client from client/dist.
 // Development (NODE_ENV=development): run Vite in middleware mode so the
