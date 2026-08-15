@@ -10,17 +10,17 @@ process.env.JONGGRANG_HOME = TMP;
 const registerDesign = require('../apis/design');
 const ui = require('../lib/ui-context');
 
-let server, base;
+let server, base, cleanup;
 const events = [];
 const io = { emit: (name, payload) => events.push({ name, payload }) };
 
 before(async () => {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
-  registerDesign(app, io, {});
+  cleanup = registerDesign(app, io, {});
   await new Promise(resolve => { server = app.listen(0, () => { base = `http://127.0.0.1:${server.address().port}`; resolve(); }); });
 });
-after(() => { if (server) server.close(); });
+after(() => { if (cleanup) cleanup(); if (server) server.close(); });
 
 async function req(method, url, body) {
   return fetch(base + url, {

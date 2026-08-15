@@ -35,6 +35,31 @@ html, body { margin: 0; background: var(--ui-canvas, #fff); color: var(--ui-text
 }
 
 module.exports = function register(app, io, _ctx) {
+  // Live preview: watch the design store so ANY change — the studio's Save button
+  // OR the TUI agent writing files directly (in sandbox mode via the ~/.jonggrang
+  // bind mount) — emits `design.changed` and refreshes the open preview. Polling is
+  // used so it also fires for writes made inside the container. (fixes: preview not
+  // live-updating on agent edits — used to require a manual refresh.)
+  let designWatcher = null;
+  try {
+    const chokidar = require('chokidar');
+    const root = design.designRoot();
+    fs.mkdirSync(root, { recursive: true });
+    designWatcher = chokidar.watch(root, {
+      ignoreInitial: true,
+      usePolling: true,
+      interval: 400,
+      depth: 4,
+      awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 100 },
+    });
+    const onFsEvent = (changed) => {
+      const rel = path.relative(root, changed);
+      const name = rel.split(path.sep)[0];
+      if (name && name !== 'core' && io && io.emit) io.emit('design.changed', { name, path: rel });
+    };
+    for (const ev of ['add', 'change', 'unlink', 'addDir', 'unlinkDir']) designWatcher.on(ev, onFsEvent);
+  } catch { /* watching is best-effort */ }
+
   // List templates.
   app.get('/api/design', (req, res) => {
     try {
@@ -258,5 +283,8 @@ module.exports = function register(app, io, _ctx) {
     });
   }
 
-  return function cleanup() { killAllPtys(); };
+  return function cleanup() {
+    killAllPtys();
+    if (designWatcher) { try { designWatcher.close(); } catch { /* ignore */ } }
+  };
 };
