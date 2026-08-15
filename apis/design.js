@@ -129,11 +129,20 @@ module.exports = function register(app, io, _ctx) {
     } catch (err) { res.status(404).type('html').send(`<p>${escapeHtml(err.message)}</p>`); }
   });
 
-  // ── Studio terminal: the selected tool's native TUI (unsafe) in the template dir ──
+  // ── Studio terminal: the selected tool's native TUI (unsafe), host or sandbox ──
   // Reuses the same pty.* socket events as the project terminal, keyed by a
   // `design:<name>` project_id so the existing xterm composable works unchanged.
+  // Sandbox mode execs into a shared container that mounts ~/.jonggrang (design
+  // store + templates) and the tool config dirs (~/.claude, ~/.opencode, …) plus
+  // IS_SANDBOX=1 — mirroring the project sandbox DEFAULT_VOLUMES so the tool's
+  // session/harness AND the store carry over.
   const pty = require('node-pty');
+  const os = require('os');
+  const { execFileSync } = require('child_process');
   const designPtys = new Map(); // key: design:<name>
+
+  const AGENT_IMAGE = process.env.JONGGRANG_AGENT_IMAGE || 'ghcr.io/porcupine-md/jonggrang-agent:dev';
+  const DESIGN_CONTAINER = 'jonggrang-design-studio';
 
   function resolveToolCommand(tool) {
     switch (tool) {
@@ -141,34 +150,69 @@ module.exports = function register(app, io, _ctx) {
       case 'opencode':  return { cmd: 'opencode',  args: [] };
       case 'codex':     return { cmd: 'codex',     args: [] };
       case 'jonggrang': return { cmd: 'jonggrang', args: ['agent'] };
-      case 'shell':     return { cmd: process.env.SHELL || 'bash', args: [] };
+      case 'shell':     return { cmd: 'bash',      args: [] };
       default:          return null;
     }
+  }
+
+  // Harness/config + design-store mounts (mirror the project sandbox DEFAULT_VOLUMES).
+  function designMounts() {
+    const home = os.homedir();
+    const specs = [];
+    const add = (src, dst) => { const s = src.replace(/^~/, home); if (fs.existsSync(s)) specs.push('-v', `${s}:${dst}`); };
+    add('~/.jonggrang', '/root/.jonggrang');            // design store + templates
+    add('~/.claude', '/root/.claude');
+    add('~/.claude.json', '/root/.claude.json');
+    add('~/.opencode', '/root/.opencode');
+    add('~/.config/opencode', '/root/.config/opencode');
+    add('~/.local/share/opencode', '/root/.local/share/opencode');
+    add('~/.codex', '/root/.codex');
+    return specs;
+  }
+  function containerRunning() {
+    try { return execFileSync('docker', ['ps', '-q', '-f', `name=^${DESIGN_CONTAINER}$`], { encoding: 'utf8' }).trim().length > 0; }
+    catch { return false; }
+  }
+  function ensureDesignContainer() {
+    if (containerRunning()) return;
+    try { execFileSync('docker', ['rm', '-f', DESIGN_CONTAINER], { stdio: 'ignore' }); } catch { /* not present */ }
+    execFileSync('docker', ['run', '-d', '--name', DESIGN_CONTAINER, '--env', 'IS_SANDBOX=1', ...designMounts(), AGENT_IMAGE, 'sleep', 'infinity'], { stdio: 'ignore' });
+  }
+  function killAllPtys() {
+    for (const proc of designPtys.values()) { try { proc.kill(); } catch { /* ignore */ } }
+    designPtys.clear();
+  }
+
+  function spawnDesign(name, tool, cols, rows, sandbox) {
+    const resolved = resolveToolCommand(tool);
+    if (!resolved) throw new Error(`unsupported tool: ${tool}`);
+    const key = `design:${name}`;
+    if (designPtys.has(key)) { try { designPtys.get(key).kill(); } catch { /* ignore */ } designPtys.delete(key); }
+    const dims = { cols: Math.max(20, cols | 0), rows: Math.max(6, rows | 0) };
+    let proc;
+    if (sandbox) {
+      ensureDesignContainer();
+      const cwd = `/root/.jonggrang/design/${name}`;
+      proc = pty.spawn('docker', ['exec', '-it', '--workdir', cwd, DESIGN_CONTAINER, resolved.cmd, ...resolved.args],
+        { name: 'xterm-256color', ...dims, cwd: os.homedir(), env: { ...process.env, TERM: 'xterm-256color' } });
+    } else {
+      const dir = path.join(design.designRoot(), name);
+      proc = pty.spawn(resolved.cmd, resolved.args,
+        { name: 'xterm-256color', ...dims, cwd: dir, env: { ...process.env, TERM: 'xterm-256color' } });
+    }
+    designPtys.set(key, proc);
+    proc.onData(data => { if (io && io.emit) io.emit('pty.data', { project_id: key, session: 'design', data }); });
+    proc.onExit(({ exitCode }) => { designPtys.delete(key); if (io && io.emit) io.emit('pty.exit', { project_id: key, session: 'design', exitCode }); });
+    return proc;
   }
 
   app.post('/api/design/:name/terminal/start', (req, res) => {
     try {
       const name = req.params.name;
-      const dir = path.join(design.designRoot(), name);
-      if (!fs.existsSync(dir)) return res.status(404).json({ error: 'template not found' });
-      const { cols = 80, rows = 24, tool = 'shell' } = req.body || {};
-      const resolved = resolveToolCommand(tool);
-      if (!resolved) return res.status(400).json({ error: `unsupported tool: ${tool}` });
-      const key = `design:${name}`;
-      if (designPtys.has(key)) { try { designPtys.get(key).kill(); } catch { /* ignore */ } designPtys.delete(key); }
-      const proc = pty.spawn(resolved.cmd, resolved.args, {
-        name: 'xterm-256color',
-        cols: Math.max(20, cols | 0), rows: Math.max(6, rows | 0),
-        cwd: dir,
-        env: { ...process.env, TERM: 'xterm-256color' },
-      });
-      designPtys.set(key, proc);
-      proc.onData(data => { if (io && io.emit) io.emit('pty.data', { project_id: key, session: 'design', data }); });
-      proc.onExit(({ exitCode }) => {
-        designPtys.delete(key);
-        if (io && io.emit) io.emit('pty.exit', { project_id: key, session: 'design', exitCode });
-      });
-      res.json({ ok: true, tool, cwd: dir });
+      if (!fs.existsSync(path.join(design.designRoot(), name))) return res.status(404).json({ error: 'template not found' });
+      const { cols = 80, rows = 24, tool = 'shell', sandbox = false } = req.body || {};
+      spawnDesign(name, tool, cols, rows, !!sandbox);
+      res.json({ ok: true, tool, sandbox: !!sandbox });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -177,6 +221,24 @@ module.exports = function register(app, io, _ctx) {
     const proc = designPtys.get(key);
     if (proc) { try { proc.kill(); } catch { /* ignore */ } designPtys.delete(key); }
     res.json({ ok: true });
+  });
+
+  // Sandbox container controls (shared across templates).
+  app.get('/api/design/sandbox/status', (req, res) => {
+    let running = false; try { running = containerRunning(); } catch { /* ignore */ }
+    res.json({ container: DESIGN_CONTAINER, image: AGENT_IMAGE, running });
+  });
+  app.post('/api/design/sandbox/restart', (req, res) => {
+    try { killAllPtys(); execFileSync('docker', ['restart', DESIGN_CONTAINER], { stdio: 'ignore' }); res.json({ ok: true }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/design/sandbox/rebuild', (req, res) => {
+    try {
+      killAllPtys();
+      try { execFileSync('docker', ['rm', '-f', DESIGN_CONTAINER], { stdio: 'ignore' }); } catch { /* ignore */ }
+      ensureDesignContainer();
+      res.json({ ok: true, recreated: true, image: AGENT_IMAGE });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   if (io && io.on) {
@@ -196,8 +258,5 @@ module.exports = function register(app, io, _ctx) {
     });
   }
 
-  return function cleanup() {
-    for (const proc of designPtys.values()) { try { proc.kill(); } catch { /* ignore */ } }
-    designPtys.clear();
-  };
+  return function cleanup() { killAllPtys(); };
 };

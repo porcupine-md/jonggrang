@@ -89,14 +89,25 @@ The **Design** top-nav tab lists templates and opens a studio per template:
   saves `tokens.css.template` and lints on save. File changes emit `design.changed`, which
   refreshes the preview live.
 
-### Execution mode (default: sandbox)
+### Execution mode (sandbox toggle, default on)
 
-The studio agent is intended to run **sandboxed** (a container from the agent image, with
-`IS_SANDBOX=1`, the auth mounts, and the template dir mounted) so it runs as root without
-the host `~/.claude/session-env` permission issue and its writes are isolated. A per-studio
-toggle can switch to host execution (faster; `opencode` works on the host, `claude` is
-subject to host perms). *v1 ships the host-spawn path; the sandbox-container path is a
-small follow-up.*
+The studio TUI runs in one of two modes, toggled in the studio header:
+
+- **Sandbox (default):** `docker exec` into a shared container (`jonggrang-design-studio`)
+  from the agent image with `IS_SANDBOX=1` and the project-sandbox mounts —
+  `~/.jonggrang → /root/.jonggrang` (carries the **design store + templates**) plus the
+  tool config dirs (`~/.claude`, `~/.claude.json`, `~/.opencode`, `~/.config/opencode`,
+  `~/.local/share/opencode`, `~/.codex`). Because these mirror the project sandbox
+  `DEFAULT_VOLUMES`, the **tool's session/auth carries over** and the agent runs as root
+  without the host `~/.claude/session-env` permission issue. CWD inside the container is
+  `/root/.jonggrang/design/<name>`.
+- **Host:** spawn the tool directly on the host in the template dir. Faster; uses the
+  host's own config/session directly.
+
+**Restart** stops and respawns the TUI. **Rebuild** (sandbox only) removes and recreates
+the container fresh from the image, then restarts the TUI — a clean-environment reset.
+Override the image with `JONGGRANG_AGENT_IMAGE` (default
+`ghcr.io/porcupine-md/jonggrang-agent:dev`).
 
 ---
 

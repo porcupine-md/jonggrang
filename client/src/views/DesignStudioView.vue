@@ -8,7 +8,10 @@
       </span>
       <span v-if="validation.warnings && validation.warnings.length" class="st-warn">{{ validation.warnings.length }} warnings</span>
       <div class="st-spacer" />
-      <select v-model="tool" class="st-select" title="Backend for the studio TUI (unsafe)">
+      <label class="st-toggle" title="Run the TUI in a sandbox container (mounts harness + design store)">
+        <input type="checkbox" v-model="sandbox" :disabled="isRunning" /> sandbox
+      </label>
+      <select v-model="tool" class="st-select" :disabled="isRunning" title="Backend for the studio TUI (unsafe)">
         <option value="shell">shell</option>
         <option value="claude">claude</option>
         <option value="opencode">opencode</option>
@@ -18,13 +21,19 @@
       <Button v-if="!isRunning" size="small" :disabled="starting" @click="startTerminal">
         <i class="pi pi-play" /> {{ starting ? 'Starting…' : 'Start TUI' }}
       </Button>
-      <Button v-else size="small" severity="danger" @click="stopTerminal"><i class="pi pi-stop" /> Stop</Button>
+      <template v-else>
+        <Button size="small" severity="danger" @click="stopTerminal"><i class="pi pi-stop" /> Stop</Button>
+        <Button size="small" severity="secondary" title="Restart TUI" @click="restartTerminal"><i class="pi pi-refresh" /></Button>
+      </template>
+      <Button v-if="sandbox" size="small" severity="secondary" :disabled="rebuilding" title="Recreate the sandbox container fresh" @click="rebuild">
+        <i class="pi pi-box" /> {{ rebuilding ? 'Rebuilding…' : 'Rebuild' }}
+      </Button>
     </header>
 
     <div class="st-body">
       <!-- Left: the tool's native interactive TUI (unsafe) -->
       <section class="st-pane st-left">
-        <div class="st-pane-label">TUI · {{ tool }} <span class="dim">(unsafe · cwd = template)</span></div>
+        <div class="st-pane-label">TUI · {{ tool }} · {{ sandbox ? 'sandbox' : 'host' }} <span class="dim">(unsafe · cwd = template)</span></div>
         <div ref="terminalRef" class="st-terminal" />
       </section>
 
@@ -78,6 +87,8 @@ const components = ref([]);
 const validation = ref({ valid: true, errors: [], warnings: [] });
 const tokenText = ref('');
 const tool = ref('shell');
+const sandbox = ref(true);
+const rebuilding = ref(false);
 const component = ref('');
 const theme = ref('light');
 const width = ref(1024);
@@ -130,7 +141,7 @@ async function startTerminal() {
     const rows = el ? Math.floor(el.clientHeight / 17) : 24;
     const res = await fetch(`/api/design/${encodeURIComponent(name.value)}/terminal/start`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cols, rows, tool: tool.value }),
+      body: JSON.stringify({ cols, rows, tool: tool.value, sandbox: sandbox.value }),
     });
     if (res.ok) markRunning();
   } catch { /* ignore */ }
@@ -140,6 +151,22 @@ async function startTerminal() {
 async function stopTerminal() {
   await fetch(`/api/design/${encodeURIComponent(name.value)}/terminal/stop`, { method: 'POST' });
   markStopped();
+}
+
+async function restartTerminal() {
+  await stopTerminal();
+  await new Promise(r => setTimeout(r, 300));
+  await startTerminal();
+}
+
+async function rebuild() {
+  rebuilding.value = true;
+  try {
+    await stopTerminal();
+    await fetch('/api/design/sandbox/rebuild', { method: 'POST' });
+    await startTerminal();
+  } catch { /* ignore */ }
+  rebuilding.value = false;
 }
 
 onMounted(() => {
@@ -161,6 +188,7 @@ onMounted(() => {
 .st-warn { font-size: .65rem; color: #fbbf24; }
 .st-spacer { flex: 1; }
 .st-select { background: #141b24; border: 1px solid #2d3748; color: inherit; border-radius: 6px; padding: .25rem .4rem; font-size: .8rem; }
+.st-toggle { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; color: var(--text-muted, #8a8f98); cursor: pointer; }
 .st-body { flex: 1; display: flex; min-height: 0; }
 .st-pane { display: flex; flex-direction: column; min-width: 0; }
 .st-left { width: 46%; border-right: 1px solid #2d3748; }
