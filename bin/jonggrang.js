@@ -2146,10 +2146,12 @@ async function cmdApprove(args, opts = {}) {
       if (uiTasks.length === 0) throw new Error('UI plan produced no tasks with ui_context');
 
       let finalGuideContent = approvedUi.guideContent;
+      let foundationId = null;
       if (approvedUi.tokenStatus === 'planned') {
         const foundations = uiTasks.filter(task => task.ui_context.foundation === true);
         if (foundations.length !== 1) throw new Error('planned token source needs exactly one UI-foundation task');
-        finalGuideContent = uiContext.updateFrontmatter(finalGuideContent, { token_owner_task: foundations[0].id });
+        foundationId = foundations[0].id;
+        finalGuideContent = uiContext.updateFrontmatter(finalGuideContent, { token_owner_task: foundationId });
       }
       const finalGuideRevision = uiContext.contentDigest(finalGuideContent);
       const tasksFile = lib.tasksFileFor(PROJECT_ROOT, featureId);
@@ -2162,6 +2164,12 @@ async function cmdApprove(args, opts = {}) {
           task.ui_context.guide_revision = finalGuideRevision;
           task.ui_context.baseline = approvedUi.baseline;
           task.ui_context.token_source = approvedUi.tokenSource;
+          // Every dependent UI task must wait for the token foundation; add the
+          // dependency deterministically if the decomposition agent omitted it.
+          if (foundationId && task.id !== foundationId) {
+            task.blocked_by = Array.isArray(task.blocked_by) ? task.blocked_by : [];
+            if (!task.blocked_by.includes(foundationId)) task.blocked_by.push(foundationId);
+          }
         }
       }
       lib.writeJSON(tasksFile, taskData);
