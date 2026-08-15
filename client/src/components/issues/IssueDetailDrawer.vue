@@ -55,6 +55,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
 import Button from 'primevue/button';
+import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useIssuesStore } from '../../stores/issues.js';
 import ProviderIcon from '../ProviderIcon.vue';
@@ -67,8 +68,12 @@ const issue = ref(null);
 const loading = ref(true);
 const error = ref('');
 
-const renderedBody = computed(() => marked.parse(issue.value?.body || '_(no description)_'));
-function renderComment(b) { return marked.parse(b || ''); }
+function renderMarkdown(content) {
+  return DOMPurify.sanitize(marked.parse(content || ''));
+}
+
+const renderedBody = computed(() => renderMarkdown(issue.value?.body || '_(no description)_'));
+function renderComment(body) { return renderMarkdown(body); }
 
 function formatDate(s) {
   if (!s) return '';

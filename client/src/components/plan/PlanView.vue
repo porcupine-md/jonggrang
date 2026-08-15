@@ -223,6 +223,39 @@
                 />
               </div>
 
+              <section v-if="selectedPlan.ui" class="ui-context-review">
+                <header class="ui-context-header">
+                  <div>
+                    <div class="ui-context-title">UI planning context</div>
+                    <div class="ui-context-path">Review with the plan before approval</div>
+                  </div>
+                  <div class="ui-context-badges">
+                    <span class="ui-context-badge">{{ selectedPlan.ui.guide_status }}</span>
+                    <span v-if="selectedPlan.ui.baseline" class="ui-context-badge">{{ selectedPlan.ui.baseline }}</span>
+                    <span v-if="selectedPlan.ui.token_status" class="ui-context-badge">tokens: {{ selectedPlan.ui.token_status }}</span>
+                  </div>
+                </header>
+
+                <details v-if="selectedPlan.ui.handoff_content" open class="ui-context-details">
+                  <summary>Feature handoff · {{ selectedPlan.ui.handoff_path }}</summary>
+                  <div class="ui-context-markdown" v-html="renderedUiHandoff" />
+                </details>
+
+                <details v-if="selectedPlan.ui.guide_content || selectedPlan.ui.current_guide_content" class="ui-context-details">
+                  <summary>Project guide {{ selectedPlan.ui.current_guide_content && selectedPlan.ui.guide_content ? 'comparison' : '' }} · {{ selectedPlan.ui.guide_path }}</summary>
+                  <div class="ui-guide-compare" :class="{ 'ui-guide-compare--single': !selectedPlan.ui.current_guide_content || !selectedPlan.ui.guide_content }">
+                    <div v-if="selectedPlan.ui.current_guide_content" class="ui-guide-version">
+                      <div class="ui-guide-version-label">Current</div>
+                      <div class="ui-context-markdown" v-html="renderedUiCurrentGuide" />
+                    </div>
+                    <div v-if="selectedPlan.ui.guide_content" class="ui-guide-version">
+                      <div class="ui-guide-version-label">Proposed</div>
+                      <div class="ui-context-markdown" v-html="renderedUiGuide" />
+                    </div>
+                  </div>
+                </details>
+              </section>
+
               <!-- Revise bar -->
               <div v-if="showReviseBar" class="revise-bar">
                 <input
@@ -381,7 +414,7 @@
     </div>
     <template #footer>
       <Button label="Cancel" text @click="cancelQuestions" />
-      <Button label="Generate Plan" icon="pi pi-sparkles" @click="submitAnswers" />
+      <Button label="Generate Plan" icon="pi pi-sparkles" :disabled="!canSubmitQuestionAnswers" @click="submitAnswers" />
     </template>
   </Dialog>
 </template>
@@ -393,6 +426,7 @@ import Button from 'primevue/button';
 import Textarea from 'primevue/textarea';
 import Select from 'primevue/select';
 import Dialog from 'primevue/dialog';
+import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useLogTerminal } from '../../composables/useLogTerminal.js';
 import { useWsStore } from '../../stores/ws.js';
@@ -453,6 +487,13 @@ const loadingModels = ref(false);
 const pendingQuestions = ref(null);   // { goal_analysis, questions:[] } or null
 const showQuestionForm = ref(false);
 const answerDraft = reactive({});     // keyed by question id
+const canSubmitQuestionAnswers = computed(() => {
+  const question = pendingQuestions.value?.questions?.find(item => item.id === 'ui-preference');
+  if (!question) return true;
+  const draft = answerDraft[question.id] || {};
+  if (!draft.choice) return false;
+  return draft.choice !== '__freetext__' || Boolean((draft.freetext || '').trim());
+});
 
 const TOOLS = [
   { label: 'OpenCode',      value: 'opencode' },
@@ -491,7 +532,12 @@ function applyPlanQuestions(goal_analysis, questions) {
   Object.keys(answerDraft).forEach(k => delete answerDraft[k]);
   for (const q of (questions || [])) {
     if (q.type === 'multi_choice') answerDraft[q.id] = { choices: [], freetext: '', useFreetext: false };
-    else if (q.type === 'single_choice') answerDraft[q.id] = { choice: (q.options && q.options[0] ? q.options[0].value : ''), freetext: '' };
+    else if (q.type === 'single_choice') answerDraft[q.id] = {
+      // ui-preference (baseline consent) must not auto-select a pack;
+      // the user has to explicitly choose before submit is enabled.
+      choice: q.id === 'ui-preference' ? '' : (q.options && q.options[0] ? q.options[0].value : ''),
+      freetext: '',
+    };
     else answerDraft[q.id] = { freetext: '' };
   }
   pendingQuestions.value = { goal_analysis: goal_analysis || '', questions: questions || [] };
@@ -545,14 +591,22 @@ const reviseInputEl = ref(null);
 const showDiscussPanel = ref(false);
 const discussTool = computed(() => selectedTool.value || 'jonggrang');
 
-// Rendered markdown for viewer
+// Rendered markdown for viewer. Plans and UI artifacts may contain agent-authored
+// raw HTML, so sanitize every markdown surface before passing it to v-html.
+function renderMarkdown(content) {
+  return DOMPurify.sanitize(marked.parse(content || ''));
+}
+
 const renderedContent = computed(() => {
   const plan = selectedPlan.value;
   if (!plan) return '';
-  return marked.parse(plan.content || '');
+  return renderMarkdown(plan.content);
 });
 
-const renderedDraftContent = computed(() => marked.parse(planContent.value || ''));
+const renderedDraftContent = computed(() => renderMarkdown(planContent.value));
+const renderedUiHandoff = computed(() => renderMarkdown(selectedPlan.value?.ui?.handoff_content));
+const renderedUiGuide = computed(() => renderMarkdown(selectedPlan.value?.ui?.guide_content));
+const renderedUiCurrentGuide = computed(() => renderMarkdown(selectedPlan.value?.ui?.current_guide_content));
 
 // Computed
 const isIdle = computed(() =>
@@ -1152,6 +1206,28 @@ onUnmounted(() => {
 .plan-editor-body { flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; }
 .plan-editor-body :deep(.plan-editor-textarea) { flex: 1; height: 100% !important; resize: none; border: none !important; border-radius: 0 !important; font-size: 13px !important; line-height: 1.7 !important; padding: 16px !important; background: var(--jg-bg) !important; color: var(--jg-text) !important; }
 .plan-editor-body :deep(.plan-editor-textarea:focus) { box-shadow: none !important; outline: none !important; }
+
+/* UI guide + handoff review */
+.ui-context-review { max-height: 46%; overflow-y: auto; border-top: 1px solid var(--jg-border); background: var(--jg-card); flex-shrink: 0; }
+.ui-context-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--jg-border); background: var(--jg-card); }
+.ui-context-title { font-size: 12px; font-weight: 700; color: var(--jg-text); }
+.ui-context-path { margin-top: 2px; font-size: 10px; color: var(--jg-text-faint); }
+.ui-context-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ui-context-badge { padding: 2px 6px; border: 1px solid var(--jg-border); color: var(--jg-cyan); font-size: 10px; }
+.ui-context-details { border-bottom: 1px solid var(--jg-border); }
+.ui-context-details summary { cursor: pointer; padding: 8px 16px; color: var(--jg-text-dim); font-size: 11px; font-weight: 600; }
+.ui-context-details summary:hover { color: var(--jg-text); background: var(--jg-hover); }
+.ui-guide-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border-top: 1px solid var(--jg-border); }
+.ui-guide-compare--single { grid-template-columns: minmax(0, 1fr); }
+.ui-guide-version { min-width: 0; padding: 0 14px 14px; overflow-x: auto; }
+.ui-guide-version + .ui-guide-version { border-left: 1px solid var(--jg-border); }
+.ui-guide-version-label { position: sticky; top: 0; padding: 8px 0 6px; background: var(--jg-card); color: var(--jg-text-faint); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+.ui-context-markdown { padding: 0 16px 12px; color: var(--jg-text-dim); font-size: 11px; line-height: 1.6; }
+.ui-guide-version .ui-context-markdown { padding: 0; }
+.ui-context-markdown :deep(h1), .ui-context-markdown :deep(h2), .ui-context-markdown :deep(h3) { margin: 12px 0 6px; color: var(--jg-text); font-size: 12px; }
+.ui-context-markdown :deep(p), .ui-context-markdown :deep(ul) { margin: 0 0 8px; }
+.ui-context-markdown :deep(pre) { overflow-x: auto; padding: 8px; border: 1px solid var(--jg-border); background: var(--jg-bg); }
+.ui-context-markdown :deep(code) { font-family: var(--font-mono); font-size: 10px; }
 
 /* Revise bar */
 .revise-bar {

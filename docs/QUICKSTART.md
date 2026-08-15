@@ -65,6 +65,13 @@ jonggrang plan "user authentication with JWT and password reset"
 
 The AI writes a draft plan to `.jonggrang/.drafts/<session>/plan.md` (a per-session draft folder, gitignored). **Read and edit it** before continuing — this is your chance to correct the AI's assumptions before any code is written. Each `jonggrang plan` call creates its own session, so concurrent planning doesn't overwrite.
 
+For UI work, Jonggrang also audits existing tokens, components, screens, and
+verification tools. The draft may include a proposed `UI.md` and always includes
+feature direction in `UI_HANDOFF.md`. Before a new project uses a built-in
+starter, answer the preference question: provide your own direction/reference,
+accept the recommendation, or decline starter packs. Do not use `--yes` until
+that choice is explicit.
+
 ---
 
 ## Step 3: Approve the Plan
@@ -75,7 +82,7 @@ jonggrang approve
 
 `approve` defaults to the most-recent draft. If you have multiple pending drafts, run `jonggrang approve --session <id>` (the session id is shown by `jonggrang plan` / the web dashboard).
 
-The AI decomposes your plan into atomic tasks. Each task is small enough for one AI context window, with clear acceptance criteria and dependency ordering.
+The AI decomposes your plan into atomic tasks. Each task is small enough for one AI context window, with clear acceptance criteria and dependency ordering. UI approval also writes `.jonggrang/UI.md`, a feature `UI_HANDOFF.md`, and bounded `ui_context` on UI tasks. See [UI planning context](UI_CONTEXT.md).
 
 Check the task board:
 

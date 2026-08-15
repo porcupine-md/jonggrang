@@ -1,0 +1,22 @@
+:root {
+  --ui-canvas: oklch(0.985 0.006 85);
+  --ui-surface: oklch(1 0 0);
+  --ui-text: oklch(0.19 0.018 255);
+  --ui-text-muted: oklch(0.46 0.018 255);
+  --ui-border: oklch(0.86 0.012 85);
+  --ui-action: oklch(0.38 0.16 255);
+  --ui-action-hover: oklch(0.31 0.15 255);
+  --ui-focus: oklch(0.62 0.17 255);
+  --ui-space-1: 0.25rem;
+  --ui-space-2: 0.5rem;
+  --ui-space-3: 0.75rem;
+  --ui-space-4: 1rem;
+  --ui-space-6: 1.5rem;
+  --ui-space-8: 2rem;
+  --ui-space-12: 3rem;
+  --ui-space-16: 4rem;
+  --ui-radius-control: 0.25rem;
+  --ui-radius-panel: 0;
+  --ui-content: 68rem;
+  --ui-copy: 42rem;
+}

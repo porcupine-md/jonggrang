@@ -1,0 +1,31 @@
+id: landing-page-minimalist
+version: 1
+intent: Focused landing pages that earn one conversion through clear hierarchy and proof.
+product_shapes:
+  - landing-page
+  - marketing-site
+recommend_keywords:
+  - landing
+  - marketing
+  - homepage
+  - conversion
+  - campaign
+  - waitlist
+recommend_priority: 20
+framework_targets:
+  - css
+  - any
+flavor:
+  density: open
+  geometry: restrained
+  typography: editorial-sans
+avoid:
+  - gradient hero blobs
+  - equal-weight card grids
+  - pill-shaped containers for ordinary copy
+  - several competing primary calls to action
+guide_fragment: guide-fragment.md
+token_template: tokens.css.template
+plan_questions:
+  - What single action should the page earn?
+  - What proof can appear before the second call to action?

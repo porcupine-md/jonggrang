@@ -3,6 +3,7 @@
 const { Router } = require('express');
 
 const lib = require('../../lib/jonggrang');
+const uiContext = require('../../lib/ui-context');
 const sandbox = require('../../lib/sandbox');
 const { STATIC_EFFORTS } = require('../models');
 
@@ -70,6 +71,34 @@ module.exports = function (deps) {
         return { sessionId: draft.sessionId, planPath: draft.planPath };
     }
 
+    function uiPlanArtifacts(project, sessionId, planContent, featureId = null) {
+        const get = (key) => {
+            const match = String(planContent || '').match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+            return match ? match[1].trim().replace(/^['"]|['"]$/g, '') : '';
+        };
+        if (get('ui') !== 'true' && !featureId) return null;
+        const rootGuidePath = uiContext.projectGuidePath(project.path);
+        const guidePath = featureId ? rootGuidePath : uiContext.draftGuidePath(project.path, sessionId);
+        const handoffPath = featureId
+            ? uiContext.featureHandoffPath(project.path, featureId)
+            : uiContext.draftHandoffPath(project.path, sessionId);
+        const read = (file) => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
+        const proposedGuide = read(guidePath);
+        const currentGuide = !featureId ? read(rootGuidePath) : null;
+        const handoff = read(handoffPath);
+        if (!proposedGuide && !handoff && get('ui') !== 'true') return null;
+        return {
+            guide_status: get('ui_guide_status') || (featureId ? 'approved' : (proposedGuide ? 'update proposed' : 'unchanged')),
+            baseline: get('ui_baseline') || null,
+            token_status: get('ui_token_status') || null,
+            guide_path: proposedGuide ? path.relative(project.path, guidePath) : '.jonggrang/UI.md',
+            guide_content: proposedGuide || (featureId ? read(rootGuidePath) : null),
+            current_guide_content: currentGuide,
+            handoff_path: path.relative(project.path, handoffPath),
+            handoff_content: handoff,
+        };
+    }
+
     // GET /api/projects/:id/plans — list of all plans (draft + archived)
     router.get('/:id/plans', (req, res) => {
         const project = webState.getProject(req.params.id);
@@ -91,6 +120,7 @@ module.exports = function (deps) {
                     status: 'draft',
                     mtime,
                     content,
+                    ui: uiPlanArtifacts(project, draft.sessionId, content),
                     source_issue: parseSourceIssue(content),
                 });
             } catch { }
@@ -167,6 +197,7 @@ module.exports = function (deps) {
                         status, mtime, work_type, content, branch,
                         run_status: rg?.status || null,
                         pushed: !!rg?.pushed,
+                        ui: uiPlanArtifacts(project, null, content, name),
                         source_issue: parseSourceIssue(content),
                     });
                 }
@@ -205,7 +236,7 @@ module.exports = function (deps) {
             try {
                 const content = fs.readFileSync(draft.planPath, 'utf-8');
                 const mtime = fs.statSync(draft.planPath).mtimeMs;
-                return res.json({ exists: true, state: 'draft', sessionId: draft.sessionId, content, mtime });
+                return res.json({ exists: true, state: 'draft', sessionId: draft.sessionId, content, mtime, ui: uiPlanArtifacts(project, draft.sessionId, content) });
             } catch (err) {
                 return res.status(500).json({ error: err.message });
             }
@@ -240,6 +271,7 @@ module.exports = function (deps) {
                         feature_id: name,
                         work_type: manifest?.work_type || null,
                         manifest_status: manifest?.status || null,
+                        ui: uiPlanArtifacts(project, null, content, name),
                     });
                 }
             }

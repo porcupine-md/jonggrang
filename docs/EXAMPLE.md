@@ -119,6 +119,25 @@ jonggrang plan --append feat-abc123 "also add input validation to the todo endpo
 # and re-opens the execution phases so `jonggrang work` runs the new tasks.
 ```
 
+**UI feature — guide and handoff:**
+
+```bash
+jonggrang plan "operations dashboard for triaging failed todo jobs"
+# audits local tokens/components/screens first
+# when no project UI system exists, recommends dashboard-operational@1
+# draft session also contains UI.md + UI_HANDOFF.md for review
+
+jonggrang approve
+# writes tracked .jonggrang/UI.md
+# writes .jonggrang/.output/features/<id>/UI_HANDOFF.md
+# adds bounded ui_context only to UI tasks
+```
+
+A brand-new UI request cannot silently accept a starter pack. Run the interactive
+plan once to provide a preference/reference, accept the recommended pack, or
+decline starters. For automation, explicitly name the approved baseline id in
+the request. See [UI_CONTEXT.md](UI_CONTEXT.md).
+
 ### Step 4: Check Task Board
 
 ```bash
