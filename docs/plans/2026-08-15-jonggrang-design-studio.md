@@ -1,7 +1,7 @@
 ---
 title: jonggrang design — global design templates + design studio
 date: 2026-08-15
-status: proposed
+status: implemented (Phases 1-7) — see docs/DESIGN.md
 branch: feat/design-studio
 base: feat/ui-design-context   # builds on PR #93 baseline-pack machinery
 ---

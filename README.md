@@ -81,6 +81,7 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 | `jonggrang issues list` | List GitHub/GitLab issues from configured sources (or `--repo owner/repo`) |
 | `jonggrang issues pickup <p> <repo> <n>` | Generate a plan in this project from a GitHub/GitLab issue |
 | `jonggrang manifest` | Inspect output files tracked per phase (`list`, `show [id]`, `add`) |
+| `jonggrang design` | Global, reusable design templates + web studio (`list`, `new`, `promote`, `show`, `get`, `validate`) |
 | `jonggrang memory` | Read, recall, stage fragments, compact feature memory, and promote stable project lessons |
 | `jonggrang codemap` | Show/refresh deterministic codebase map (LLM-free, cached at `.jonggrang/codemap/codemap.json`) |
 
@@ -155,6 +156,7 @@ Two-layer config: `~/.jonggrang/settings.json` (your defaults) → `.jonggrang/j
 | [CONFIG.md](docs/CONFIG.md) | Tweak every knob |
 | [UI_CONTEXT.md](docs/UI_CONTEXT.md) | Understand UI guides, baseline packs, and feature handoffs |
 | [UI_BASELINES.md](docs/UI_BASELINES.md) | Add or version a UI baseline pack |
+| [DESIGN.md](docs/DESIGN.md) | Global design templates + the web Design studio |
 | [COMMIT-CONVENTION.md](docs/COMMIT-CONVENTION.md) | Write agent-readable commit messages |
 
 ---

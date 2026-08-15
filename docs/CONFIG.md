@@ -363,6 +363,7 @@ Persistent orchestration state for a feature run. Located at:
 | `JONGGRANG_MODEL` | Override default model (backend-specific format) | from config |
 | `JONGGRANG_EFFORT` | Override default effort/thinking level | from config |
 | `JONGGRANG_PROJECT_ROOT` | Explicit project root for hook resolution | `process.cwd()` |
+| `JONGGRANG_DESIGN_HOME` | Design-template store location (see [DESIGN.md](DESIGN.md)) | `~/.jonggrang/design` |
 | `JONGGRANG_HOOKS_DIR` | Path to hooks/ directory | auto-resolved |
 | `JONGGRANG_COMPACTION_THRESHOLD` | Override block threshold (0-1) | 0.85 |
 | `JONGGRANG_WEB_PORT` | `jonggrang web` dashboard port (also `--port`) | `7777` |
