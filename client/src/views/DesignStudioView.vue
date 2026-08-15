@@ -24,7 +24,11 @@
       <template v-else>
         <Button size="small" severity="danger" @click="stopTerminal"><i class="pi pi-stop" /> Stop</Button>
         <Button size="small" severity="secondary" title="Restart TUI" @click="restartTerminal"><i class="pi pi-refresh" /></Button>
+        <Button v-if="storageConfigured" size="small" severity="secondary" :disabled="uploading" title="Upload a file — types its link into the terminal" @click="triggerUpload">
+          <i :class="uploading ? 'pi pi-spin pi-spinner' : 'pi pi-cloud-upload'" /> {{ uploading ? 'Uploading…' : 'Upload' }}
+        </Button>
       </template>
+      <input ref="uploadInputRef" type="file" style="display:none" @change="onUploadChange" />
       <Button v-if="sandbox" size="small" severity="secondary" :disabled="rebuilding" title="Recreate the sandbox container fresh" @click="rebuild">
         <i class="pi pi-box" /> {{ rebuilding ? 'Rebuilding…' : 'Rebuild' }}
       </Button>
@@ -101,11 +105,38 @@ const previewSrc = computed(() =>
   `/api/design/${encodeURIComponent(name.value)}/preview?theme=${theme.value}&width=${width.value}` +
   (component.value ? `&component=${encodeURIComponent(component.value)}` : '') + `&_=${nonce.value}`);
 
-const { terminalRef, isRunning, markRunning, markStopped } = useInteractiveTerminal({
+const { terminalRef, isRunning, markRunning, markStopped, sendInput } = useInteractiveTerminal({
   projectId: computed(() => `design:${name.value}`),
   session: 'design',
   getSocket: () => ws.socket,
 });
+
+// File → object storage (S3). When configured, an Upload button uploads a file and
+// types its shareable link into the running TUI.
+const storageConfigured = ref(false);
+const uploadInputRef = ref(null);
+const uploading = ref(false);
+async function loadStorageConfig() {
+  try { const r = await fetch('/api/storage/config'); if (r.ok) storageConfigured.value = !!(await r.json()).configured; } catch {}
+}
+function triggerUpload() { uploadInputRef.value?.click(); }
+async function onUploadChange(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file || uploading.value) return;
+  uploading.value = true;
+  try {
+    const buf = await file.arrayBuffer();
+    const r = await fetch(`/api/storage/upload?filename=${encodeURIComponent(file.name)}`, {
+      method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: buf,
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'Upload failed');
+    // Type the link into the TUI so the agent (or user) can use it right away.
+    sendInput(d.url + ' ');
+  } catch (err) { lintMsg.value = 'Upload failed: ' + err.message; }
+  finally { uploading.value = false; }
+}
 
 async function load() {
   const res = await fetch(`/api/design/${encodeURIComponent(name.value)}`);
@@ -172,6 +203,7 @@ async function rebuild() {
 onMounted(() => {
   ws.connect();
   load();
+  loadStorageConfig();
   const s = ws.socket;
   if (s) s.on('design.changed', (p) => { if (p && p.name === name.value) { load(); reloadPreview(); } });
 });

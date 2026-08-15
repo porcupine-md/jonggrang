@@ -155,11 +155,20 @@ export function useInteractiveTerminal({ projectId: _projectId, session, getSock
     termInstance.value?.dispose();
   });
 
+  // Inject text into the pty as if typed (used to drop an uploaded file's link
+  // straight onto the agent's prompt line).
+  function sendInput(data) {
+    const socket = getS();
+    if (!socket || !data) return;
+    socket.emit('pty.input', { project_id: getId(), session, data });
+  }
+
   return {
     terminalRef,
     isRunning,
     markRunning,
     markStopped,
     fit,
+    sendInput,
   };
 }

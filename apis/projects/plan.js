@@ -300,8 +300,11 @@ module.exports = function (deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const { description, deep, tool, model, effort, fileContent, fileName, base } = req.body || {};
+        const { description, deep, tool, model, effort, fileContent, fileName, base, baseline } = req.body || {};
 
+        if (baseline && !/^[A-Za-z0-9][\w.@-]*$/.test(String(baseline))) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'baseline must be a plain design/baseline id (letters, digits, . _ - @)' } });
+        }
         if (!description && !fileContent) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description or file required' } });
         }
@@ -351,6 +354,7 @@ module.exports = function (deps) {
         if (model) args.push('--model', model);
         if (effort) args.push('--effort', effort);
         if (base) args.push('--base', base);
+        if (baseline) args.push('--baseline', baseline);
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan');
         activePlan.set(project.id, { child, command: 'plan' });
@@ -386,8 +390,11 @@ module.exports = function (deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const { description, deep, tool, model, effort, base, answers } = req.body || {};
+        const { description, deep, tool, model, effort, base, answers, baseline } = req.body || {};
         if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
+        if (baseline && !/^[A-Za-z0-9][\w.@-]*$/.test(String(baseline))) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'baseline must be a plain design/baseline id (letters, digits, . _ - @)' } });
+        }
         if (!Array.isArray(answers) || answers.length === 0) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'answers must be a non-empty array' } });
         }
@@ -435,6 +442,7 @@ module.exports = function (deps) {
         if (model) args.push('--model', model);
         if (effort) args.push('--effort', effort);
         if (base) args.push('--base', base);
+        if (baseline) args.push('--baseline', baseline);
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan');
         activePlan.set(project.id, { child, command: 'plan' });

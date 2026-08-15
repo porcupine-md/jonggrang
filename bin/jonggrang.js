@@ -1143,10 +1143,10 @@ function listAvailablePlans(jonggrangDir) {
   return plans;
 }
 
-function buildUiPlanContext(sessionId, description, srcPath = null, force = false) {
+function buildUiPlanContext(sessionId, description, srcPath = null, force = false, chosenBaseline = null) {
   if (!force && !uiContext.detectUiWork(description, { srcPath })) return null;
   const audit = uiContext.auditUiProject(PROJECT_ROOT, { userRoot: path.join(os.homedir(), '.jonggrang') });
-  return uiContext.buildPlanningContext(PROJECT_ROOT, sessionId, description, audit);
+  return uiContext.buildPlanningContext(PROJECT_ROOT, sessionId, description, audit, chosenBaseline);
 }
 
 function verifyUiDraftPlan(planFile, sessionId) {
@@ -1468,6 +1468,7 @@ async function cmdPlan(args, opts = {}) {
   let answersInput = '';   // --answers <file|-> : run Pass B directly with these answers
   let answersInline = '';  // --answers-inline <base64-json> : same, sandbox/web-safe
   let noAsk = false;       // --no-ask : skip the clarification step entirely
+  let baselineId = '';     // --baseline <id> : pre-select a UI design baseline/template
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -1482,7 +1483,25 @@ async function cmdPlan(args, opts = {}) {
     else if (arg === '--answers') answersInput = args[++i] || '';
     else if (arg === '--answers-inline') answersInline = args[++i] || '';
     else if (arg === '--no-ask') noAsk = true;
+    else if (arg === '--baseline') baselineId = args[++i] || '';
+    else if (arg.startsWith('--baseline=')) baselineId = arg.slice(11);
     else if (!arg.startsWith('--')) description = arg;
+  }
+
+  // --baseline <id>: pre-select a UI design baseline/template (built-in pack or a
+  // personal ~/.jonggrang/design/<name>). Selecting it up front means the planner
+  // uses that design directly and never asks the "which starter?" question. A bare
+  // id (e.g. "helo") resolves to its single "<id>@<version>" key when unambiguous.
+  if (baselineId) {
+    const keys = uiContext.baselineKeys();
+    if (!keys.includes(baselineId)) {
+      const byId = keys.filter(k => k.split('@')[0] === baselineId);
+      if (byId.length === 1) baselineId = byId[0];
+      else {
+        logError(`Unknown --baseline "${baselineId}". Available: ${keys.join(', ') || '(none)'}.`);
+        process.exit(1);
+      }
+    }
   }
 
   // Validate --base up front: it ends up interpolated into `git fetch` at
@@ -1605,7 +1624,7 @@ async function cmdPlan(args, opts = {}) {
     }
 
     if (!isInteractiveTTY) {
-      logError('Usage: jonggrang plan "<feature-description>" [--yes]');
+      logError('Usage: jonggrang plan "<feature-description>" [--baseline <id>] [--yes]');
       process.exit(1);
     }
 
@@ -1648,9 +1667,9 @@ async function cmdPlan(args, opts = {}) {
   const questionsFile = lib.questionsFileFor(PROJECT_ROOT, sid);
   const answersFile = lib.answersFileFor(PROJECT_ROOT, sid);
   process.env.JONGGRANG_DRAFT_SESSION = sid;
-  let uiPlan = buildUiPlanContext(sid, description, srcPath);
+  let uiPlan = buildUiPlanContext(sid, description, srcPath, Boolean(baselineId), baselineId || null);
   if (uiPlan) {
-    logInfo(`UI work detected — guide ${uiPlan.guideStatus}; baseline recommendation ${uiPlan.baseline || 'needs user choice'}.`);
+    logInfo(`UI work detected — guide ${uiPlan.guideStatus}; baseline ${baselineId ? `selected ${uiPlan.baseline}` : `recommendation ${uiPlan.baseline || 'needs user choice'}`}.`);
     if ((autoApprove || noAsk) && (uiPlan.requiresBaselineConsent || !uiPlan.baseline)) {
       logError('A starter baseline cannot be selected with --yes/--no-ask before the user confirms they have no preferred UI direction or reference. Run interactive plan once, provide answers, or explicitly name a baseline id in the request.');
       process.exit(1);
@@ -3481,7 +3500,7 @@ async function cmdMenuFull(runJonggrangApp) {
           await cmdReview();
           break;
         case 'agent':
-          await cmdAgent();
+          await cmdAgent(rest);
           break;
         case 'web':
           cmdWeb();
@@ -3532,13 +3551,23 @@ function spawnJonggrang(args) {
 }
 
 async function cmdAgent(rawArgs = []) {
-  // Optional interactive seed: `agent [--readonly] <initial prompt>`. Used by the
-  // web "Discuss" mode to open the Pi TUI already primed with a plan draft and,
-  // when --readonly is set, restricted to non-mutating tools.
+  // Optional interactive seed: `agent [--readonly] [-r|-c|--session <id>] <initial prompt>`.
+  // Used by the web "Discuss" mode to open the Pi TUI already primed with a plan draft
+  // and, when --readonly is set, restricted to non-mutating tools. The resume flags map
+  // straight to Pi: -r/--resume (browse & select a prior session), -c/--continue
+  // (continue the most recent), --session <id> (a specific session). The Design studio
+  // passes -r to continue a template's prior conversation.
   let readonly = false;
+  let resumeFlag = null;   // '--resume' | '--continue'
+  let sessionId = '';
   const promptParts = [];
-  for (const a of rawArgs) {
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i];
     if (a === '--readonly') readonly = true;
+    else if (a === '-r' || a === '--resume') resumeFlag = '--resume';
+    else if (a === '-c' || a === '--continue') resumeFlag = '--continue';
+    else if (a === '--session') sessionId = rawArgs[++i] || '';
+    else if (a.startsWith('--session=')) sessionId = a.slice('--session='.length);
     else promptParts.push(a);
   }
   const initialPrompt = promptParts.join(' ').trim();
@@ -3696,6 +3725,13 @@ async function cmdAgent(rawArgs = []) {
   const piArgs = [];
   if (initialPrompt) piArgs.push(initialPrompt);
   if (readonly) piArgs.push('--tools', 'read,grep,find,ls');
+  // Resume a prior conversation. An explicit --session id wins; otherwise -r/-c map
+  // to Pi's session picker / continue-most-recent. Skipped when seeding a fresh
+  // prompt (a seeded discussion starts a new session by design).
+  if (!initialPrompt) {
+    if (sessionId) piArgs.push('--session', sessionId);
+    else if (resumeFlag) piArgs.push(resumeFlag);
+  }
   piArgs.push(...extArgs);
 
   await main(piArgs, { extensionFactories: [jonggrangExtension] });

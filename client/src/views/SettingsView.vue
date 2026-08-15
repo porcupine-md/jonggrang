@@ -182,6 +182,47 @@
       <Button :disabled="issrcSaving" @click="saveIssueSources" :icon="issrcSaving ? 'pi pi-spin pi-spinner' : 'pi pi-check'" :label="issrcSaving ? 'Saving…' : 'Save sources'" />
     </div>
 
+    <!-- Object storage (S3-compatible) -->
+    <div class="settings-card">
+      <div class="card-title"><i class="pi pi-cloud-upload" /> File Storage (S3)</div>
+      <p class="hint">S3-compatible storage for file uploads in <strong>Plan mode</strong> and the <strong>Design studio</strong>. Works with Cloudflare R2, MinIO, AWS S3, or any custom provider — an uploaded file's link is inserted for you. Keys are stored in <code>~/.jonggrang/web/storage.json</code> and never returned by the API.</p>
+      <div class="stor-grid">
+        <label class="stor-field">Provider
+          <select v-model="storage.provider" @change="applyProviderDefaults">
+            <option value="none">Disabled</option>
+            <option value="r2">Cloudflare R2</option>
+            <option value="minio">MinIO</option>
+            <option value="custom">Custom (S3-compatible)</option>
+          </select>
+        </label>
+        <label class="stor-field">Endpoint URL
+          <input v-model="storage.endpoint" placeholder="https://<account>.r2.cloudflarestorage.com" autocapitalize="off" spellcheck="false" />
+        </label>
+        <label class="stor-field">Bucket
+          <input v-model="storage.bucket" placeholder="my-bucket" autocapitalize="off" spellcheck="false" />
+        </label>
+        <label class="stor-field">Region
+          <input v-model="storage.region" placeholder="auto" autocapitalize="off" spellcheck="false" />
+        </label>
+        <label class="stor-field">Access Key ID
+          <input type="password" v-model="akInput" :placeholder="storage.has_access_key ? '•••••• (set — leave blank to keep)' : ''" autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="stor-field">Secret Access Key
+          <input type="password" v-model="skInput" :placeholder="storage.has_secret_key ? '•••••• (set — leave blank to keep)' : ''" autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="stor-field stor-wide">Public URL base <span class="stor-opt">(optional — else a 7-day presigned link is used)</span>
+          <input v-model="storage.publicUrl" placeholder="https://cdn.example.com" autocapitalize="off" spellcheck="false" />
+        </label>
+        <label class="stor-check"><input type="checkbox" v-model="storage.forcePathStyle" /> Path-style URLs (needed for MinIO / most custom endpoints)</label>
+      </div>
+      <div v-if="storError" class="error-text"><i class="pi pi-times-circle" /> {{ storError }}</div>
+      <div v-if="storOk" class="ok-text"><i class="pi pi-check-circle" /> {{ storOkMsg }}</div>
+      <div class="stor-actions">
+        <Button :disabled="storSaving" @click="saveStorage" :icon="storSaving ? 'pi pi-spin pi-spinner' : 'pi pi-check'" :label="storSaving ? 'Saving…' : 'Save'" />
+        <Button severity="secondary" :disabled="storTesting || !storage.configured" @click="testStorage" :icon="storTesting ? 'pi pi-spin pi-spinner' : 'pi pi-link'" label="Test connection" />
+      </div>
+    </div>
+
     <!-- About -->
     <div class="settings-card">
       <div class="card-title"><i class="pi pi-info-circle" /> About</div>
@@ -218,6 +259,48 @@ const workspacePath = ref('');
 const saving = ref(false);
 const saveError = ref('');
 const saveOk = ref(false);
+
+// ── Object storage (S3-compatible) ──
+const storage = reactive({ provider: 'none', endpoint: '', bucket: '', region: 'auto', publicUrl: '', forcePathStyle: true, has_access_key: false, has_secret_key: false, configured: false });
+const akInput = ref('');
+const skInput = ref('');
+const storSaving = ref(false);
+const storTesting = ref(false);
+const storError = ref('');
+const storOk = ref(false);
+const storOkMsg = ref('');
+function applyProviderDefaults() {
+  if (storage.provider === 'r2') { storage.region = storage.region || 'auto'; storage.forcePathStyle = true; }
+  else if (storage.provider === 'minio') { storage.forcePathStyle = true; }
+}
+async function loadStorage() {
+  try { const r = await fetch('/api/storage/config'); if (r.ok) Object.assign(storage, await r.json()); } catch {}
+}
+async function saveStorage() {
+  storSaving.value = true; storError.value = ''; storOk.value = false;
+  try {
+    const body = {
+      provider: storage.provider, endpoint: storage.endpoint.trim(), bucket: storage.bucket.trim(),
+      region: (storage.region || '').trim(), publicUrl: (storage.publicUrl || '').trim(), forcePathStyle: storage.forcePathStyle,
+    };
+    if (akInput.value) body.accessKeyId = akInput.value.trim();
+    if (skInput.value) body.secretAccessKey = skInput.value.trim();
+    const r = await fetch('/api/storage/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Save failed');
+    Object.assign(storage, d); akInput.value = ''; skInput.value = '';
+    storOkMsg.value = 'Saved!'; storOk.value = true; setTimeout(() => { storOk.value = false; }, 3000);
+  } catch (e) { storError.value = e.message; } finally { storSaving.value = false; }
+}
+async function testStorage() {
+  storTesting.value = true; storError.value = ''; storOk.value = false;
+  try {
+    const r = await fetch('/api/storage/test', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || 'Connection failed');
+    storOkMsg.value = 'Connection OK — bucket reachable'; storOk.value = true; setTimeout(() => { storOk.value = false; }, 3000);
+  } catch (e) { storError.value = e.message; } finally { storTesting.value = false; }
+}
 
 const sbx = reactive({ image: '', shell: '', network: '', volumes: [] });
 const sbxSaving = ref(false);
@@ -321,6 +404,7 @@ onMounted(async () => {
     if (r.ok) Object.assign(gitTok, await r.json());
   } catch {}
   await loadIssueConnections();
+  await loadStorage();
 });
 
 async function saveGitTokens() {
@@ -513,6 +597,16 @@ async function saveWorkspace() {
 }
 .input-row { display: flex; gap: 8px; }
 .hint { font-size: 11px; color: var(--jg-text-faint); margin-top: 8px; }
+/* Object-storage config grid */
+.stor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 12px 0; }
+.stor-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--jg-text-faint); }
+.stor-field.stor-wide { grid-column: 1 / -1; }
+.stor-field input, .stor-field select { background: var(--jg-bg); border: 1px solid var(--jg-border); border-radius: var(--radius); color: var(--jg-text); font-family: monospace; font-size: 12px; padding: 6px 8px; outline: none; }
+.stor-field input:focus, .stor-field select:focus { border-color: var(--jg-green); }
+.stor-opt { color: var(--jg-text-faint); font-weight: 400; opacity: 0.7; }
+.stor-check { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--jg-text-faint); }
+.stor-check input { accent-color: var(--jg-green); }
+.stor-actions { display: flex; gap: 8px; margin-top: 8px; }
 .ok-text { color: var(--jg-green); font-size: 12px; margin-top: 4px; display: flex; align-items: center; gap: 4px; }
 .ssh-status { font-size: 12px; color: var(--jg-text-muted); margin: 8px 0 4px; }
 .ssh-status strong { color: var(--jg-text); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }

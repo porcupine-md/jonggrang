@@ -68,10 +68,23 @@ jonggrang design remove <name>
 ## Reuse in `plan`
 
 `~/.jonggrang/design/*` is merged into the baseline catalog, so a personal template is
-selectable in any `plan` **by its `id@version`** — the audit recommends it, and its
-`guide-fragment` + `tokens.css.template` feed the agent's `.jonggrang/UI.md`. Built-in
-packs win on a key collision. Nothing about the plan/consent flow changes; see
-[UI planning context](UI_CONTEXT.md).
+selectable in any `plan` **by its `id@version`** — its `guide-fragment` +
+`tokens.css.template` feed the agent's `.jonggrang/UI.md`. Built-in packs win on a key
+collision. There are three ways to select it:
+
+1. **`plan --baseline <id>`** (CLI) — pre-selects the design, e.g.
+   `jonggrang plan "…" --baseline helo@1`. A bare id (`--baseline helo`) resolves to its
+   single `id@version`. Because it counts as an explicit choice, the planner uses it
+   directly and **never asks the "which starter?" question**.
+2. **Web New Plan → "design:" picker** — the New Plan form lists every built-in pack and
+   personal template (from `GET /api/baselines`; personal ones tagged *· your design*).
+   Choosing one sends `--baseline <id>` for you, so the design question is skipped — you
+   still answer any scope questions. Leave it on **auto** to let the agent recommend.
+3. **Name it in the description** — mentioning the `id@version` in the request text also
+   counts as explicit selection.
+
+If none of these is used, the audit *recommends* a baseline and the plan-ask flow asks
+for consent first. See [UI planning context](UI_CONTEXT.md).
 
 ---
 

@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const design = require('../lib/design');
+const uiContext = require('../lib/ui-context');
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => (
@@ -69,6 +70,18 @@ module.exports = function register(app, io, _ctx) {
         valid: t.valid, errors: t.errors || [], source: t.source,
       }));
       res.json({ templates, root: design.designRoot() });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // All selectable UI baselines (built-in packs + personal design templates),
+  // as `<id>@<version>` keys. Feeds the New Plan "Design" picker so a baseline
+  // can be chosen up front (plan --baseline <key>) instead of being asked for.
+  app.get('/api/baselines', (req, res) => {
+    try {
+      const baselines = uiContext.listAllBaselinePacks()
+        .filter(p => p.valid)
+        .map(p => ({ key: p.key, id: p.id, version: p.version, intent: p.intent || '', source: p.source }));
+      res.json({ baselines });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -169,15 +182,36 @@ module.exports = function register(app, io, _ctx) {
   const AGENT_IMAGE = process.env.JONGGRANG_AGENT_IMAGE || 'ghcr.io/porcupine-md/jonggrang-agent:dev';
   const DESIGN_CONTAINER = 'jonggrang-design-studio';
 
-  function resolveToolCommand(tool) {
+  // `resume` picks up the tool's prior conversation for this template instead of
+  // starting fresh (claude --resume, opencode --continue, jonggrang/pi agent -r).
+  function resolveToolCommand(tool, resume) {
     switch (tool) {
-      case 'claude':    return { cmd: 'claude',    args: ['--dangerously-skip-permissions'] };
-      case 'opencode':  return { cmd: 'opencode',  args: [] };
+      case 'claude':    return { cmd: 'claude',    args: resume ? ['--dangerously-skip-permissions', '--resume'] : ['--dangerously-skip-permissions'] };
+      case 'opencode':  return { cmd: 'opencode',  args: resume ? ['--continue'] : [] };
       case 'codex':     return { cmd: 'codex',     args: [] };
-      case 'jonggrang': return { cmd: 'jonggrang', args: ['agent'] };
+      case 'jonggrang': return { cmd: 'jonggrang', args: resume ? ['agent', '-r'] : ['agent'] };
       case 'shell':     return { cmd: 'bash',      args: [] };
       default:          return null;
     }
+  }
+
+  // Studio session ledger: remembers which (template, tool, mode) combos have had a
+  // TUI opened, so the NEXT open resumes instead of starting a new conversation.
+  // Kept in ~/.jonggrang/web/ (outside the design store the preview watcher watches).
+  // Keyed by mode because sandbox (cwd /root/…) and host (cwd ~/…) sessions are
+  // stored under different cwd keys by the tools and are not cross-resumable.
+  function designSessionsFile() { return path.join(os.homedir(), '.jonggrang', 'web', 'design-sessions.json'); }
+  function readDesignSessions() { try { return JSON.parse(fs.readFileSync(designSessionsFile(), 'utf8')); } catch { return {}; } }
+  function designSessionKey(name, tool, sandbox) { return `${name}::${tool}::${sandbox ? 'sandbox' : 'host'}`; }
+  function hasDesignSession(name, tool, sandbox) { return Boolean(readDesignSessions()[designSessionKey(name, tool, sandbox)]); }
+  function markDesignSession(name, tool, sandbox) {
+    try {
+      const f = designSessionsFile();
+      const s = readDesignSessions();
+      s[designSessionKey(name, tool, sandbox)] = true;
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, JSON.stringify(s, null, 2));
+    } catch { /* best-effort ledger */ }
   }
 
   // Harness/config + design-store mounts (mirror the project sandbox DEFAULT_VOLUMES).
@@ -209,7 +243,11 @@ module.exports = function register(app, io, _ctx) {
   }
 
   function spawnDesign(name, tool, cols, rows, sandbox) {
-    const resolved = resolveToolCommand(tool);
+    // Auto-resume: if this template+tool+mode has been opened before, launch the
+    // tool with its resume/continue flag so it continues the prior conversation.
+    const canResume = tool !== 'shell';
+    const resume = canResume && hasDesignSession(name, tool, !!sandbox);
+    const resolved = resolveToolCommand(tool, resume);
     if (!resolved) throw new Error(`unsupported tool: ${tool}`);
     const key = `design:${name}`;
     if (designPtys.has(key)) { try { designPtys.get(key).kill(); } catch { /* ignore */ } designPtys.delete(key); }
@@ -226,6 +264,8 @@ module.exports = function register(app, io, _ctx) {
         { name: 'xterm-256color', ...dims, cwd: dir, env: { ...process.env, TERM: 'xterm-256color' } });
     }
     designPtys.set(key, proc);
+    // Record the session so the next open of this template+tool+mode resumes.
+    if (canResume) markDesignSession(name, tool, !!sandbox);
     proc.onData(data => { if (io && io.emit) io.emit('pty.data', { project_id: key, session: 'design', data }); });
     proc.onExit(({ exitCode }) => { designPtys.delete(key); if (io && io.emit) io.emit('pty.exit', { project_id: key, session: 'design', exitCode }); });
     return proc;

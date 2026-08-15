@@ -92,6 +92,7 @@ jonggrang work "feature" --yes       # Full pipeline in one command
 jonggrang plan "feature" --src docs/brd.md  # Reference source document for the agent to read
 jonggrang plan "feature" --deep      # 3-phase deep analysis (risks, alternatives)
 jonggrang plan "feature" --base develop  # Cut the worktree from a chosen branch (fetched fresh from origin)
+jonggrang plan "feature" --baseline helo@1  # Style from a design template / baseline pack (skips the design question); web = the "design:" picker
 jonggrang plan "feature" --no-ask    # Skip the agent's clarifying-questions step
 jonggrang plan --append feat-abc123 "also add rate limiting"  # Extend an approved plan (tasks appended, numbering continues)
 jonggrang plan --append feat-abc123 "..." --deep  # Deep analysis on the added scope (Affected Areas / Risks)
