@@ -70,6 +70,7 @@ Phase 2 — jonggrang approve   (or `jonggrang approve --session <id>` / auto-tr
 | `jonggrang plan "feat" --yes` | Plan + auto-approve + tasks (no interactive prompt) |
 | `jonggrang plan "feat" --deep` | Deep mode: 3-phase analysis → enriched plan.md |
 | `jonggrang plan "feat" --deep --yes` | Deep mode + auto-approve in one shot |
+| `jonggrang plan "feat" --baseline helo@1` | Pre-select a UI design template / baseline pack (built-in or `~/.jonggrang/design/*`) — planner styles from it and skips the "which starter?" question. Bare id (`--baseline helo`) resolves to `helo@1`. In the web New Plan form this is the **"design:"** picker. |
 | `jonggrang plan` | No description → picker: list all pending + archived plans |
 | `jonggrang work "feat" --yes` | Full pipeline: plan → approve → execute |
 | `jonggrang work --ignore-plan` | Skip pending plan warning, run existing tasks |

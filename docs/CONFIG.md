@@ -363,6 +363,8 @@ Persistent orchestration state for a feature run. Located at:
 | `JONGGRANG_MODEL` | Override default model (backend-specific format) | from config |
 | `JONGGRANG_EFFORT` | Override default effort/thinking level | from config |
 | `JONGGRANG_PROJECT_ROOT` | Explicit project root for hook resolution | `process.cwd()` |
+| `JONGGRANG_DESIGN_HOME` | Design-template store location (see [DESIGN.md](DESIGN.md)) | `~/.jonggrang/design` |
+| `JONGGRANG_AGENT_IMAGE` | Agent image for the Design studio sandbox container | `ghcr.io/porcupine-md/jonggrang-agent:dev` |
 | `JONGGRANG_HOOKS_DIR` | Path to hooks/ directory | auto-resolved |
 | `JONGGRANG_COMPACTION_THRESHOLD` | Override block threshold (0-1) | 0.85 |
 | `JONGGRANG_WEB_PORT` | `jonggrang web` dashboard port (also `--port`) | `7777` |
@@ -410,3 +412,32 @@ CLI dependency). The created plan references its source issue via a marker comme
 (`<!-- jonggrang-source: {…} -->`) plus a visible `Imported from issue owner/repo#N`
 link in the plan body; the plans list parses either to show a link on the plan card.
 See [`docs/UI.md`](UI.md) for the menu/flow.
+
+---
+
+## File storage — `~/.jonggrang/web/storage.json`
+
+S3-compatible object storage for **file uploads** in Plan mode and the Design studio.
+Configured under **Settings ▸ File Storage (S3)** (web dashboard). Works with Cloudflare
+R2, MinIO, AWS S3, or any custom S3 endpoint. Secrets live only in this file (user home,
+never the repo); the `GET /api/storage/config` endpoint returns whether keys are set, never
+the values.
+
+```jsonc
+{
+  "provider": "r2",                 // r2 | minio | custom | none (label only)
+  "endpoint": "https://<acct>.r2.cloudflarestorage.com/",
+  "bucket": "my-bucket",
+  "region": "auto",                 // R2 = "auto"
+  "forcePathStyle": true,           // required for MinIO / most custom endpoints
+  "publicUrl": "",                  // optional CDN/base URL; blank ⇒ 7-day presigned link
+  "accessKeyId": "…",               // secret — masked by the API
+  "secretAccessKey": "…"            // secret — masked by the API
+}
+```
+
+Endpoints (all global): `GET/PUT /api/storage/config`, `POST /api/storage/test`,
+`POST /api/storage/upload` (raw body; `?filename=` + `Content-Type`) → `{ key, url, filename }`.
+An upload returns a shareable link: the `publicUrl` base when set, else a 7-day presigned
+GET URL. **Plan mode** inserts the link into the description textbox; the **Design studio**
+types it into the running TUI.
