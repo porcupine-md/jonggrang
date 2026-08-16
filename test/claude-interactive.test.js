@@ -154,6 +154,47 @@ test('TuiTranscript: escape sequence split across chunks does not leak', () => {
   assert.deepStrictEqual(out, ['green text']);
 });
 
+// Claude Code lays a line out with absolute-column jumps and emits no literal
+// spaces, so stripping escapes alone glues every word together.
+test('renderTuiLine: column jumps become the spacing they represent', () => {
+  const line = '\u001B[2GQuick\u001B[8Gsafety\u001B[15Gcheck';
+  assert.strictEqual(lib.renderTuiLine(line), ' Quick safety check');
+});
+
+test('renderTuiLine: cursor-forward pads, erase-in-line clears stale text', () => {
+  assert.strictEqual(lib.renderTuiLine('ab\u001B[3Ccd'), 'ab   cd');
+  assert.strictEqual(lib.renderTuiLine('stale text\u001B[1G\u001B[Kfresh'), 'fresh');
+});
+
+test('renderTuiLine: a vertical move ends the rendered row', () => {
+  assert.deepStrictEqual(lib.renderTuiLine('first\u001B[1Asecond').split('\n'), ['first', 'second']);
+});
+
+// Fixtures are real pty captures of Claude Code 2.1.233 taken inside the agent
+// container — the regression guard for anything that touches the renderer.
+function transcribeFixture(name) {
+  const raw = fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
+  const out = [];
+  const t = new lib.TuiTranscript({ onLine: l => out.push(l) });
+  for (let i = 0; i < raw.length; i += 97) t.push(raw.slice(i, i + 97));   // exercise chunk splits
+  t.flush();
+  return out;
+}
+
+test('real TUI capture: the model answer survives, spacing is restored', () => {
+  const out = transcribeFixture('claude-tui-session.txt');
+  const text = out.join('\n');
+  assert.ok(text.includes('PROBE_OK'), `answer missing from transcript:\n${text}`);
+  assert.ok(text.includes('Claude Code v2.1.233'), `banner words glued together:\n${text}`);
+  assert.ok(out.length <= 12, `too much spinner noise survived (${out.length} lines):\n${text}`);
+});
+
+test('real TUI capture: the trust dialog renders and stays detectable', () => {
+  const text = transcribeFixture('claude-tui-trust-prompt.txt').join('\n');
+  assert.ok(/Quick safety check/.test(text), `trust prompt missing:\n${text}`);
+  assert.ok(text.includes('Yes, I trust this folder'), `trust option missing:\n${text}`);
+});
+
 test('TuiTranscript: partial line is held until it completes', () => {
   const out = [];
   const t = new lib.TuiTranscript({ onLine: l => out.push(l.trim()) });
@@ -167,7 +208,11 @@ test('TuiTranscript: partial line is held until it completes', () => {
 
 const FAST = { idleSec: 1, minRuntimeMs: 0, exitGraceMs: 200, killGraceMs: 400 };
 
-testAsync('runClaudeInteractive: forwards flags, prompt and cwd to the CLI', async () => {
+// REGRESSION: `--add-dir <directories...>` is variadic, so a trailing prompt is
+// parsed as a second directory. The TUI then opens with an empty input box, the
+// session idles out, and the run reports success having done nothing. The prompt
+// must be the last argv entry and must not follow a variadic flag.
+testAsync('runClaudeInteractive: prompt is passed as argv without --add-dir swallowing it', async () => {
   const root = tmpProject();
   const { bin, argvFile } = fakeClaude(root, 'echo "hello from claude"\nexit 0');
   const prevPath = process.env.PATH;
@@ -182,7 +227,60 @@ testAsync('runClaudeInteractive: forwards flags, prompt and cwd to the CLI', asy
     });
     assert.strictEqual(code, 0);
     const argv = fs.readFileSync(argvFile, 'utf8').split('\n').filter(Boolean);
-    assert.deepStrictEqual(argv, ['--dangerously-skip-permissions', '--add-dir', root, '--model', 'opus', 'do the thing']);
+    assert.deepStrictEqual(argv, ['--dangerously-skip-permissions', '--model', 'opus', 'do the thing']);
+    assert.ok(!argv.includes('--add-dir'), 'interactive mode must not pass the variadic --add-dir');
+    assert.strictEqual(argv[argv.length - 1], 'do the thing', 'prompt must be the final argv entry');
+  } finally { process.env.PATH = prevPath; }
+});
+
+// The folder-trust dialog looks exactly like a finished turn to an idle detector,
+// so an unanswered one silently produces a no-op run.
+testAsync('runClaudeInteractive: auto-confirms the folder-trust dialog in autonomous mode', async () => {
+  const root = tmpProject();
+  const { bin } = fakeClaude(root, [
+    'echo "Quick safety check: Is this a project you created or one you trust?"',
+    'echo "1. Yes, I trust this folder"',
+    'read _answer',                      // blocks until the Enter we send
+    'echo "TRUST_CONFIRMED"',
+    'exit 0',
+  ].join('\n'));
+  const prevPath = process.env.PATH;
+  process.env.PATH = `${bin}:${prevPath}`;
+  const chunks = [];
+  try {
+    const code = await lib.runClaudeInteractive({
+      prompt: 'p',
+      permFlags: lib.claudePermissionFlags('autonomous'),
+      projectRoot: root,
+      textChunks: chunks,
+      ...FAST,
+      idleSec: 20,                       // must finish by answering, not by idling out
+    });
+    assert.strictEqual(code, 0);
+    assert.ok(chunks.join('').includes('TRUST_CONFIRMED'),
+      `trust prompt was not answered: ${JSON.stringify(chunks.join(''))}`);
+  } finally { process.env.PATH = prevPath; }
+});
+
+testAsync('runClaudeInteractive: leaves the trust dialog alone outside autonomous mode', async () => {
+  const root = tmpProject();
+  const { bin } = fakeClaude(root, [
+    'echo "Quick safety check: Is this a project you created or one you trust?"',
+    'sleep 30',
+  ].join('\n'));
+  const prevPath = process.env.PATH;
+  process.env.PATH = `${bin}:${prevPath}`;
+  const chunks = [];
+  try {
+    await lib.runClaudeInteractive({
+      prompt: 'p',
+      permFlags: lib.claudePermissionFlags('supervised'),
+      projectRoot: root,
+      textChunks: chunks,
+      ...FAST,
+    });
+    assert.ok(!chunks.join('').includes('confirming automatically'),
+      'supervised mode must not answer the trust dialog on the user\'s behalf');
   } finally { process.env.PATH = prevPath; }
 });
 
@@ -259,7 +357,9 @@ testAsync('runClaudeInteractive: concurrent sessions stay isolated', async () =>
       assert.ok(text.includes(`session ${i} in `), `session ${i} got the wrong transcript: ${JSON.stringify(text)}`);
       const argv = fs.readFileSync(fakes[i].argvFile, 'utf8').split('\n').filter(Boolean);
       assert.ok(argv.includes(`prompt ${i}`), `session ${i} got the wrong prompt: ${argv}`);
-      assert.ok(argv.includes(root), `session ${i} ran outside its own project root: ${argv}`);
+      // cwd isolation: the fake echoes its own pwd, which must be this session's root.
+      assert.ok(text.includes(path.basename(root)),
+        `session ${i} ran outside its own project root: ${JSON.stringify(text)}`);
     }
   } finally { process.env.PATH = prevPath; }
 });
