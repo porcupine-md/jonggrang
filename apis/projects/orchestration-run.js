@@ -499,11 +499,16 @@ module.exports = function(deps) {
             ...(group.extraArgs || []),
         ];
 
+        // Interactive runs mirror their pty to the dashboard under this session
+        // key, so the agent's TUI can be watched and typed into live.
+        const ptySession = `work:${group.featureId}`;
+
         if (ctx.mode === 'container') {
             const envFlags = [];
             const env = {
                 JONGGRANG_PROJECT_ROOT: group.worktreePath,
                 JONGGRANG_MODE: 'autonomous',
+                JONGGRANG_PTY_SESSION: ptySession,
                 NO_UPDATE_NOTIFIER: '1',
                 FORCE_COLOR: '0',
                 ...secretVars,
@@ -525,12 +530,38 @@ module.exports = function(deps) {
                 JONGGRANG_HOME,
                 JONGGRANG_PROJECT_ROOT: group.worktreePath,
                 JONGGRANG_MODE: 'autonomous',
+                JONGGRANG_PTY_SESSION: ptySession,
                 NO_UPDATE_NOTIFIER: '1',
                 FORCE_COLOR: '0',
                 ...secretVars,
             },
             stdio: ['pipe', 'pipe', 'pipe'],
         });
+    }
+
+    // Raw terminal scrollback for a plan's live agent session. Bounded, because
+    // a TUI repaints constantly — a tab opened mid-run replays this and then
+    // follows the socket stream.
+    const PTY_SCROLLBACK_MAX = 256 * 1024;
+
+    function pushPtyScrollback(group, text) {
+        group.ptyBuffer = (group.ptyBuffer || '') + text;
+        if (group.ptyBuffer.length > PTY_SCROLLBACK_MAX) {
+            group.ptyBuffer = group.ptyBuffer.slice(-PTY_SCROLLBACK_MAX);
+        }
+    }
+
+    // Send a control frame down the worker's stdin — how keystrokes reach the pty.
+    function sendPtyFrame(group, frame) {
+        const stdin = group?.child?.stdin;
+        if (!stdin || stdin.destroyed) return false;
+        try { stdin.write(`${JSON.stringify(frame)}\n`); return true; } catch { return false; }
+    }
+
+    function groupForSession(projectId, session) {
+        const run = activeRuns.get(projectId);
+        if (!run || typeof session !== 'string' || !session.startsWith('work:')) return null;
+        return run.groups?.[session.slice('work:'.length)] || null;
     }
 
     function pushLog(group, line) {
@@ -703,6 +734,18 @@ module.exports = function(deps) {
                     emitFeatureProgress(project, group);
                     continue;
                 }
+                // Raw pty bytes from an interactive agent session — relayed to the
+                // browser terminal and kept as scrollback for tabs opened later.
+                if (signal && signal.type === 'pty_data' && signal.b64) {
+                    const text = Buffer.from(signal.b64, 'base64').toString('utf8');
+                    pushPtyScrollback(group, text);
+                    emit(project.id, 'pty.data', { project_id: project.id, session: signal.session, data: text });
+                    continue;
+                }
+                if (signal && signal.type === 'pty_exit') {
+                    emit(project.id, 'pty.exit', { project_id: project.id, session: signal.session, code: signal.code });
+                    continue;
+                }
                 pushLog(group, trimmed);
                 emit(project.id, 'orchestration.group.log', { feature_id: group.featureId, stream, line: trimmed });
             }
@@ -809,6 +852,23 @@ module.exports = function(deps) {
         if (compact === false) return ['--full'];
         return [];
     }
+
+    // Keystrokes and resizes from the browser terminal, routed to the worker
+    // that owns that plan's pty. The agent keeps driving its own input; this
+    // just lets a human type into the same session.
+    io.on('connection', (socket) => {
+        socket.on('pty.input', ({ project_id, session, data }) => {
+            const group = groupForSession(project_id, session);
+            if (!group || !data) return;
+            sendPtyFrame(group, { type: 'pty_input', b64: Buffer.from(String(data), 'utf8').toString('base64') });
+        });
+
+        socket.on('pty.resize', ({ project_id, session, cols, rows }) => {
+            const group = groupForSession(project_id, session);
+            if (!group || !(cols > 0) || !(rows > 0)) return;
+            sendPtyFrame(group, { type: 'pty_resize', cols, rows });
+        });
+    });
 
     // ── routes ────────────────────────────────────────────────────
 
@@ -997,6 +1057,19 @@ module.exports = function(deps) {
         const project = projectOr404(req, res);
         if (!project) return;
         res.json(currentRunView(project) || { project_id: project.id, status: 'idle', groups: [] });
+    });
+
+    // Terminal scrollback for a plan's live agent session — replayed when a tab
+    // is opened mid-run, before the socket stream takes over.
+    router.get('/:id/orchestration/groups/:featureId/pty', (req, res) => {
+        const project = projectOr404(req, res);
+        if (!project) return;
+        const group = activeRuns.get(project.id)?.groups?.[req.params.featureId];
+        res.json({
+            session: `work:${req.params.featureId}`,
+            running: !!(group && group.status === 'running'),
+            data: group?.ptyBuffer || '',
+        });
     });
 
     router.get('/:id/orchestration/groups/:featureId/diff', (req, res) => {
