@@ -493,14 +493,22 @@ module.exports = function(deps) {
         // Pass the group's featureId explicitly so the worker resolves its feature
         // deterministically instead of guessing from a bare task id (per-feature
         // numbering makes task-001 recur across features).
-        const workerArgs = group.workerArgs
-            || ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--branch', group.branch, '--feature', group.featureId];
+        const workerArgs = [
+            ...(group.workerArgs
+                || ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--branch', group.branch, '--feature', group.featureId]),
+            ...(group.extraArgs || []),
+        ];
+
+        // Interactive runs mirror their pty to the dashboard under this session
+        // key, so the agent's TUI can be watched and typed into live.
+        const ptySession = `work:${group.featureId}`;
 
         if (ctx.mode === 'container') {
             const envFlags = [];
             const env = {
                 JONGGRANG_PROJECT_ROOT: group.worktreePath,
                 JONGGRANG_MODE: 'autonomous',
+                JONGGRANG_PTY_SESSION: ptySession,
                 NO_UPDATE_NOTIFIER: '1',
                 FORCE_COLOR: '0',
                 ...secretVars,
@@ -522,12 +530,38 @@ module.exports = function(deps) {
                 JONGGRANG_HOME,
                 JONGGRANG_PROJECT_ROOT: group.worktreePath,
                 JONGGRANG_MODE: 'autonomous',
+                JONGGRANG_PTY_SESSION: ptySession,
                 NO_UPDATE_NOTIFIER: '1',
                 FORCE_COLOR: '0',
                 ...secretVars,
             },
             stdio: ['pipe', 'pipe', 'pipe'],
         });
+    }
+
+    // Raw terminal scrollback for a plan's live agent session. Bounded, because
+    // a TUI repaints constantly — a tab opened mid-run replays this and then
+    // follows the socket stream.
+    const PTY_SCROLLBACK_MAX = 256 * 1024;
+
+    function pushPtyScrollback(group, text) {
+        group.ptyBuffer = (group.ptyBuffer || '') + text;
+        if (group.ptyBuffer.length > PTY_SCROLLBACK_MAX) {
+            group.ptyBuffer = group.ptyBuffer.slice(-PTY_SCROLLBACK_MAX);
+        }
+    }
+
+    // Send a control frame down the worker's stdin — how keystrokes reach the pty.
+    function sendPtyFrame(group, frame) {
+        const stdin = group?.child?.stdin;
+        if (!stdin || stdin.destroyed) return false;
+        try { stdin.write(`${JSON.stringify(frame)}\n`); return true; } catch { return false; }
+    }
+
+    function groupForSession(projectId, session) {
+        const run = activeRuns.get(projectId);
+        if (!run || typeof session !== 'string' || !session.startsWith('work:')) return null;
+        return run.groups?.[session.slice('work:'.length)] || null;
     }
 
     function pushLog(group, line) {
@@ -700,6 +734,18 @@ module.exports = function(deps) {
                     emitFeatureProgress(project, group);
                     continue;
                 }
+                // Raw pty bytes from an interactive agent session — relayed to the
+                // browser terminal and kept as scrollback for tabs opened later.
+                if (signal && signal.type === 'pty_data' && signal.b64) {
+                    const text = Buffer.from(signal.b64, 'base64').toString('utf8');
+                    pushPtyScrollback(group, text);
+                    emit(project.id, 'pty.data', { project_id: project.id, session: signal.session, data: text });
+                    continue;
+                }
+                if (signal && signal.type === 'pty_exit') {
+                    emit(project.id, 'pty.exit', { project_id: project.id, session: signal.session, code: signal.code });
+                    continue;
+                }
                 pushLog(group, trimmed);
                 emit(project.id, 'orchestration.group.log', { feature_id: group.featureId, stream, line: trimmed });
             }
@@ -757,6 +803,7 @@ module.exports = function(deps) {
             startedAt: new Date().toISOString(), finishedAt: null, exitCode: null,
             committed: false, pushed: false, error: null, logTail: [],
             workerArgs: opts.workerArgs || null,
+            extraArgs: opts.extraArgs || null,
             child: null, manifestSync: null,
         };
         run.groups[g.featureId] = group;
@@ -794,6 +841,34 @@ module.exports = function(deps) {
         prepareContainerGit(ctx);
         return true;
     }
+
+    // Per-run pipeline override from the dashboard. `compact: true` stops the
+    // worker after Implement (gates deferred, memory still written); `false`
+    // forces the full pipeline. Omitted → the project's
+    // orchestration.pipeline_mode decides.
+    function pipelineFlags(req) {
+        const compact = (req.body || {}).compact;
+        if (compact === true) return ['--compact'];
+        if (compact === false) return ['--full'];
+        return [];
+    }
+
+    // Keystrokes and resizes from the browser terminal, routed to the worker
+    // that owns that plan's pty. The agent keeps driving its own input; this
+    // just lets a human type into the same session.
+    io.on('connection', (socket) => {
+        socket.on('pty.input', ({ project_id, session, data }) => {
+            const group = groupForSession(project_id, session);
+            if (!group || !data) return;
+            sendPtyFrame(group, { type: 'pty_input', b64: Buffer.from(String(data), 'utf8').toString('base64') });
+        });
+
+        socket.on('pty.resize', ({ project_id, session, cols, rows }) => {
+            const group = groupForSession(project_id, session);
+            if (!group || !(cols > 0) || !(rows > 0)) return;
+            sendPtyFrame(group, { type: 'pty_resize', cols, rows });
+        });
+    });
 
     // ── routes ────────────────────────────────────────────────────
 
@@ -849,7 +924,7 @@ module.exports = function(deps) {
 
         const run = ensureRun(project, ctx.mode);
         try {
-            startGroup(project, ctx, run, g);
+            startGroup(project, ctx, run, g, { extraArgs: pipelineFlags(req) });
         } catch (err) {
             return res.status(500).json({ error: { code: 'WORKTREE_ERROR', message: err.message } });
         }
@@ -859,7 +934,7 @@ module.exports = function(deps) {
     });
 
     // Shared guard + spawn for the single-task and resume variants below.
-    async function startGroupVariant(req, res, buildArgs, fallbackTitle) {
+    async function startGroupVariant(req, res, buildArgs, fallbackTitle, extraArgs = null) {
         const project = projectOr404(req, res);
         if (!project) return;
         const fid = req.params.featureId;
@@ -885,7 +960,7 @@ module.exports = function(deps) {
         const g = { featureId: info.featureId, branch: info.branch, title: built.title || fallbackTitle, taskIds: built.taskIds || [] };
         try {
             const workerArgs = [...built.args, '--branch', info.branch];
-            startGroup(project, ctx, run, g, { workerArgs });
+            startGroup(project, ctx, run, g, { workerArgs, extraArgs: extraArgs || pipelineFlags(req) });
         } catch (err) {
             return res.status(500).json({ error: { code: 'WORKTREE_ERROR', message: err.message } });
         }
@@ -908,11 +983,13 @@ module.exports = function(deps) {
 
     // Resume the pipeline phases (Simplify → … → Completion) in the worktree:
     // `jonggrang work --resume`. Used when all tasks are done but the phase
-    // machine stopped at Implement (worktree workers skip post-work phases).
+    // machine stopped at Implement — either because the worktree run ended
+    // there, or because compact mode deferred the gates. `--full` makes sure a
+    // project that defaults to compact does not immediately stop again.
     router.post('/:id/orchestration/groups/:featureId/resume', (req, res) => {
         return startGroupVariant(req, res,
             () => ({ args: ['work', '--worktree', '--resume'], title: 'resume pipeline' }),
-            'resume pipeline');
+            'resume pipeline', ['--full']);
     });
 
     // Cancel ONE plan's group.
@@ -954,8 +1031,9 @@ module.exports = function(deps) {
         if (!await readyCtx(project, ctx, res)) return;
 
         const run = ensureRun(project, ctx.mode);
+        const extraArgs = pipelineFlags(req);
         try {
-            for (const g of groups) startGroup(project, ctx, run, g);
+            for (const g of groups) startGroup(project, ctx, run, g, { extraArgs });
         } catch (err) {
             return res.status(500).json({ error: { code: 'WORKTREE_ERROR', message: err.message } });
         }
@@ -979,6 +1057,19 @@ module.exports = function(deps) {
         const project = projectOr404(req, res);
         if (!project) return;
         res.json(currentRunView(project) || { project_id: project.id, status: 'idle', groups: [] });
+    });
+
+    // Terminal scrollback for a plan's live agent session — replayed when a tab
+    // is opened mid-run, before the socket stream takes over.
+    router.get('/:id/orchestration/groups/:featureId/pty', (req, res) => {
+        const project = projectOr404(req, res);
+        if (!project) return;
+        const group = activeRuns.get(project.id)?.groups?.[req.params.featureId];
+        res.json({
+            session: `work:${req.params.featureId}`,
+            running: !!(group && group.status === 'running'),
+            data: group?.ptyBuffer || '',
+        });
     });
 
     router.get('/:id/orchestration/groups/:featureId/diff', (req, res) => {

@@ -14,10 +14,13 @@ module.exports = function(deps) {
             return res.status(409).json({ error: { code: 'PROCESS_ALREADY_RUNNING', message: 'A work process is already running' } });
         }
 
-        const { task_id, resume } = req.body || {};
+        const { task_id, resume, compact } = req.body || {};
         const args = ['work'];
         if (resume) args.push('--resume');
         else if (task_id) args.push('--task', task_id);
+        // Per-run pipeline override; omitted → orchestration.pipeline_mode decides.
+        if (compact === true) args.push('--compact');
+        else if (compact === false) args.push('--full');
         const child = spawnForProject(project, args);
         activeWork.set(project.id, child);
 

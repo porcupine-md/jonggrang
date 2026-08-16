@@ -99,6 +99,8 @@ jonggrang plan --append feat-abc123 "..." --deep  # Deep analysis on the added s
 jonggrang approve --session draft-abc123  # Approve a specific pending draft
 jonggrang approve --feature feat-abc123    # Decompose the draft into an EXISTING feature (append)
 jonggrang work --mode autonomous     # Override autonomy mode
+jonggrang work --compact             # Stop after Implement, defer the quality gates (memory still written)
+jonggrang work --resume --full       # Run the gates a compact run deferred
 jonggrang work --task task-003       # Execute specific task only
 jonggrang work --feature feat-abc123 # Target a specific approved feature (multi-feature projects)
 ```

@@ -21,6 +21,9 @@
             <i class="pi pi-stop" /> Cancel
           </button>
         </div>
+        <label class="work-compact" title="Stop after Implement and defer the quality gates. Memory is still written; run the gates later from the Pipeline view.">
+          <input type="checkbox" v-model="compactRun" :disabled="groupRunning" /> Compact pipeline
+        </label>
         <div v-if="worktreeStatus === 'creating'" class="work-wt-note"><i class="pi pi-spin pi-spinner" /> preparing worktree…</div>
         <div v-if="worktreeStatus === 'error'" class="work-wt-note work-wt-note--err">{{ worktreeError }}</div>
         <div v-if="runError" class="work-wt-note work-wt-note--err">{{ runError }}</div>
@@ -173,6 +176,9 @@ const worktreeStatus = ref('idle');    // idle | creating | ready | error
 const worktreeError = ref('');
 const runBusy = ref(false);
 const runError = ref('');
+// Per-run pipeline choice. Seeded from the project's orchestration.pipeline_mode
+// so the checkbox shows what would actually happen, and sent explicitly on start.
+const compactRun = ref(false);
 
 const group = computed(() => featureId.value ? orchestration.groups[featureId.value] : null);
 const groupRunning = computed(() => ['running', 'queued'].includes(group.value?.status));
@@ -201,6 +207,16 @@ const stateSeverity = computed(() => {
 });
 
 // ── Work Mode actions ─────────────────────────────────────────
+
+// Seed the compact checkbox from the project default (orchestration.pipeline_mode).
+async function loadPipelineDefault() {
+  try {
+    const res = await fetch(`/api/projects/${id.value}/settings`);
+    if (!res.ok) return;
+    const data = await res.json();
+    compactRun.value = data.jonggrang_config?.orchestration?.pipeline_mode === 'compact';
+  } catch { /* keep the current choice */ }
+}
 
 async function loadWorkPlan(fid) {
   try {
@@ -243,6 +259,7 @@ async function enterWorkMode(fid) {
   workPlan.value = null;
   manifest.fetch(id.value, fid);
   loadWorkPlan(fid);
+  loadPipelineDefault();
   refreshOrchestration();
   ensureWorktree(fid);
 }
@@ -253,7 +270,11 @@ async function startRun() {
   try {
     // Failed pipeline → resume (jonggrang work --resume) instead of a fresh start.
     const action = manifestFailed.value ? 'resume' : 'start';
-    const res = await fetch(`/api/projects/${id.value}/orchestration/groups/${featureId.value}/${action}`, { method: 'POST' });
+    const res = await fetch(`/api/projects/${id.value}/orchestration/groups/${featureId.value}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ compact: compactRun.value }),
+    });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || 'Failed to start run');
     if (data.run) orchestration.onStarted(data.run);
@@ -376,6 +397,11 @@ async function onInitDone() {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .work-run-row { display: flex; align-items: center; gap: 8px; }
+.work-compact {
+  display: flex; align-items: center; gap: 5px; margin-top: 6px;
+  font-size: 10px; color: var(--jg-text-faint); cursor: pointer; user-select: none;
+}
+.work-compact input { accent-color: var(--jg-green); cursor: pointer; }
 .work-status {
   font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;
   padding: 2px 6px; border: 1px solid var(--jg-border); color: var(--jg-text-faint);

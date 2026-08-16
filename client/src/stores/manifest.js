@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 
+// Must match lib/orchestration.js COMPACT_SKIP_REASON.
+const COMPACT_SKIP_REASON = 'compact-mode';
+
 // Must match lib/orchestration.js PHASES (17 phases). Phase 9 = Simplify.
 const PHASES = [
   { num: 1,  name: 'Setup',        role: 'Lead' },
@@ -37,10 +40,21 @@ export const useManifestStore = defineStore('manifest', () => {
       if (!active.has(p.num)) return { ...p, status: 'skipped' };
       const s = phaseStates[String(p.num)];
       if (s?.status === 'completed') return { ...p, status: 'completed', completed_at: s.completed_at };
+      // Compact mode defers the gates instead of running them — they are still
+      // runnable later, so they read as "deferred", not "skipped".
+      if (s?.status === 'skipped') {
+        return s.skip_reason === COMPACT_SKIP_REASON
+          ? { ...p, status: 'deferred' }
+          : { ...p, status: 'skipped' };
+      }
       if (p.num === current) return { ...p, status: 'in_progress', started_at: s?.started_at };
       return { ...p, status: 'pending' };
     });
   });
+
+  // Phases a compact run stopped short of — the "Run quality gates" affordance.
+  const deferredPhases = computed(() => phases.value.filter(p => p.status === 'deferred'));
+  const isCompact = computed(() => data.value?.pipeline_mode === 'compact');
 
   async function fetch(pid, fid = null) {
     projectId.value = pid;
@@ -67,5 +81,5 @@ export const useManifestStore = defineStore('manifest', () => {
     featureId.value = null;
   }
 
-  return { data, projectId, featureId, phases, fetch, update, clear };
+  return { data, projectId, featureId, phases, deferredPhases, isCompact, fetch, update, clear };
 });

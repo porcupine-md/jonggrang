@@ -39,6 +39,36 @@ Optionally override `model` and `effort` for a specific backend. These take prec
 }
 ```
 
+#### `tools.claude.execution` — Headless or interactive Claude Code
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `tools.claude.execution` | string | `headless` | `headless` runs `claude -p` (print mode, JSON stream). `interactive` runs the real Claude Code TUI inside a pty. |
+| `tools.claude.idle_timeout_sec` | number | `15` | Interactive only: a pty that has produced no output for this long is treated as a finished turn, and the session is closed. |
+| `tools.claude.max_runtime_sec` | number | `0` (off) | Interactive only: hard wall-clock cap for one turn. The run reports failure when the cap is hit. |
+
+```json
+{
+  "tools": {
+    "claude": {
+      "model": "sonnet",
+      "execution": "interactive",
+      "idle_timeout_sec": 15
+    }
+  }
+}
+```
+
+Interactive mode makes the agent behave like a human-driven session — background tasks and parallel subagents work as they do in the terminal. It covers **plan mode and work mode, in both host and sandbox projects**, because the switch is read inside `runAgent()` (the sandbox reads the same bind-mounted config, and worktree workers get the seeded copy).
+
+Set it from the dashboard under **Project → Settings → Claude execution**, or by hand in `.jonggrang/jonggrang.json`. `JONGGRANG_CLAUDE_EXEC=interactive|headless` overrides the config for one run.
+
+Interactive mode degrades to headless — with a warning, never an error — when `node-pty` cannot be loaded or the prompt is too large to pass as a single argv entry (>96 KB).
+
+**Where the log comes from.** Claude Code paints a screen, so scraping the TUI can only ever approximate it. The log is therefore read from the session's JSONL transcript (`$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/*.jsonl`), which carries the same assistant text and tool calls the headless stream-json path prints, and cannot be garbled by a redraw. If no transcript is found within 20 seconds, the run says so and falls back to the screen capture, which is lossy on wrapped or rewritten lines.
+
+> Completion in a TUI is detected by idleness, so interactive mode expects a non-blocking permission mode (`autonomous`, or `balanced`). In `supervised` mode a permission prompt looks identical to a finished turn.
+
 #### Model/effort resolution order
 
 1. `--model` / `--effort` CLI flags
@@ -101,6 +131,7 @@ Optionally override `model` and `effort` for a specific backend. These take prec
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `autonomy` | string | `balanced` | Phase-level autonomy: `supervised`, `balanced`, `autonomous` |
+| `pipeline_mode` | string | `full` | `full` runs the whole pipeline. `compact` stops after phase 8 (Implement) and defers the quality gates — memory is still written, and the gates stay resumable |
 | `pause_for_brainstorm` | boolean | `true` | Pause at phase 6 (Brainstorm) for human input |
 | `max_phase_retries` | number | 2 | Max retries per phase before marking failed |
 | `heavy_phases` | array | `[3, 8, 13]` | Phases that trigger compaction gate check |
@@ -115,6 +146,7 @@ Example:
 {
   "orchestration": {
     "autonomy": "balanced",
+    "pipeline_mode": "full",
     "pause_for_brainstorm": true,
     "max_phase_retries": 2,
     "heavy_phases": [3, 8, 13],
@@ -232,6 +264,7 @@ Example:
   },
   "orchestration": {
     "autonomy": "balanced",
+    "pipeline_mode": "full",
     "pause_for_brainstorm": true,
     "max_phase_retries": 2,
     "heavy_phases": [3, 8, 13],

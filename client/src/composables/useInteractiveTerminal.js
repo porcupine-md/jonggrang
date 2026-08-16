@@ -26,8 +26,10 @@ const XTERM_THEME = {
   brightWhite:         '#ebe5db',
 };
 
-export function useInteractiveTerminal({ projectId: _projectId, session, getSocket }) {
+export function useInteractiveTerminal({ projectId: _projectId, session: _session, getSocket }) {
   const getId = () => isRef(_projectId) ? _projectId.value : _projectId;
+  // Session may be reactive: a Work Mode terminal follows the plan in the route.
+  const getSession = () => (isRef(_session) ? _session.value : (typeof _session === 'function' ? _session() : _session));
   const getS = () => typeof getSocket === 'function' ? getSocket() : getSocket;
   const terminalRef = ref(null);
   const isRunning = ref(false);
@@ -45,7 +47,7 @@ export function useInteractiveTerminal({ projectId: _projectId, session, getSock
     if (!term || !socket) return;
     socket.emit('pty.resize', {
       project_id: getId(),
-      session,
+      session: getSession(),
       cols: term.cols,
       rows: term.rows,
     });
@@ -79,12 +81,12 @@ export function useInteractiveTerminal({ projectId: _projectId, session, getSock
     if (!socket) return;
 
     ptyDataHandler = ({ project_id, session: s, data }) => {
-      if (project_id !== getId() || s !== session) return;
+      if (project_id !== getId() || s !== getSession()) return;
       termInstance.value?.write(data);
     };
 
     ptyExitHandler = ({ project_id, session: s }) => {
-      if (project_id !== getId() || s !== session) return;
+      if (project_id !== getId() || s !== getSession()) return;
       isRunning.value = false;
       termInstance.value?.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n');
     };
@@ -134,7 +136,7 @@ export function useInteractiveTerminal({ projectId: _projectId, session, getSock
     inputDisposable = terminal.onData(data => {
       const socket = getS();
       if (!isRunning.value || !socket) return;
-      socket.emit('pty.input', { project_id: getId(), session, data });
+      socket.emit('pty.input', { project_id: getId(), session: getSession(), data });
     });
 
     // Re-bind listeners whenever socket becomes available (reactive)
@@ -160,11 +162,16 @@ export function useInteractiveTerminal({ projectId: _projectId, session, getSock
   function sendInput(data) {
     const socket = getS();
     if (!socket || !data) return;
-    socket.emit('pty.input', { project_id: getId(), session, data });
+    socket.emit('pty.input', { project_id: getId(), session: getSession(), data });
   }
+
+  // Write bytes straight into the terminal — used to replay scrollback when a
+  // tab is opened mid-run, before the socket stream takes over.
+  function write(data) { if (data) termInstance.value?.write(data); }
 
   return {
     terminalRef,
+    write,
     isRunning,
     markRunning,
     markStopped,
