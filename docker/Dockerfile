@@ -57,6 +57,23 @@ RUN npm install -g --no-fund --no-audit \
 # Installed to /usr/local so it lands on PATH for every user in the container.
 # All coding agents use it to validate frontend design (see skills/core/anoa and
 # skills/library/frontend/validating-visual-design).
+#
+# The bundle carries Chromium but NOT Chromium's system dependencies — those
+# must come from the distro. This list mirrors the one in anoa's own Dockerfile.
+# Missing any of them fails at *runtime* with a dlopen error, not at build: the
+# browser starts, answers on CDP, and then renders nothing. (This is what the
+# removed `playwright install --with-deps` used to pull in as a side effect.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 libnspr4 \
+    libxcomposite1 libxdamage1 libxrandr2 libxkbcommon0 libxkbfile1 libxshmfence1 \
+    libdrm2 libasound2t64 libcups2t64 \
+    libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 \
+    libglib2.0-0t64 libdbus-1-3 \
+    libgl1 libglx-mesa0 libegl1 libgbm1 libopengl0 \
+    libfontconfig1 libfreetype6 \
+    fonts-liberation fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN curl -fsSL https://raw.githubusercontent.com/porcupine-md/anoa-browser/master/scripts/install-linux.sh \
     | bash -s -- --prefix /usr/local \
     && anoa --version
