@@ -256,6 +256,14 @@ module.exports = function register(app, io, _ctx) {
     if (sandbox) {
       ensureDesignContainer();
       const cwd = `/root/.jonggrang/design/${name}`;
+      // Ensure the working directory exists INSIDE the container before exec, so
+      // `docker exec --workdir` can never crash with an OCI "chdir … no such file
+      // or directory" error. The design store is bind-mounted (~/.jonggrang), so
+      // when the mount is live this is a no-op against the already-present template;
+      // it only materializes the dir when the container's mounted view lags/misses
+      // it (e.g. a just-created template, or a stale mount after ~/.jonggrang was
+      // recreated). Best-effort: a failure here just falls through to the exec.
+      try { execFileSync('docker', ['exec', DESIGN_CONTAINER, 'mkdir', '-p', cwd], { stdio: 'ignore' }); } catch { /* best-effort */ }
       proc = pty.spawn('docker', ['exec', '-it', '--workdir', cwd, DESIGN_CONTAINER, resolved.cmd, ...resolved.args],
         { name: 'xterm-256color', ...dims, cwd: os.homedir(), env: { ...process.env, TERM: 'xterm-256color' } });
     } else {
