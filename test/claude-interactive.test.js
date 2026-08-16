@@ -484,6 +484,85 @@ testAsync('runClaudeInteractive: concurrent sessions stay isolated', async () =>
   } finally { process.env.PATH = prevPath; }
 });
 
+// ── Live session mirroring (Work Mode terminal) ───────────────
+//
+// The dashboard terminal is fed by frames the worker writes on stdout, and
+// keystrokes come back as frames on its stdin. Both halves are exercised here
+// against a fake claude that echoes whatever is typed into it.
+
+function captureStdout() {
+  const written = [];
+  const orig = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (s) => { written.push(String(s)); return true; };
+  return { written, restore: () => { process.stdout.write = orig; } };
+}
+
+function ptyFrames(written) {
+  return written.join('').split('\n')
+    .filter(l => l.startsWith('{'))
+    .map(l => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(Boolean);
+}
+
+testAsync('pty mirror: forwards raw output as base64 frames and closes with an exit frame', async () => {
+  const root = tmpProject();
+  const { bin } = fakeClaude(root, 'echo "mirror me"\nexit 0');
+  const prevPath = process.env.PATH;
+  process.env.PATH = `${bin}:${prevPath}`;
+  process.env.JONGGRANG_PTY_SESSION = 'work:feat-x';
+  const cap = captureStdout();
+  try {
+    await lib.runClaudeInteractive({ prompt: 'p', projectRoot: root, ...FAST });
+  } finally {
+    cap.restore();
+    process.env.PATH = prevPath;
+    delete process.env.JONGGRANG_PTY_SESSION;
+  }
+
+  const frames = ptyFrames(cap.written);
+  const data = frames.filter(f => f.type === 'pty_data');
+  assert.ok(data.length > 0, 'expected pty_data frames');
+  assert.ok(data.every(f => f.session === 'work:feat-x'), 'every frame must carry the session key');
+  const decoded = data.map(f => Buffer.from(f.b64, 'base64').toString('utf8')).join('');
+  assert.ok(decoded.includes('mirror me'), `raw output missing from the mirror: ${JSON.stringify(decoded)}`);
+  assert.ok(frames.some(f => f.type === 'pty_exit'), 'expected a pty_exit frame');
+});
+
+testAsync('pty mirror: keystroke frames on stdin reach the session', async () => {
+  const root = tmpProject();
+  // Echoes back whatever is typed, so anything we inject must reappear.
+  const { bin } = fakeClaude(root, 'read typed\necho "TYPED:$typed"\nexit 0');
+  const prevPath = process.env.PATH;
+  process.env.PATH = `${bin}:${prevPath}`;
+  process.env.JONGGRANG_PTY_SESSION = 'work:feat-y';
+  const cap = captureStdout();
+
+  const run = lib.runClaudeInteractive({ prompt: 'p', projectRoot: root, ...FAST, idleSec: 20 });
+  // The worker reads control frames off its own stdin.
+  await new Promise(r => setTimeout(r, 800));
+  process.stdin.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'pty_input', b64: Buffer.from('hello-from-browser\r', 'utf8').toString('base64'),
+  })}\n`));
+
+  let code;
+  try { code = await run; } finally {
+    cap.restore();
+    process.env.PATH = prevPath;
+    delete process.env.JONGGRANG_PTY_SESSION;
+  }
+
+  assert.strictEqual(code, 0);
+  const decoded = ptyFrames(cap.written)
+    .filter(f => f.type === 'pty_data')
+    .map(f => Buffer.from(f.b64, 'base64').toString('utf8')).join('');
+  assert.ok(decoded.includes('TYPED:hello-from-browser'),
+    `injected keystrokes never reached the pty: ${JSON.stringify(decoded)}`);
+});
+
+test('pty mirror: stays off unless the server asks for it', () => {
+  assert.ok(!process.env.JONGGRANG_PTY_SESSION, 'the mirror must be opt-in via JONGGRANG_PTY_SESSION');
+});
+
 // Cancelling a run (web "Cancel" → SIGTERM on the worker) must take the pty
 // with it, or an orphan claude keeps holding the worktree.
 testAsync('SIGTERM on the worker kills the pty child — no orphan claude', async () => {
