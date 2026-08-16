@@ -21,6 +21,19 @@
               <label>Code editor</label>
               <Select v-model="codeEditor" :options="codeEditorOptions" optionLabel="label" optionValue="value" class="field-select" />
             </div>
+            <div v-if="cfg.tool === 'claude'" class="field-group">
+              <label>Claude execution</label>
+              <Select v-model="cfg.claudeExecution" :options="claudeExecutionOptions" optionLabel="label" optionValue="value" class="field-select" />
+              <span class="field-hint">Interactive runs the Claude Code TUI in a pty (background tasks, parallel subagents). Plan and Work Mode, host and sandbox.</span>
+            </div>
+            <div v-else class="field-group" />
+          </div>
+          <div class="field-row">
+            <div class="field-group">
+              <label>Pipeline</label>
+              <Select v-model="cfg.pipelineMode" :options="pipelineModeOptions" optionLabel="label" optionValue="value" class="field-select" />
+              <span class="field-hint">Compact stops after Implement and defers the quality gates — memory is still written, and the gates can be run later from the Pipeline view.</span>
+            </div>
             <div class="field-group" />
           </div>
           <div v-if="cfgError" class="error-text">{{ cfgError }}</div>
@@ -205,7 +218,22 @@ const autonomyOptions = [
   { label: 'Supervised', value: 'supervised' },
 ];
 
-const cfg = reactive({ tool: 'jonggrang', autonomy: 'autonomous' });
+const claudeExecutionOptions = [
+  { label: 'Headless (default)', value: 'headless' },
+  { label: 'Interactive (PTY)', value: 'interactive' },
+];
+
+const pipelineModeOptions = [
+  { label: 'Full (all quality gates)', value: 'full' },
+  { label: 'Compact (stop after Implement)', value: 'compact' },
+];
+
+const cfg = reactive({ tool: 'jonggrang', autonomy: 'autonomous', claudeExecution: 'headless', pipelineMode: 'full' });
+// Full `tools` / `orchestration` blocks as loaded, so saving one field never
+// clobbers its siblings (the settings API merges jonggrang_config with a
+// shallow top-level assign).
+const toolsConfig = ref({});
+const orchestrationConfig = ref({});
 const codeEditor = ref('off');
 const codeEditorOptions = [
   { label: 'Off', value: 'off' },
@@ -285,6 +313,10 @@ onMounted(async () => {
       const data = await settingsRes.json();
       if (data.jonggrang_config?.tool) cfg.tool = data.jonggrang_config.tool;
       if (data.jonggrang_config?.autonomy) cfg.autonomy = data.jonggrang_config.autonomy;
+      toolsConfig.value = data.jonggrang_config?.tools || {};
+      cfg.claudeExecution = toolsConfig.value?.claude?.execution === 'interactive' ? 'interactive' : 'headless';
+      orchestrationConfig.value = data.jonggrang_config?.orchestration || {};
+      cfg.pipelineMode = orchestrationConfig.value?.pipeline_mode === 'compact' ? 'compact' : 'full';
       if (data.code_editor) codeEditor.value = data.code_editor;
       attachedSecrets.value = Array.isArray(data.secrets) ? [...data.secrets] : [];
       if (data.sandbox) {
@@ -306,6 +338,20 @@ onMounted(async () => {
   secretsLoading.value = false;
 });
 
+// Merge the execution choice into the tools block we loaded, so model/effort
+// set elsewhere survive the save.
+function buildToolsConfig() {
+  const tools = JSON.parse(JSON.stringify(toolsConfig.value || {}));
+  tools.claude = { ...(tools.claude || {}), execution: cfg.claudeExecution };
+  return tools;
+}
+
+function buildOrchestrationConfig() {
+  const orch = JSON.parse(JSON.stringify(orchestrationConfig.value || {}));
+  orch.pipeline_mode = cfg.pipelineMode;
+  return orch;
+}
+
 async function saveConfig() {
   cfgSaving.value = true;
   cfgError.value = '';
@@ -314,7 +360,15 @@ async function saveConfig() {
     const res = await fetch(`/api/projects/${projectId.value}/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jonggrang_config: { tool: cfg.tool, autonomy: cfg.autonomy }, code_editor: codeEditor.value }),
+      body: JSON.stringify({
+        jonggrang_config: {
+          tool: cfg.tool,
+          autonomy: cfg.autonomy,
+          tools: buildToolsConfig(),
+          orchestration: buildOrchestrationConfig(),
+        },
+        code_editor: codeEditor.value,
+      }),
     });
     if (!res.ok) throw new Error('Save failed');
     const data = await res.json().catch(() => ({}));
@@ -470,6 +524,7 @@ async function saveSecrets() {
 .field-row { display: flex; gap: 16px; }
 .field-group { display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .field-group label { font-size: 11px; color: var(--jg-text-faint); }
+.field-hint { font-size: 10px; line-height: 1.4; color: var(--jg-text-faint); opacity: 0.8; }
 .field-select { width: 100%; }
 .field-select :deep(.p-select) { font-size: 12px; }
 

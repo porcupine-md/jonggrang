@@ -4,6 +4,7 @@
       <span class="tl-title">Pipeline Phases</span>
       <Tag v-if="manifest.data" :value="manifest.data.work_type || '—'" :severity="workTypeSeverity" size="small" />
       <Tag v-if="manifest.data" :value="manifest.data.status" :severity="statusSeverity" size="small" />
+      <Tag v-if="manifest.isCompact" value="compact" severity="warn" size="small" />
     </div>
 
     <div v-if="!manifest.data" class="tl-empty">
@@ -19,6 +20,7 @@
             <i v-if="item.status === 'completed'" class="pi pi-check" />
             <i v-else-if="item.status === 'in_progress'" class="pi pi-spin pi-spinner" />
             <i v-else-if="item.status === 'skipped'" class="pi pi-minus" />
+            <i v-else-if="item.status === 'deferred'" class="pi pi-clock" />
             <i v-else class="pi pi-circle" />
           </span>
         </template>
@@ -40,6 +42,9 @@
             </div>
             <div v-if="item.status === 'skipped'" class="tl-skip">
               skipped for {{ skippedBy(item.num, manifest.data.work_type) }}
+            </div>
+            <div v-else-if="item.status === 'deferred'" class="tl-skip">
+              deferred by compact mode — run the quality gates to execute it
             </div>
             <div v-if="item.completed_at" class="tl-time">
               {{ fmtTime(item.completed_at) }}
@@ -154,6 +159,11 @@ function fmtTime(iso) {
 }
 .tl-marker--skipped {
   opacity: 0.3;
+}
+.tl-marker--deferred {
+  border-color: var(--jg-orange);
+  color: var(--jg-orange);
+  opacity: 0.7;
 }
 
 /* Content */

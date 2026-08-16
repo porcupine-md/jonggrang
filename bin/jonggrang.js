@@ -78,7 +78,10 @@ let ORCHESTRATE_RESUME = false;
 // cmdWork targets this feature instead of the most-recent-incomplete heuristic.
 let WORK_FEATURE_ID = null;
 let ORCHESTRATE_ROLE = '';
-let SKIP_GATES = false;
+// Pipeline mode override from the CLI: 'compact' stops after Implement (the
+// quality gates are deferred but resumable, and memory is still written),
+// 'full' runs everything. null = follow orchestration.pipeline_mode in config.
+let PIPELINE_MODE_FLAG = null;
 let MODEL = process.env.JONGGRANG_MODEL || '';
 let EFFORT = process.env.JONGGRANG_EFFORT || '';
 
@@ -584,6 +587,43 @@ function resolveWorkType(description) {
 }
 
 // ============================================================
+// PIPELINE MODE
+// ============================================================
+
+/**
+ * 'compact' | 'full'. A --compact/--full flag wins; otherwise the project's
+ * orchestration.pipeline_mode decides, defaulting to the full pipeline.
+ */
+function resolvePipelineMode() {
+  if (PIPELINE_MODE_FLAG) return PIPELINE_MODE_FLAG;
+  const cfg = lib.readConfig(CONFIG_FILE, 'orchestration.pipeline_mode', 'full');
+  return String(cfg).toLowerCase() === 'compact' ? 'compact' : 'full';
+}
+
+/**
+ * End a compact run: close the deferred gates in the MANIFEST so the pipeline
+ * view shows a terminal state, then make sure the memory the gates would have
+ * written still lands (compact already ran in runWorkLoop; promote happens in
+ * the review/completion phase, which compact never reaches).
+ */
+async function finishCompactRun(featureId, manifestPath) {
+  if (manifestPath) {
+    try {
+      orchestration.setPipelineMode(manifestPath, 'compact');
+      const result = orchestration.finalizeRemainingPhases(manifestPath, {
+        reason: orchestration.COMPACT_SKIP_REASON,
+      });
+      const deferred = result?.skipped || [];
+      logInfo(`Compact mode: stopped after Implement${deferred.length ? ` — deferred phases ${deferred.join(', ')}` : ''}`);
+      if (deferred.length) logInfo(`Run \`jonggrang work --resume --full\` to execute the quality gates.`);
+    } catch (e) {
+      logWarn(`Compact finalize failed (non-blocking): ${e.message}`);
+    }
+  }
+  if (featureId) await autoPromoteMemory(PROJECT_ROOT, featureId);
+}
+
+// ============================================================
 // POST-WORK QUALITY GATES
 // ============================================================
 
@@ -593,20 +633,7 @@ async function runPostWorkPhases(description, workType, featureId, manifest, man
     // Mark all remaining active phases as skipped so the phase grid shows complete
     if (manifestPath && manifest) {
       try {
-        const current = orchestration.readManifest(manifestPath);
-        if (current) {
-          const remaining = current.active_phases.filter(n => {
-            const s = current.phases[n]?.status;
-            return !s || (s !== 'completed' && s !== 'skipped');
-          });
-          for (const n of remaining) {
-            if (current.phases[n]) current.phases[n].status = 'skipped';
-          }
-          current.status = 'completed';
-          current.current_phase = null;
-          current.updated_at = new Date().toISOString();
-          orchestration.writeManifest(manifestPath, current);
-        }
+        orchestration.finalizeRemainingPhases(manifestPath, { reason: 'bugfix-no-gates' });
       } catch { /* ignore */ }
     }
     return;
@@ -648,6 +675,8 @@ async function runPostWorkPhases(description, workType, featureId, manifest, man
 // ============================================================
 
 async function cmdWork(descriptionParts = []) {
+  const compactMode = resolvePipelineMode() === 'compact';
+
   // --resume: skip work loop, go straight to orchestration resume
   if (ORCHESTRATE_RESUME) {
     if (!TOOL_SET && !process.env.JONGGRANG_TOOL) {
@@ -657,7 +686,23 @@ async function cmdWork(descriptionParts = []) {
     if (MODE === 'autonomous') {
       MODE = lib.readConfig(CONFIG_FILE, 'mode.autonomy', 'autonomous');
     }
-    const existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    let existing = orchestration.findIncompleteManifest(PROJECT_ROOT);
+    // A compact run finalized itself as completed, so it is invisible to the
+    // incomplete lookup. Reopen the gates it deferred and resume those.
+    if (!existing) {
+      const compacted = orchestration.findCompactManifest(PROJECT_ROOT);
+      if (compacted) {
+        const reopened = orchestration.reopenCompactPhases(compacted.manifestPath);
+        if (reopened.length) {
+          logInfo(`Reopening phases deferred by compact mode: ${reopened.join(', ')}`);
+          existing = {
+            featureId: compacted.featureId,
+            manifestPath: compacted.manifestPath,
+            manifest: orchestration.readManifest(compacted.manifestPath),
+          };
+        }
+      }
+    }
     if (!existing) {
       logError('No incomplete orchestration found to resume.');
       process.exit(1);
@@ -810,13 +855,23 @@ async function cmdWork(descriptionParts = []) {
     // Resolve the per-feature tasks file for this work session.
     WORK_TASKS_FILE = lib.tasksFileFor(PROJECT_ROOT, workFeatureId);
 
+    // Record the pipeline mode on the MANIFEST: the dashboard labels the run
+    // with it, and `work --resume` uses it to find gates that were deferred.
+    if (workManifestPath) {
+      orchestration.setPipelineMode(workManifestPath, compactMode ? 'compact' : 'full');
+      workManifest = orchestration.readManifest(workManifestPath) || workManifest;
+    }
+
     // Guard: if phase 8 already completed AND there is no pending work, skip
     // straight to post-work phases. When pending tasks exist (e.g. added by
     // `plan --append` or `bug convert` after the feature completed), DON'T skip —
     // fall through so phase 8 is re-opened (below) and the new tasks run.
     if (workManifest.phases?.[8]?.status === 'completed' && lib.countPending(WORK_TASKS_FILE) === 0) {
-      logInfo('Phase 8 (Implement) already completed — skipping to post-work phases');
-      if (!SKIP_GATES) {
+      if (compactMode) {
+        logInfo('Phase 8 (Implement) already completed — compact mode stops here');
+        await finishCompactRun(workFeatureId, workManifestPath);
+      } else {
+        logInfo('Phase 8 (Implement) already completed — skipping to post-work phases');
         const gateWorkType = workManifest?.work_type || workType;
         await runPostWorkPhases(description, gateWorkType, workFeatureId, workManifest, workManifestPath);
       }
@@ -833,6 +888,7 @@ async function cmdWork(descriptionParts = []) {
   logHeader('JONGGRANG Work Loop');
   logInfo(`Tool: ${TOOL}`);
   logInfo(`Mode: ${MODE}`);
+  logInfo(`Pipeline: ${compactMode ? 'compact (stops after Implement)' : 'full'}`);
   if (WORKTREE_MODE) logInfo('Worktree mode: ON');
   logInfo(MAX_ITERATIONS === 0 ? 'Max iterations: unlimited' : `Max iterations: ${MAX_ITERATIONS}`);
   logInfo(`Tasks: ${lib.countPending(WORK_TASKS_FILE)} pending / ${lib.countTotal(WORK_TASKS_FILE)} total`);
@@ -902,7 +958,9 @@ async function cmdWork(descriptionParts = []) {
     // Runs in both normal and worktree mode. In worktree mode we require a
     // manifest we resolved by feature_id above, so runPostWorkPhases never
     // falls back to findIncompleteManifest (which would target another plan).
-    if (!SKIP_GATES && (!WORKTREE_MODE || workManifestPath)) {
+    if (compactMode) {
+      await finishCompactRun(workFeatureId, workManifestPath);
+    } else if (!WORKTREE_MODE || workManifestPath) {
       const gateWorkType = workManifest?.work_type || workType;
       await runPostWorkPhases(description, gateWorkType, workFeatureId, workManifest, workManifestPath);
     }
@@ -5006,7 +5064,10 @@ Work / Plan / Review flags:
   --branch <name>         Feature branch name
   --dry-run               Preview prompts, no execution
   --debug                 Dump raw JSON from opencode/claude to stderr (diagnose stuck agents)
-  --skip-gates            Skip quality gates even for MEDIUM/LARGE
+  --compact               Compact pipeline: stop after Implement, defer the quality
+                          gates (memory is still written; resume with --resume --full)
+  --full                  Force the full pipeline even if the project defaults to compact
+  --skip-gates            Alias for --compact (kept for compatibility)
   --src <path>            Reference a source document path for the agent to read
 
 --model / --effort backend mapping:
@@ -5214,7 +5275,9 @@ async function main() {
       case '--host':          WEB_HOST = rest[++i]; break;
       case '--resume':        ORCHESTRATE_RESUME = true; break;
       case '--role':          ORCHESTRATE_ROLE = rest[++i]; break;
-      case '--skip-gates':    SKIP_GATES = true; break;
+      case '--compact':
+      case '--skip-gates':    PIPELINE_MODE_FLAG = 'compact'; break;
+      case '--full':          PIPELINE_MODE_FLAG = 'full'; break;
       case '--model':         MODEL = rest[++i]; break;
       case '--effort':        EFFORT = rest[++i]; break;
       default:                planArgs.push(rest[i]); break;

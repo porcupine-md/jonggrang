@@ -114,6 +114,8 @@ Use the convention `.toolname/skills/` to keep the project root clean.
 
 The core backend dispatcher. Add an `else if` branch **before** the final `else { resolve(1); }`.
 
+> **Headless vs interactive.** A backend can have more than one execution strategy. Claude Code has two: the default headless `claude -p` (JSON stream over pipes) and an opt-in interactive path that runs the real TUI inside a `node-pty` session (`runClaudeInteractive`), selected by `tools.claude.execution` — see `docs/CONFIG.md`. Everything else about the run is identical, so the choice lives inside the `claude` branch rather than at the call sites; plan mode, work mode, host and sandbox all inherit it. Interactive mode exists because a TUI session is not restricted the way print mode is (background tasks, parallel subagents). Its cost is that "the turn is over" has to be *inferred* from an idle pty rather than read from a process exit, so it degrades to headless whenever the pty is unavailable, and `runIteration` still verifies the task was actually marked complete. Follow the same shape if a new backend needs an interactive mode: one strategy switch inside the branch, a safe default, and a documented fallback.
+
 **CLI spawn template:**
 
 ```js

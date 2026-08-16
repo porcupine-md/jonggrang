@@ -418,6 +418,26 @@ LARGE   → run all 17 phases
 
 Work type is auto-classified by the Lead agent in phase 2 based on the description and discovered scope.
 
+### Compact Mode — stop after Implement
+
+Compact mode truncates the pipeline at phase 8. Phases 9-17 are marked `skipped` with the reason `compact-mode`, and the MANIFEST is closed out as `completed` so the pipeline view shows a terminal state instead of hanging at Implement.
+
+```bash
+jonggrang work --compact                 # this run stops after Implement
+jonggrang work --full                    # force the full pipeline
+jonggrang work --resume --full           # later: run the deferred quality gates
+```
+
+Set the project default with `orchestration.pipeline_mode` (`full` | `compact`) in `.jonggrang/jonggrang.json`, or in the dashboard under **Project → Settings → Pipeline**. Work Mode also carries a per-run **Compact pipeline** checkbox, seeded from that default.
+
+Compact is a deferral, not a discard:
+
+- **Memory is still written.** Memory compact (task fragments → feature `MEMORY.md`) runs at the end of the work loop, before any gate, and compact mode additionally runs memory promote (feature → project `MEMORY.md`), which normally happens in the review/completion phase.
+- **The gates stay resumable.** `work --resume` reopens exactly the phases carrying the `compact-mode` reason and runs them. In the dashboard the Pipeline view shows an *N deferred* marker and a **Run quality gates** button.
+- **A BUGFIX gate skip is not reopened.** Phases skipped because of the work type stay skipped; only compact deferrals come back.
+
+Use it when the loop is fast-iteration work — the gates are a separate, later pass. Skipping them permanently is not the point.
+
 ### MANIFEST.yaml — Persistent State
 
 Located at `.jonggrang/.output/features/{id}/MANIFEST.yaml`, it survives session resets:

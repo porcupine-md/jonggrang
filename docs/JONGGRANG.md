@@ -257,6 +257,8 @@ Inspect with: `jonggrang manifest show [feature-id]`
 
 A bug fix runs ~5 phases. A new subsystem gets all 16.
 
+**Compact pipeline mode:** orthogonal to work type. `orchestration.pipeline_mode: "compact"` (or `jonggrang work --compact`) truncates any run after phase 8 (Implement). The remaining active phases are marked `skipped` with the reason `compact-mode` and the MANIFEST is closed as `completed`, so the pipeline view reaches a terminal state. Memory still lands (compact runs in the work loop, promote runs explicitly), and `work --resume` reopens exactly the compact-deferred phases to run the gates later. See [WORKFLOW.md](WORKFLOW.md#compact-mode--stop-after-implement).
+
 ---
 
 ## Five-Role Assembly Line

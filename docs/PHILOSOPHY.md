@@ -54,6 +54,16 @@ The agent writes the tests, runs them, and verifies coverage. Tests are not an a
 ### Review
 A dedicated review pass reads the implementation as a future maintainer would. It asks: is this correct? is this maintainable? does it match the plan? For frontend work the reviewer does not stop at the source — it drives the *rendered* UI in a real headless browser via the `agent-browser` CLI (preinstalled in the sandbox), checking layout, responsiveness, theming, and accessibility that code inspection and unit tests cannot see.
 
+### Compact Mode (the deliberate exception)
+Sometimes the loop *is* the point — you are iterating fast and the gates are a later, separate pass. Compact mode (`jonggrang work --compact`, or `orchestration.pipeline_mode: "compact"`) runs Plan → Implement and stops.
+
+Two properties keep it honest rather than a way to opt out of quality:
+
+- **Memory is still written.** Skipping the gates must not cost the project what it learned. Memory compact runs at the end of the work loop, before any gate; compact mode then runs promote explicitly, because that normally happens in the review phase. A fast run still teaches the next one.
+- **The deferral is recorded, not forgotten.** Deferred phases are marked `skipped` with the reason `compact-mode` in the MANIFEST, and `work --resume` reopens exactly those. The dashboard shows the count and offers **Run quality gates**. The pipeline never quietly *looks* finished when it isn't.
+
+What compact mode does not do is pretend the gates ran. That distinction — deferring visibly versus skipping silently — is the whole reason it is safe to have.
+
 ### Hooks (Continuous Enforcement)
 Not a final stage, but a continuous enforcement layer woven into the implement loop. Every tool call, every file edit, every agent exit passes through hooks first. They police what the agent cannot be trusted to police itself: no secrets leaking into context, no orchestrator making direct edits it should delegate, no agent spawning when the context window is near-full, no exit until review and tests are green.
 

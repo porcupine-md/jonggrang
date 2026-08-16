@@ -493,8 +493,11 @@ module.exports = function(deps) {
         // Pass the group's featureId explicitly so the worker resolves its feature
         // deterministically instead of guessing from a bare task id (per-feature
         // numbering makes task-001 recur across features).
-        const workerArgs = group.workerArgs
-            || ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--branch', group.branch, '--feature', group.featureId];
+        const workerArgs = [
+            ...(group.workerArgs
+                || ['work', '--worktree', '--group-tasks', group.taskIds.join(','), '--branch', group.branch, '--feature', group.featureId]),
+            ...(group.extraArgs || []),
+        ];
 
         if (ctx.mode === 'container') {
             const envFlags = [];
@@ -757,6 +760,7 @@ module.exports = function(deps) {
             startedAt: new Date().toISOString(), finishedAt: null, exitCode: null,
             committed: false, pushed: false, error: null, logTail: [],
             workerArgs: opts.workerArgs || null,
+            extraArgs: opts.extraArgs || null,
             child: null, manifestSync: null,
         };
         run.groups[g.featureId] = group;
@@ -793,6 +797,17 @@ module.exports = function(deps) {
         }
         prepareContainerGit(ctx);
         return true;
+    }
+
+    // Per-run pipeline override from the dashboard. `compact: true` stops the
+    // worker after Implement (gates deferred, memory still written); `false`
+    // forces the full pipeline. Omitted → the project's
+    // orchestration.pipeline_mode decides.
+    function pipelineFlags(req) {
+        const compact = (req.body || {}).compact;
+        if (compact === true) return ['--compact'];
+        if (compact === false) return ['--full'];
+        return [];
     }
 
     // ── routes ────────────────────────────────────────────────────
@@ -849,7 +864,7 @@ module.exports = function(deps) {
 
         const run = ensureRun(project, ctx.mode);
         try {
-            startGroup(project, ctx, run, g);
+            startGroup(project, ctx, run, g, { extraArgs: pipelineFlags(req) });
         } catch (err) {
             return res.status(500).json({ error: { code: 'WORKTREE_ERROR', message: err.message } });
         }
@@ -859,7 +874,7 @@ module.exports = function(deps) {
     });
 
     // Shared guard + spawn for the single-task and resume variants below.
-    async function startGroupVariant(req, res, buildArgs, fallbackTitle) {
+    async function startGroupVariant(req, res, buildArgs, fallbackTitle, extraArgs = null) {
         const project = projectOr404(req, res);
         if (!project) return;
         const fid = req.params.featureId;
@@ -885,7 +900,7 @@ module.exports = function(deps) {
         const g = { featureId: info.featureId, branch: info.branch, title: built.title || fallbackTitle, taskIds: built.taskIds || [] };
         try {
             const workerArgs = [...built.args, '--branch', info.branch];
-            startGroup(project, ctx, run, g, { workerArgs });
+            startGroup(project, ctx, run, g, { workerArgs, extraArgs: extraArgs || pipelineFlags(req) });
         } catch (err) {
             return res.status(500).json({ error: { code: 'WORKTREE_ERROR', message: err.message } });
         }
@@ -908,11 +923,13 @@ module.exports = function(deps) {
 
     // Resume the pipeline phases (Simplify → … → Completion) in the worktree:
     // `jonggrang work --resume`. Used when all tasks are done but the phase
-    // machine stopped at Implement (worktree workers skip post-work phases).
+    // machine stopped at Implement — either because the worktree run ended
+    // there, or because compact mode deferred the gates. `--full` makes sure a
+    // project that defaults to compact does not immediately stop again.
     router.post('/:id/orchestration/groups/:featureId/resume', (req, res) => {
         return startGroupVariant(req, res,
             () => ({ args: ['work', '--worktree', '--resume'], title: 'resume pipeline' }),
-            'resume pipeline');
+            'resume pipeline', ['--full']);
     });
 
     // Cancel ONE plan's group.
@@ -954,8 +971,9 @@ module.exports = function(deps) {
         if (!await readyCtx(project, ctx, res)) return;
 
         const run = ensureRun(project, ctx.mode);
+        const extraArgs = pipelineFlags(req);
         try {
-            for (const g of groups) startGroup(project, ctx, run, g);
+            for (const g of groups) startGroup(project, ctx, run, g, { extraArgs });
         } catch (err) {
             return res.status(500).json({ error: { code: 'WORKTREE_ERROR', message: err.message } });
         }
