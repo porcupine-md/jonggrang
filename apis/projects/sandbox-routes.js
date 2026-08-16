@@ -36,11 +36,28 @@ module.exports = function(deps) {
 
         startingSet.add(project.id);
         const running = await sandbox.isRunning(project.id);
-        // Reuse a running container only if its SSH-key mount AND editor port
-        // mapping still match the current config. If the key OR the code_editor
-        // setting changed after the container was created, fall through to
-        // recreate it (Docker can't remount/republish ports on start/restart).
-        if (running && !sandbox.sshMountDrifted(project.id) && !sandbox.editorMappingDrifted(project)) {
+        // Resolved here rather than further down because the fast path below
+        // needs it too: a running container used to be trusted on the strength
+        // of its mounts alone, so a republished image tag never reached the
+        // reconcile block and the container ran stale contents forever.
+        const globalConfig = webState.getSandboxConfig();
+        const sandboxConfig = {
+            image: project.sandbox?.image || globalConfig.image,
+            shell: project.sandbox?.shell || globalConfig.shell,
+            volumes: [...webState.getVolumes(), ...(project.sandbox?.volumes || [])],
+            network: project.sandbox?.network || globalConfig.network,
+        };
+        const configuredImage = sandboxConfig.image || sandbox.DEFAULT_AGENT_IMAGE;
+
+        // Reuse a running container only if its image build, SSH-key mount AND
+        // editor port mapping still match the current config. If the image tag
+        // moved, or the key OR the code_editor setting changed after the
+        // container was created, fall through to recreate it (Docker can't
+        // remount/republish ports, or swap an image, on start/restart).
+        if (running
+            && !(await sandbox.containerImageDrifted(project.id, configuredImage))
+            && !sandbox.sshMountDrifted(project.id)
+            && !sandbox.editorMappingDrifted(project)) {
             startingSet.delete(project.id);
             io.to(`project:${project.id}`).emit('sandbox.status', { project_id: project.id, status: 'running' });
             return res.json({ ok: true, status: 'running' });
@@ -51,14 +68,6 @@ module.exports = function(deps) {
 
         try {
             const secretVars = webState.getProjectSecretVars(project.id);
-            const globalConfig = webState.getSandboxConfig();
-            const sandboxConfig = {
-                image: project.sandbox?.image || globalConfig.image,
-                shell: project.sandbox?.shell || globalConfig.shell,
-                volumes: [...webState.getVolumes(), ...(project.sandbox?.volumes || [])],
-                network: project.sandbox?.network || globalConfig.network,
-            };
-            const configuredImage = sandboxConfig.image || sandbox.DEFAULT_AGENT_IMAGE;
 
             // Reconcile an existing container against the current config. Reuse it
             // only if the image, the SSH-key mount AND the editor port mapping all
