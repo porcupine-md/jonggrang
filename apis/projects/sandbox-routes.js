@@ -69,6 +69,7 @@ module.exports = function(deps) {
             if (containerStatus) {
                 const runningImage = await sandbox.getContainerImage(project.id);
                 const drifted = runningImage !== configuredImage
+                    || await sandbox.containerImageDrifted(project.id, configuredImage)
                     || sandbox.sshMountDrifted(project.id)
                     || sandbox.editorMappingDrifted(project);
                 if (!drifted) {
