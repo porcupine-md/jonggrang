@@ -55,6 +55,18 @@ npm run test -- --run  # run just the new/changed tests
 
 If any check fails, fix before signaling.
 
+**Frontend tasks — validate the rendered design too.** Typecheck + unit tests do not
+prove the UI looks right. If your task touched any component, page, layout, or styling,
+verify it in a real browser with `agent-browser` (preinstalled in the sandbox) before
+signalling. Load the `validating-visual-design` gateway skill for the full workflow:
+
+```bash
+agent-browser open <app-url> && agent-browser wait --load networkidle
+agent-browser snapshot                       # a11y tree
+agent-browser screenshot ui.png              # review layout/contrast/responsive/dark mode
+agent-browser close
+```
+
 ## Bugs Discovered While Implementing
 
 If you notice a defect that is **outside the scope of your current task** (e.g., a bug in an adjacent module, an incorrect helper, a broken edge case you weren't asked to fix):

@@ -50,9 +50,16 @@ jobs:
           file: ./docker/Dockerfile.dev
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/jonggrang-agent:dev
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/jonggrang-agent:dev
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/jonggrang-agent:dev-${{ github.sha }}
           cache-from: type=gha,scope=agent-dev
           cache-to: type=gha,mode=max,scope=agent-dev
+
+      - name: Smoke-test agent-browser
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/jonggrang-agent:dev-${{ github.sha }}
+        run: bash scripts/agent-browser-smoke.sh "$IMAGE"
 
   # Pushes to main and release tags build & push latest + tunnel (multi-arch).
   # On a release tag (vX.Y.Z) the images are also tagged X.Y.Z and X.Y.

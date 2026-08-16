@@ -124,6 +124,7 @@ jonggrang work --feature feat-abc123 # Target a specific approved feature (multi
   - Jonggrang (Pi SDK) → `npm install -g @earendil-works/pi-coding-agent`
 - [jq](https://jqlang.github.io/jq/) → `brew install jq`
 - git
+- *(optional)* [agent-browser](https://github.com/vercel-labs/agent-browser) → `npm install -g agent-browser && agent-browser install` — lets agents validate frontend design in a real headless browser. Preinstalled (with Chrome) in the Jonggrang sandbox image.
 
 ---
 

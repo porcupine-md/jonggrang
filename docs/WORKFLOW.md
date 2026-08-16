@@ -260,18 +260,21 @@ Run testCmd
          │
          attempt 1 → inject test output into prompt → re-run agent
          attempt 2 → inject test output into prompt → re-run agent
-         attempt 3 → show test output to user:
-                     "Provide feedback for the agent (or Enter to block): "
-                     ├── user types feedback → inject feedback + reset counter → loop again
-                     └── Enter (empty)       → task marked blocked
+         attempt 3 → interactive (TTY)?
+                     ├── yes → show test output + prompt:
+                     │         "Provide feedback for the agent (or Enter to block): "
+                     │         ├── user types feedback → inject feedback + reset counter → loop again
+                     │         └── Enter (empty)       → task marked blocked
+                     └── no (piped stdin: web/sandbox/CI) → task marked blocked, move on
 ```
 
 **Key details:**
 
 - **Max auto-retries: 3** — the agent gets 3 attempts to fix failing tests without human intervention. Configurable via `TEST_RETRY_LIMIT` constant.
-- **Feedback injection** — on each retry, the full test output (capped at 4000 chars, tail-end preserved) is injected into the prompt under a `## Test Failure Feedback` section with the raw output in a code block.
-- **Human escalation** — after 3 failures, the test output is displayed and the user is prompted. User feedback is combined with the last test output and injected into the next prompt. The retry counter resets, giving the agent another 3 attempts.
-- **Blocked exit** — if the user presses Enter without typing feedback, the task is marked `blocked` and the work loop moves to the next task.
+- **Feedback injection** — on each retry, the full test output (capped at 4000 chars, tail-end preserved) is injected into the prompt under a `## Test Failure Feedback` section with the raw output in a code block. The prompt asks the agent to fix *whichever side is wrong* — the implementation, or an outdated test case — not to blindly edit the easier one.
+- **Human escalation (interactive only)** — after 3 failures **on a TTY**, the test output is displayed and the user is prompted. User feedback is combined with the last test output and injected into the next prompt. The retry counter resets, giving the agent another 3 attempts.
+- **Non-interactive escalation** — when stdin is **not** a TTY (web dashboard, `docker exec -i`, CI — the worker is spawned with piped stdio), there is no human to prompt, so after 3 failures the task is marked `blocked` immediately and the work loop moves on. This avoids hanging the worker on a `readline` prompt that can never be answered.
+- **Blocked exit** — if the user presses Enter without typing feedback (interactive), the task is marked `blocked` and the work loop moves to the next task.
 - **No test command** — if `testing.command` is not configured (empty string), the test step is skipped entirely and the task completes immediately after the agent finishes.
 
 The prompt structure on retry looks like:
@@ -280,7 +283,9 @@ The prompt structure on retry looks like:
 # Jonggrang Work Session
 
 ## Test Failure Feedback
-The previous implementation attempt failed validation. Fix the issues below before marking the task complete.
+The previous attempt failed the test command. Diagnose the failure below and make it
+pass before marking the task complete. Fix the implementation if it is wrong, or update
+the test case if the test itself is outdated — fix the side that is actually wrong.
 
 \`\`\`
   ✗ add(2, 3) === 5: expected 5, got -1
@@ -394,6 +399,13 @@ The orchestrate command runs a deterministic 17-phase pipeline. Each phase is ex
 | 15 | Coverage | Tester | Enforce coverage thresholds | — |
 | 16 | TestQuality | Reviewer | Test quality review → REVIEW_COMPLETE | — |
 | 17 | Complete | Lead | Final summary, update `.jonggrang/.output/features/{id}/progress.txt`, MANIFEST → done | — |
+
+> **Frontend design validation.** In phases that touch the UI — Implement (8),
+> DesignVerify (10), and the interface-quality audit — agents use the `agent-browser`
+> CLI (preinstalled in the sandbox, with Chrome) to open the running app in a real
+> headless browser and check the *rendered* result: layout, responsive behavior,
+> theming, and accessibility. Routed via the `validating-visual-design` skill. This
+> catches design regressions that typecheck and unit tests cannot.
 
 ### Phase Skipping by Work Type
 
