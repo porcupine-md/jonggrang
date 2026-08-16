@@ -3,6 +3,7 @@
 const { Router } = require('express');
 
 const lib = require('../../lib/jonggrang');
+const uiContext = require('../../lib/ui-context');
 const sandbox = require('../../lib/sandbox');
 const { STATIC_EFFORTS } = require('../models');
 
@@ -70,6 +71,34 @@ module.exports = function (deps) {
         return { sessionId: draft.sessionId, planPath: draft.planPath };
     }
 
+    function uiPlanArtifacts(project, sessionId, planContent, featureId = null) {
+        const get = (key) => {
+            const match = String(planContent || '').match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+            return match ? match[1].trim().replace(/^['"]|['"]$/g, '') : '';
+        };
+        if (get('ui') !== 'true' && !featureId) return null;
+        const rootGuidePath = uiContext.projectGuidePath(project.path);
+        const guidePath = featureId ? rootGuidePath : uiContext.draftGuidePath(project.path, sessionId);
+        const handoffPath = featureId
+            ? uiContext.featureHandoffPath(project.path, featureId)
+            : uiContext.draftHandoffPath(project.path, sessionId);
+        const read = (file) => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
+        const proposedGuide = read(guidePath);
+        const currentGuide = !featureId ? read(rootGuidePath) : null;
+        const handoff = read(handoffPath);
+        if (!proposedGuide && !handoff && get('ui') !== 'true') return null;
+        return {
+            guide_status: get('ui_guide_status') || (featureId ? 'approved' : (proposedGuide ? 'update proposed' : 'unchanged')),
+            baseline: get('ui_baseline') || null,
+            token_status: get('ui_token_status') || null,
+            guide_path: proposedGuide ? path.relative(project.path, guidePath) : '.jonggrang/UI.md',
+            guide_content: proposedGuide || (featureId ? read(rootGuidePath) : null),
+            current_guide_content: currentGuide,
+            handoff_path: path.relative(project.path, handoffPath),
+            handoff_content: handoff,
+        };
+    }
+
     // GET /api/projects/:id/plans — list of all plans (draft + archived)
     router.get('/:id/plans', (req, res) => {
         const project = webState.getProject(req.params.id);
@@ -91,6 +120,7 @@ module.exports = function (deps) {
                     status: 'draft',
                     mtime,
                     content,
+                    ui: uiPlanArtifacts(project, draft.sessionId, content),
                     source_issue: parseSourceIssue(content),
                 });
             } catch { }
@@ -167,6 +197,7 @@ module.exports = function (deps) {
                         status, mtime, work_type, content, branch,
                         run_status: rg?.status || null,
                         pushed: !!rg?.pushed,
+                        ui: uiPlanArtifacts(project, null, content, name),
                         source_issue: parseSourceIssue(content),
                     });
                 }
@@ -205,7 +236,7 @@ module.exports = function (deps) {
             try {
                 const content = fs.readFileSync(draft.planPath, 'utf-8');
                 const mtime = fs.statSync(draft.planPath).mtimeMs;
-                return res.json({ exists: true, state: 'draft', sessionId: draft.sessionId, content, mtime });
+                return res.json({ exists: true, state: 'draft', sessionId: draft.sessionId, content, mtime, ui: uiPlanArtifacts(project, draft.sessionId, content) });
             } catch (err) {
                 return res.status(500).json({ error: err.message });
             }
@@ -240,6 +271,7 @@ module.exports = function (deps) {
                         feature_id: name,
                         work_type: manifest?.work_type || null,
                         manifest_status: manifest?.status || null,
+                        ui: uiPlanArtifacts(project, null, content, name),
                     });
                 }
             }
@@ -268,8 +300,11 @@ module.exports = function (deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const { description, deep, tool, model, effort, fileContent, fileName, base } = req.body || {};
+        const { description, deep, tool, model, effort, fileContent, fileName, base, baseline } = req.body || {};
 
+        if (baseline && !/^[A-Za-z0-9][\w.@-]*$/.test(String(baseline))) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'baseline must be a plain design/baseline id (letters, digits, . _ - @)' } });
+        }
         if (!description && !fileContent) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description or file required' } });
         }
@@ -319,6 +354,7 @@ module.exports = function (deps) {
         if (model) args.push('--model', model);
         if (effort) args.push('--effort', effort);
         if (base) args.push('--base', base);
+        if (baseline) args.push('--baseline', baseline);
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan');
         activePlan.set(project.id, { child, command: 'plan' });
@@ -354,8 +390,11 @@ module.exports = function (deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const { description, deep, tool, model, effort, base, answers } = req.body || {};
+        const { description, deep, tool, model, effort, base, answers, baseline } = req.body || {};
         if (!description) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'description required' } });
+        if (baseline && !/^[A-Za-z0-9][\w.@-]*$/.test(String(baseline))) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'baseline must be a plain design/baseline id (letters, digits, . _ - @)' } });
+        }
         if (!Array.isArray(answers) || answers.length === 0) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'answers must be a non-empty array' } });
         }
@@ -403,6 +442,7 @@ module.exports = function (deps) {
         if (model) args.push('--model', model);
         if (effort) args.push('--effort', effort);
         if (base) args.push('--base', base);
+        if (baseline) args.push('--baseline', baseline);
         const child = spawnForProject(project, args);
         wireProjectProcess(project.id, child, 'plan');
         activePlan.set(project.id, { child, command: 'plan' });

@@ -16,6 +16,8 @@ const orchestration = require('../lib/orchestration');
 const hooksLib = require('../lib/hooks');
 const compaction = require('../lib/compaction');
 const feedback = require('../lib/feedback');
+const uiContext = require('../lib/ui-context');
+const design = require('../lib/design');
 
 // ============================================================
 // CONFIGURATION
@@ -1055,7 +1057,9 @@ async function cmdReview() {
 
   logHeader('JONGGRANG Review');
 
-  const reviewPrompt = lib.buildReviewPrompt();
+  const activeReview = orchestration.findIncompleteManifest(PROJECT_ROOT);
+  const reviewFeatureId = WORK_FEATURE_ID || (activeReview && activeReview.featureId) || lib.resolveActiveFeature(PROJECT_ROOT);
+  const reviewPrompt = lib.buildReviewPrompt(PROJECT_ROOT, reviewFeatureId);
 
   const logDir = path.join(PROJECT_ROOT, 'jonggrang-log');
   if (!lib.fileExists(logDir)) fs.mkdirSync(logDir, { recursive: true });
@@ -1101,6 +1105,10 @@ function parsePlanFrontmatter(content) {
     description: get('description'),
     created_at:  get('created_at'),
     append_to:   get('append_to'),
+    ui:           get('ui'),
+    ui_guide_status: get('ui_guide_status'),
+    ui_baseline:  get('ui_baseline'),
+    ui_token_status: get('ui_token_status'),
   };
 }
 
@@ -1146,6 +1154,68 @@ function listAvailablePlans(jonggrangDir) {
   return plans;
 }
 
+function buildUiPlanContext(sessionId, description, srcPath = null, force = false, chosenBaseline = null) {
+  if (!force && !uiContext.detectUiWork(description, { srcPath })) return null;
+  const audit = uiContext.auditUiProject(PROJECT_ROOT, { userRoot: path.join(os.homedir(), '.jonggrang') });
+  return uiContext.buildPlanningContext(PROJECT_ROOT, sessionId, description, audit, chosenBaseline);
+}
+
+function verifyUiDraftPlan(planFile, sessionId) {
+  const planContent = fs.readFileSync(planFile, 'utf8');
+  const fm = parsePlanFrontmatter(planContent);
+  if (fm.ui !== 'true') return null;
+  if (!fm.ui_baseline || fm.ui_baseline === 'ask-user') throw new Error('UI plan needs an approved ui_baseline before approval.');
+  if (fm.ui_guide_status === 'needs input') throw new Error('UI guide still needs input; revise the plan before approval.');
+
+  const handoffDraft = uiContext.draftHandoffPath(PROJECT_ROOT, sessionId);
+  if (!fs.existsSync(handoffDraft)) throw new Error(`UI plan did not write ${path.relative(PROJECT_ROOT, handoffDraft)}.`);
+  const handoffContent = fs.readFileSync(handoffDraft, 'utf8');
+  for (const section of uiContext.REQUIRED_HANDOFF_SECTIONS) {
+    if (!uiContext.extractMarkdownSection(handoffContent, section)) throw new Error(`UI handoff draft is missing section: ${section}.`);
+  }
+
+  const guideStatus = fm.ui_guide_status || 'update proposed';
+  const guidePath = guideStatus === 'unchanged'
+    ? uiContext.projectGuidePath(PROJECT_ROOT)
+    : uiContext.draftGuidePath(PROJECT_ROOT, sessionId);
+  if (!fs.existsSync(guidePath)) throw new Error(`UI guide is missing: ${path.relative(PROJECT_ROOT, guidePath)}.`);
+  const guide = uiContext.validateUiGuide(PROJECT_ROOT, guidePath, { allowPlanned: true });
+  if (!guide.valid) throw new Error(`UI guide validation failed: ${guide.errors.join('; ')}`);
+  if (guide.frontmatter.baseline !== fm.ui_baseline) {
+    throw new Error(`Plan baseline (${fm.ui_baseline}) does not match UI guide baseline (${guide.frontmatter.baseline}).`);
+  }
+  const baselinePack = uiContext.isBaselineKey(fm.ui_baseline)
+    ? uiContext.loadBaselinePack(fm.ui_baseline)
+    : null;
+  return {
+    guideStatus,
+    guidePath,
+    guide,
+    baselinePack,
+    handoffDraft,
+    handoffContent,
+  };
+}
+
+function displayUiDraftBox(sessionId) {
+  const guideDraft = uiContext.draftGuidePath(PROJECT_ROOT, sessionId);
+  const handoffDraft = uiContext.draftHandoffPath(PROJECT_ROOT, sessionId);
+  if (!fs.existsSync(guideDraft) && !fs.existsSync(handoffDraft)) return;
+  console.log(`${BOLD}${CYAN}┌─── UI planning artifacts ───────────────────────────────────${NC}`);
+  if (fs.existsSync(guideDraft)) {
+    const rootGuide = uiContext.projectGuidePath(PROJECT_ROOT);
+    console.log(`${CYAN}│${NC} Guide proposal: ${path.relative(PROJECT_ROOT, guideDraft)}`);
+    if (fs.existsSync(rootGuide)) {
+      const diff = spawnSync('git', ['diff', '--no-index', '--no-color', '--', rootGuide, guideDraft], { cwd: PROJECT_ROOT, encoding: 'utf8' });
+      const text = String(diff.stdout || '').trim();
+      if (text) text.split('\n').slice(0, 160).forEach(line => console.log(`${CYAN}│${NC} ${line}`));
+    }
+  }
+  if (fs.existsSync(handoffDraft)) console.log(`${CYAN}│${NC} Feature handoff: ${path.relative(PROJECT_ROOT, handoffDraft)}`);
+  console.log(`${BOLD}${CYAN}└────────────────────────────────────────────────────────────${NC}`);
+  console.log('');
+}
+
 /** Display plan.md content in a bordered box */
 function displayPlanBox(planFile, sessionId) {
   if (!lib.fileExists(planFile)) return;
@@ -1156,6 +1226,7 @@ function displayPlanBox(planFile, sessionId) {
   planText.split('\n').forEach(line => console.log(`${CYAN}│${NC} ${line}`));
   console.log(`${BOLD}${CYAN}└────────────────────────────────────────────────────────────${NC}`);
   console.log('');
+  if (sessionId) displayUiDraftBox(sessionId);
 }
 
 // Ensure the project is initialized. Offers to run `jonggrang init` if not.
@@ -1408,6 +1479,7 @@ async function cmdPlan(args, opts = {}) {
   let answersInput = '';   // --answers <file|-> : run Pass B directly with these answers
   let answersInline = '';  // --answers-inline <base64-json> : same, sandbox/web-safe
   let noAsk = false;       // --no-ask : skip the clarification step entirely
+  let baselineId = '';     // --baseline <id> : pre-select a UI design baseline/template
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -1422,7 +1494,25 @@ async function cmdPlan(args, opts = {}) {
     else if (arg === '--answers') answersInput = args[++i] || '';
     else if (arg === '--answers-inline') answersInline = args[++i] || '';
     else if (arg === '--no-ask') noAsk = true;
+    else if (arg === '--baseline') baselineId = args[++i] || '';
+    else if (arg.startsWith('--baseline=')) baselineId = arg.slice(11);
     else if (!arg.startsWith('--')) description = arg;
+  }
+
+  // --baseline <id>: pre-select a UI design baseline/template (built-in pack or a
+  // personal ~/.jonggrang/design/<name>). Selecting it up front means the planner
+  // uses that design directly and never asks the "which starter?" question. A bare
+  // id (e.g. "helo") resolves to its single "<id>@<version>" key when unambiguous.
+  if (baselineId) {
+    const keys = uiContext.baselineKeys();
+    if (!keys.includes(baselineId)) {
+      const byId = keys.filter(k => k.split('@')[0] === baselineId);
+      if (byId.length === 1) baselineId = byId[0];
+      else {
+        logError(`Unknown --baseline "${baselineId}". Available: ${keys.join(', ') || '(none)'}.`);
+        process.exit(1);
+      }
+    }
   }
 
   // Validate --base up front: it ends up interpolated into `git fetch` at
@@ -1490,14 +1580,19 @@ async function cmdPlan(args, opts = {}) {
     // Any `plan ask` the revision agent runs resolves to THIS session.
     process.env.JONGGRANG_DRAFT_SESSION = sid;
     const currentPlan = fs.readFileSync(draftFile, 'utf8');
+    const currentFm = parsePlanFrontmatter(currentPlan);
+    const reviseUi = buildUiPlanContext(sid, currentPlan, null, currentFm.ui === 'true');
     // Reuse any earlier clarifications so the revision respects prior decisions.
     const priorAnswers = lib.getPlanAnswers(lib.answersFileFor(PROJECT_ROOT, sid));
     const clarifications = lib.formatClarifications(priorAnswers);
-    const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description, draftFile, { clarifications });
+    const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, description, draftFile, { clarifications, ui: reviseUi });
     await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG });
     const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
     if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
     if (_v === 'missing') { logError('Agent did not write the plan. Retry.'); process.exit(1); }
+    if (reviseUi) {
+      try { verifyUiDraftPlan(draftFile, sid); } catch (error) { logError(error.message); process.exit(1); }
+    }
     logSuccess(`Plan revised (${sid}). Run "jonggrang approve" to decompose into tasks.`);
     return sid;
   }
@@ -1540,7 +1635,7 @@ async function cmdPlan(args, opts = {}) {
     }
 
     if (!isInteractiveTTY) {
-      logError('Usage: jonggrang plan "<feature-description>" [--yes]');
+      logError('Usage: jonggrang plan "<feature-description>" [--baseline <id>] [--yes]');
       process.exit(1);
     }
 
@@ -1583,6 +1678,14 @@ async function cmdPlan(args, opts = {}) {
   const questionsFile = lib.questionsFileFor(PROJECT_ROOT, sid);
   const answersFile = lib.answersFileFor(PROJECT_ROOT, sid);
   process.env.JONGGRANG_DRAFT_SESSION = sid;
+  let uiPlan = buildUiPlanContext(sid, description, srcPath, Boolean(baselineId), baselineId || null);
+  if (uiPlan) {
+    logInfo(`UI work detected — guide ${uiPlan.guideStatus}; baseline ${baselineId ? `selected ${uiPlan.baseline}` : `recommendation ${uiPlan.baseline || 'needs user choice'}`}.`);
+    if ((autoApprove || noAsk) && (uiPlan.requiresBaselineConsent || !uiPlan.baseline)) {
+      logError('A starter baseline cannot be selected with --yes/--no-ask before the user confirms they have no preferred UI direction or reference. Run interactive plan once, provide answers, or explicitly name a baseline id in the request.');
+      process.exit(1);
+    }
+  }
 
   const existingDrafts = lib.getAllDrafts(PROJECT_ROOT).filter(d => d.sessionId !== sid);
   if (existingDrafts.length > 0 && !sessionId) {
@@ -1602,9 +1705,15 @@ async function cmdPlan(args, opts = {}) {
     if (!answers && !noAsk && !autoApprove) {
       lib.clearPlanQuestions(questionsFile);
       logInfo('Analyzing goal — the agent may ask clarifying questions first...');
-      const qPrompt = lib.buildPlanQuestionsPrompt(description, CONFIG_FILE, srcPath, resolvedBase);
+      const qPrompt = lib.buildPlanQuestionsPrompt(description, CONFIG_FILE, srcPath, resolvedBase, { ui: uiPlan });
       await lib.runAgent(qPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
-      const q = lib.getPlanQuestions(questionsFile);
+      let q = lib.getPlanQuestions(questionsFile);
+      if (uiPlan && uiPlan.preferenceQuestion) {
+        q = lib.savePlanQuestions(questionsFile, {
+          goal_analysis: q.goal_analysis || `Plan UI work for: ${description}`,
+          questions: [uiPlan.preferenceQuestion, ...(q.questions || []).filter(item => item.id !== 'ui-preference')],
+        });
+      }
       if (q.questions && q.questions.length > 0) {
         if (isInteractiveTTY) {
           answers = await collectAnswersInteractive(q);
@@ -1621,6 +1730,10 @@ async function cmdPlan(args, opts = {}) {
       }
     }
     if (answers) {
+      if (uiPlan && uiPlan.requiresBaselineConsent) {
+        try { uiPlan = uiContext.resolveUiPreference(uiPlan, answers); }
+        catch (error) { logError(error.message); process.exit(1); }
+      }
       lib.savePlanAnswers(answersFile, answers);
       // Questions are now answered — drop the pending-questions marker so the web
       // (resolveActiveQuestionDraft) doesn't resurface this draft as unanswered.
@@ -1647,11 +1760,11 @@ async function cmdPlan(args, opts = {}) {
       const discoveryFile = path.join(draftDir, 'deep-plan-discovery.md');
       const analysisFile = path.join(draftDir, 'deep-plan-analysis.md');
       logInfo(`${BOLD}[1/3]${NC} Codebase discovery (for the additional scope)...`);
-      await lib.runAgent(lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, null, { baseBranch: resolvedBase }), TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+      await lib.runAgent(lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, null, { baseBranch: resolvedBase, ui: uiPlan }), TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       if (lib.fileExists(discoveryFile)) {
         const discoveryContent = fs.readFileSync(discoveryFile, 'utf8');
         logInfo(`${BOLD}[2/3]${NC} Complexity analysis & brainstorm...`);
-        await lib.runAgent(lib.buildDeepPlanAnalysisPrompt(description, discoveryContent, analysisFile), TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
+        await lib.runAgent(lib.buildDeepPlanAnalysisPrompt(description, discoveryContent, analysisFile, null, { ui: uiPlan }), TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
         deepCtx = { discovery: discoveryContent, analysis: lib.fileExists(analysisFile) ? fs.readFileSync(analysisFile, 'utf8') : '' };
       } else {
         logWarn('Discovery step produced no output — falling back to standard extension synthesis.');
@@ -1661,7 +1774,7 @@ async function cmdPlan(args, opts = {}) {
       logInfo('Generating extension plan...');
     }
 
-    const prompt = lib.buildAppendPlanPrompt(description, existingPlan, existingTasks, CONFIG_FILE, PROJECT_ROOT, draftFile, appendTo, { deep: deepCtx, baseBranch: resolvedBase });
+    const prompt = lib.buildAppendPlanPrompt(description, existingPlan, existingTasks, CONFIG_FILE, PROJECT_ROOT, draftFile, appendTo, { deep: deepCtx, baseBranch: resolvedBase, ui: uiPlan });
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
     const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
     if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1695,13 +1808,13 @@ async function cmdPlan(args, opts = {}) {
 
     // Phase 1: Discovery
     logInfo(`${BOLD}[1/3]${NC} Codebase discovery...`);
-    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, srcPath, { clarifications, baseBranch: resolvedBase });
+    const discoveryPrompt = lib.buildDeepPlanDiscoveryPrompt(description, CONFIG_FILE, discoveryFile, srcPath, { clarifications, baseBranch: resolvedBase, ui: uiPlan });
     await lib.runAgent(discoveryPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
     if (!lib.fileExists(discoveryFile)) {
       logError(`Discovery agent did not write ${discoveryFile}`);
       logInfo('Falling back to standard plan generation...');
-      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase });
+      const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase, ui: uiPlan });
       await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
       if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1710,13 +1823,13 @@ async function cmdPlan(args, opts = {}) {
       // Phase 2: Analysis
       logInfo(`${BOLD}[2/3]${NC} Complexity analysis & brainstorm...`);
       const discoveryContent = fs.readFileSync(discoveryFile, 'utf8');
-      const analysisPrompt = lib.buildDeepPlanAnalysisPrompt(description, discoveryContent, analysisFile, srcPath);
+      const analysisPrompt = lib.buildDeepPlanAnalysisPrompt(description, discoveryContent, analysisFile, srcPath, { ui: uiPlan });
       await lib.runAgent(analysisPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
       if (!lib.fileExists(analysisFile)) {
         logError(`Analysis agent did not write ${analysisFile}`);
         logInfo('Falling back to standard plan generation using discovery only...');
-        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase });
+        const fallbackPrompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase, ui: uiPlan });
         await lib.runAgent(fallbackPrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
         const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
         if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1726,7 +1839,7 @@ async function cmdPlan(args, opts = {}) {
         logInfo(`${BOLD}[3/3]${NC} Condensing into enriched plan.md...`);
         const analysisContent = fs.readFileSync(analysisFile, 'utf8');
         const condensePrompt = lib.buildDeepPlanCondensePrompt(
-          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase }
+          description, discoveryContent, analysisContent, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase, ui: uiPlan }
         );
         await lib.runAgent(condensePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
         const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
@@ -1753,7 +1866,7 @@ async function cmdPlan(args, opts = {}) {
     // Clear stale feedback-loop state — planning is read-only, must not be blocked.
     feedback.clearFeedbackState(PROJECT_ROOT);
 
-    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase });
+    const prompt = lib.buildDraftPlanPrompt(description, CONFIG_FILE, PROJECT_ROOT, draftFile, srcPath, { clarifications, baseBranch: resolvedBase, ui: uiPlan });
     await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
     const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
     if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
@@ -1772,6 +1885,18 @@ async function cmdPlan(args, opts = {}) {
   // Warn if it didn't take — otherwise the worktree silently cuts from HEAD.
   if (resolvedBase && lib.fileExists(draftFile) && !lib.setPlanBase(draftFile, resolvedBase)) {
     logWarn(`Could not write base "${resolvedBase}" to the plan frontmatter — the worktree will start from HEAD unless you set it manually.`);
+  }
+
+  if (uiPlan) {
+    try {
+      const checked = verifyUiDraftPlan(draftFile, sid);
+      if (!checked) throw new Error('UI work was detected but the generated plan omitted `ui: true`.');
+      logSuccess('UI guide and feature handoff draft validated.');
+    } catch (error) {
+      logError(error.message);
+      logInfo(`The draft remains at ${path.relative(PROJECT_ROOT, draftFile)} for revision.`);
+      process.exit(1);
+    }
   }
 
   if (autoApprove) {
@@ -1811,6 +1936,10 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts, sessionId) {
   if (!isInteractiveTTY) {
     logSuccess(`Draft plan written (session ${sessionId}).`);
     logInfo(`Path: ${path.relative(PROJECT_ROOT, draftFile)}`);
+    const uiHandoff = uiContext.draftHandoffPath(PROJECT_ROOT, sessionId);
+    const uiGuide = uiContext.draftGuidePath(PROJECT_ROOT, sessionId);
+    if (fs.existsSync(uiGuide)) logInfo(`UI guide proposal: ${path.relative(PROJECT_ROOT, uiGuide)}`);
+    if (fs.existsSync(uiHandoff)) logInfo(`UI handoff draft: ${path.relative(PROJECT_ROOT, uiHandoff)}`);
     logInfo('Review / edit it, then run "jonggrang approve" to decompose into tasks.');
     return;
   }
@@ -1848,11 +1977,16 @@ async function showPlanOptions(isInteractiveTTY, autoApprove, opts, sessionId) {
       }
       logInfo('Revising plan with AI...');
       const currentPlan = fs.readFileSync(draftFile, 'utf8');
-      const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, feedback.trim(), draftFile);
+      const currentFm = parsePlanFrontmatter(currentPlan);
+      const reviseUi = buildUiPlanContext(sessionId, currentPlan, null, currentFm.ui === 'true');
+      const revisePrompt = lib.buildRevisePlanPrompt(currentPlan, feedback.trim(), draftFile, { ui: reviseUi });
       await lib.runAgent(revisePrompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
       const _v = lib.verifyDraftWritten(PROJECT_ROOT, draftFile);
-      if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sid}.`);
+      if (_v === 'moved') logWarn(`Agent wrote to root plan.md — moved to session ${sessionId}.`);
       if (_v === 'missing') logWarn('Agent did not write the plan — showing previous version.');
+      if (reviseUi && _v !== 'missing') {
+        try { verifyUiDraftPlan(draftFile, sessionId); } catch (error) { logWarn(`UI draft validation: ${error.message}`); }
+      }
       // loop back → display updated plan + options again
 
     } else if (choice === 'edit') {
@@ -1918,6 +2052,25 @@ async function cmdApprove(args, opts = {}) {
 
   // Parse YAML frontmatter fields
   const fm = parsePlanFrontmatter(planContent);
+  let approvedUi = null;
+  if (fm.ui === 'true') {
+    try {
+      const checked = verifyUiDraftPlan(draftFile, sessionId);
+      const guideContent = fs.readFileSync(checked.guidePath, 'utf8');
+      approvedUi = {
+        ...checked,
+        guideContent,
+        guideRevision: uiContext.contentDigest(guideContent),
+        baseline: checked.guide.frontmatter.baseline,
+        tokenSource: checked.guide.frontmatter.token_source,
+        tokenStatus: checked.guide.frontmatter.token_status || 'ready',
+      };
+      logInfo(`UI context: ${approvedUi.baseline}; tokens ${approvedUi.tokenStatus}.`);
+    } catch (error) {
+      logError(`Cannot approve UI plan: ${error.message}`);
+      process.exit(1);
+    }
+  }
 
   // Append target: explicit --feature wins, else the draft's `append_to` (written
   // by `plan --append`). When set, we decompose ADDITIONAL tasks into an existing
@@ -1955,6 +2108,10 @@ async function cmdApprove(args, opts = {}) {
 
   // Snapshot existing task IDs IN THIS FEATURE so we can detect what the agent
   // added (append continues this feature's own numbering; a new feature is empty).
+  const approvalTasksFile = lib.tasksFileFor(PROJECT_ROOT, featureId);
+  const previousTasksContent = fs.existsSync(approvalTasksFile)
+    ? fs.readFileSync(approvalTasksFile, 'utf8')
+    : null;
   const existingTaskIds = new Set(
     (lib.getAllTasks(PROJECT_ROOT)?.tasks || [])
       .filter(t => t.feature_id === featureId)
@@ -1966,15 +2123,122 @@ async function cmdApprove(args, opts = {}) {
   logInfo(`Work type:  ${workType}`);
   logInfo(isAppend ? 'Decomposing additional tasks into the existing plan...' : 'Decomposing plan into tasks...');
 
-  const prompt = lib.buildTasksFromPlanPrompt(planContent, CONFIG_FILE, PROJECT_ROOT, featureId, SKILLS_DIR);
+  const finalUiHandoffPath = uiContext.featureHandoffPath(PROJECT_ROOT, featureId);
+  const previousUiHandoff = approvedUi && fs.existsSync(finalUiHandoffPath)
+    ? fs.readFileSync(finalUiHandoffPath, 'utf8')
+    : null;
+  const rollbackUiApproval = () => {
+    if (!approvedUi) return;
+    if (!isAppend) {
+      try { fs.rmSync(featureDir, { recursive: true, force: true }); } catch {}
+      return;
+    }
+    try {
+      if (previousTasksContent == null) fs.unlinkSync(approvalTasksFile);
+      else fs.writeFileSync(approvalTasksFile, previousTasksContent, 'utf8');
+    } catch {}
+    try {
+      if (previousUiHandoff == null) fs.unlinkSync(finalUiHandoffPath);
+      else fs.writeFileSync(finalUiHandoffPath, previousUiHandoff, 'utf8');
+    } catch {}
+  };
+  const uiTaskOptions = approvedUi ? {
+    guideContent: approvedUi.guideContent,
+    guideRevision: approvedUi.guideRevision,
+    baseline: approvedUi.baseline,
+    tokenSource: approvedUi.tokenSource,
+    tokenStatus: approvedUi.tokenStatus,
+    baselineGuideFragment: approvedUi.baselinePack ? approvedUi.baselinePack.guideFragment : null,
+    baselineTokenTemplate: approvedUi.baselinePack ? approvedUi.baselinePack.tokenTemplate : null,
+    handoffDraftContent: isAppend && previousUiHandoff
+      ? `${previousUiHandoff}\n\n<!-- Approved extension direction -->\n${approvedUi.handoffContent}`
+      : approvedUi.handoffContent,
+    append: isAppend,
+    handoffPath: `.jonggrang/.output/features/${featureId}/UI_HANDOFF.md`,
+    handoffAbsolutePath: finalUiHandoffPath,
+  } : null;
+  const prompt = lib.buildTasksFromPlanPrompt(planContent, CONFIG_FILE, PROJECT_ROOT, featureId, SKILLS_DIR, { ui: uiTaskOptions });
   await lib.runAgent(prompt, TOOL, 'autonomous', PROJECT_ROOT, { debug: DEBUG, model: MODEL, effort: EFFORT });
 
   // New tasks = tasks in THIS feature that weren't there before the decompose.
-  const newTasks = (lib.getAllTasks(PROJECT_ROOT)?.tasks || [])
+  let newTasks = (lib.getAllTasks(PROJECT_ROOT)?.tasks || [])
     .filter(t => t.feature_id === featureId && !existingTaskIds.has(t.id));
   if (newTasks.length === 0) {
+    rollbackUiApproval();
     logError('Agent did not create any tasks. plan.md has been preserved — re-run "jonggrang approve" after fixing the issue.');
     process.exit(1);
+  }
+
+  if (approvedUi) {
+    try {
+      if (!fs.existsSync(finalUiHandoffPath)) throw new Error('decomposition agent did not write UI_HANDOFF.md');
+      const uiTasks = newTasks.filter(task => task.ui_context);
+      if (uiTasks.length === 0) throw new Error('UI plan produced no tasks with ui_context');
+
+      let finalGuideContent = approvedUi.guideContent;
+      let foundationId = null;
+      if (approvedUi.tokenStatus === 'planned') {
+        const foundations = uiTasks.filter(task => task.ui_context.foundation === true);
+        if (foundations.length !== 1) throw new Error('planned token source needs exactly one UI-foundation task');
+        foundationId = foundations[0].id;
+        finalGuideContent = uiContext.updateFrontmatter(finalGuideContent, { token_owner_task: foundationId });
+      }
+      const finalGuideRevision = uiContext.contentDigest(finalGuideContent);
+      const tasksFile = lib.tasksFileFor(PROJECT_ROOT, featureId);
+      const taskData = lib.getTasks(tasksFile);
+      const newIds = new Set(newTasks.map(task => task.id));
+      for (const task of taskData.tasks) {
+        const adoptsApprovedRevision = newIds.has(task.id)
+          || (isAppend && task.status !== 'completed' && task.ui_context);
+        if (adoptsApprovedRevision && task.ui_context) {
+          task.ui_context.guide_revision = finalGuideRevision;
+          task.ui_context.baseline = approvedUi.baseline;
+          task.ui_context.token_source = approvedUi.tokenSource;
+          // Every dependent UI task must wait for the token foundation; add the
+          // dependency deterministically if the decomposition agent omitted it.
+          if (foundationId && task.id !== foundationId) {
+            task.blocked_by = Array.isArray(task.blocked_by) ? task.blocked_by : [];
+            if (!task.blocked_by.includes(foundationId)) task.blocked_by.push(foundationId);
+          }
+        }
+      }
+      lib.writeJSON(tasksFile, taskData);
+      newTasks = taskData.tasks.filter(task => newIds.has(task.id));
+
+      let handoffContent = fs.readFileSync(finalUiHandoffPath, 'utf8');
+      handoffContent = uiContext.setHandoffMetadata(handoffContent, {
+        Guide: '.jonggrang/UI.md',
+        'Guide revision': finalGuideRevision,
+        Baseline: approvedUi.baseline,
+        'Token source': `${approvedUi.tokenSource} (${approvedUi.tokenStatus})`,
+        'Guide status': approvedUi.guideStatus,
+      });
+      fs.writeFileSync(finalUiHandoffPath, handoffContent, 'utf8');
+
+      const finalGuide = uiContext.validateUiGuide(PROJECT_ROOT, finalGuideContent, { allowPlanned: false });
+      if (!finalGuide.valid) throw new Error(`final UI guide invalid: ${finalGuide.errors.join('; ')}`);
+      const handoff = uiContext.validateUiHandoff(PROJECT_ROOT, finalUiHandoffPath, newTasks, {
+        featureId,
+        guideDigest: finalGuideRevision,
+        baseline: approvedUi.baseline,
+        tokenStatus: approvedUi.tokenStatus,
+        tokenTemplate: approvedUi.baselinePack ? approvedUi.baselinePack.tokenTemplate : null,
+        guideContent: finalGuideContent,
+      });
+      if (!handoff.valid) throw new Error(`final UI handoff invalid: ${handoff.errors.join('; ')}`);
+
+      if (approvedUi.guideStatus !== 'unchanged') {
+        const target = uiContext.projectGuidePath(PROJECT_ROOT);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, finalGuideContent, 'utf8');
+      }
+      logSuccess(`UI context validated: ${uiTasks.length} UI task(s), guide ${finalGuideRevision.slice(0, 20)}…`);
+    } catch (error) {
+      rollbackUiApproval();
+      logError(`UI context materialization failed: ${error.message}`);
+      logInfo('The plan draft was preserved and partial UI approval state was rolled back. Revise or retry approval.');
+      process.exit(1);
+    }
   }
 
   const featurePlanPath = path.join(featureDir, 'plan.md');
@@ -3247,7 +3511,7 @@ async function cmdMenuFull(runJonggrangApp) {
           await cmdReview();
           break;
         case 'agent':
-          await cmdAgent();
+          await cmdAgent(rest);
           break;
         case 'web':
           cmdWeb();
@@ -3298,13 +3562,23 @@ function spawnJonggrang(args) {
 }
 
 async function cmdAgent(rawArgs = []) {
-  // Optional interactive seed: `agent [--readonly] <initial prompt>`. Used by the
-  // web "Discuss" mode to open the Pi TUI already primed with a plan draft and,
-  // when --readonly is set, restricted to non-mutating tools.
+  // Optional interactive seed: `agent [--readonly] [-r|-c|--session <id>] <initial prompt>`.
+  // Used by the web "Discuss" mode to open the Pi TUI already primed with a plan draft
+  // and, when --readonly is set, restricted to non-mutating tools. The resume flags map
+  // straight to Pi: -r/--resume (browse & select a prior session), -c/--continue
+  // (continue the most recent), --session <id> (a specific session). The Design studio
+  // passes -r to continue a template's prior conversation.
   let readonly = false;
+  let resumeFlag = null;   // '--resume' | '--continue'
+  let sessionId = '';
   const promptParts = [];
-  for (const a of rawArgs) {
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i];
     if (a === '--readonly') readonly = true;
+    else if (a === '-r' || a === '--resume') resumeFlag = '--resume';
+    else if (a === '-c' || a === '--continue') resumeFlag = '--continue';
+    else if (a === '--session') sessionId = rawArgs[++i] || '';
+    else if (a.startsWith('--session=')) sessionId = a.slice('--session='.length);
     else promptParts.push(a);
   }
   const initialPrompt = promptParts.join(' ').trim();
@@ -3462,6 +3736,13 @@ async function cmdAgent(rawArgs = []) {
   const piArgs = [];
   if (initialPrompt) piArgs.push(initialPrompt);
   if (readonly) piArgs.push('--tools', 'read,grep,find,ls');
+  // Resume a prior conversation. An explicit --session id wins; otherwise -r/-c map
+  // to Pi's session picker / continue-most-recent. Skipped when seeding a fresh
+  // prompt (a seeded discussion starts a new session by design).
+  if (!initialPrompt) {
+    if (sessionId) piArgs.push('--session', sessionId);
+    else if (resumeFlag) piArgs.push(resumeFlag);
+  }
   piArgs.push(...extArgs);
 
   await main(piArgs, { extensionFactories: [jonggrangExtension] });
@@ -3965,6 +4246,11 @@ function taskShow(flags, positional, pretty) {
     console.log(`Blocked by:  ${(task.blocked_by || []).join(', ') || '(none)'}`);
     console.log(`Files:       ${(task.files || []).join(', ') || '(none)'}`);
     console.log(`Passes:      ${task.passes}`);
+    if (task.ui_context) {
+      console.log(`UI handoff:  ${task.ui_context.handoff}`);
+      console.log(`UI sections: ${(task.ui_context.sections || []).join(', ')}`);
+      console.log(`UI states:   ${(task.ui_context.states || []).join(', ') || '(none)'}`);
+    }
     if (task.description) console.log(`\nDescription:\n${task.description}`);
     if (task.error_log && task.error_log.length > 0) {
       console.log(`\nError log:`);
@@ -4064,7 +4350,13 @@ function taskDone(flags, positional, pretty) {
   const taskId = positional[0];
   if (!taskId) throw new Error('Task ID required. Usage: jonggrang task done <task-id>');
 
-  const tasksFile = resolveTasksFile(flags, taskId);
+  const featureId = resolveFeatureId(flags, taskId);
+  const tasksFile = lib.tasksFileFor(PROJECT_ROOT, featureId);
+  const before = lib.getTask(tasksFile, taskId);
+  if (before && before.ui_context && before.ui_context.foundation === true) {
+    const promoted = uiContext.promoteUiFoundation(PROJECT_ROOT, featureId, taskId);
+    logSuccess(`UI foundation ready: ${promoted.tokenSource}`);
+  }
   lib.markTaskDone(tasksFile, taskId);
   const task = lib.getTask(tasksFile, taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
@@ -4492,6 +4784,156 @@ Examples:
 }
 
 // ============================================================
+// DESIGN — global design templates (~/.jonggrang/design/<name>)
+// ============================================================
+
+function cmdDesign(args) {
+  const subcommand = args[0];
+  const subArgs = args.slice(1);
+  if (!subcommand || subcommand === 'help' || subcommand === '--help') { cmdDesignHelp(); return; }
+
+  const flags = {};
+  const positional = [];
+  let j = 0;
+  while (j < subArgs.length) {
+    if (subArgs[j] === '--from')          { flags.from = subArgs[++j]; }
+    else if (subArgs[j] === '--intent')   { flags.intent = subArgs[++j]; }
+    else if (subArgs[j] === '--shapes')   { flags.shapes = subArgs[++j]; }
+    else if (subArgs[j] === '--keywords') { flags.keywords = subArgs[++j]; }
+    else if (subArgs[j] === '--variant')  { flags.variant = subArgs[++j]; }
+    else if (subArgs[j] === '--force')    { flags.force = true; }
+    else if (subArgs[j] === '--json')     { flags.json = true; }
+    else { positional.push(subArgs[j]); }
+    j++;
+  }
+  const pretty = !flags.json && process.stdout.isTTY;
+
+  try {
+    switch (subcommand) {
+      case 'list':     designList(pretty); break;
+      case 'new':      designNew(positional[0], flags, pretty); break;
+      case 'promote':  designPromote(positional[0], flags, pretty); break;
+      case 'show':     designShow(positional[0], pretty); break;
+      case 'validate': designValidate(positional[0], pretty); break;
+      case 'remove':
+      case 'rm':       designRemove(positional[0], pretty); break;
+      case 'get':      designGet(positional[0], positional[1], flags); break; // design get <name> <what>
+      default:
+        // design <name> get <what>
+        if (positional[0] === 'get') designGet(subcommand, positional[1], flags);
+        else designShow(subcommand, pretty);
+    }
+  } catch (err) {
+    if (pretty) logError(err.message);
+    else console.log(JSON.stringify({ error: err.message }));
+    process.exit(1);
+  }
+}
+
+function designList(pretty) {
+  const templates = design.listTemplates();
+  if (!pretty) { console.log(JSON.stringify(templates.map(t => ({ id: t.id, key: t.key, valid: t.valid, source: t.source })))); return; }
+  console.log(`Design templates  ${DIM}(${design.designRoot()})${NC}`);
+  if (!templates.length) { console.log('  (none) — create one with: jonggrang design new <name>'); return; }
+  for (const t of templates) {
+    const mark = t.valid ? `${GREEN}✓${NC}` : `${RED}✗${NC}`;
+    console.log(`  ${mark} ${t.key}${t.intent ? `  ${DIM}${t.intent}${NC}` : ''}`);
+    if (!t.valid) console.log(`      ${RED}${(t.errors || []).join('; ')}${NC}`);
+  }
+}
+
+function designNew(name, flags, pretty) {
+  if (!name) throw new Error('Usage: jonggrang design new <name> [--intent "..."] [--shapes a,b] [--keywords a,b]');
+  const res = design.newTemplate(name, {
+    intent: flags.intent,
+    product_shapes: flags.shapes ? flags.shapes.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    recommend_keywords: flags.keywords ? flags.keywords.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    force: flags.force,
+  });
+  if (pretty) logSuccess(`Created design template ${name} at ${res.dir}`);
+  else console.log(JSON.stringify(res));
+}
+
+function designPromote(name, flags, pretty) {
+  if (!name) throw new Error('Usage: jonggrang design promote <name> [--from <project-path>]');
+  const projectRoot = flags.from ? path.resolve(flags.from) : PROJECT_ROOT;
+  const res = design.promoteFromProject(name, projectRoot, { force: flags.force });
+  if (pretty) {
+    logSuccess(`Promoted ${projectRoot} → design template ${name}`);
+    console.log(`  ${DIM}${res.dir}${NC}`);
+    if (res.tokenSource) console.log(`  token source: ${res.tokenSource}`);
+  } else console.log(JSON.stringify(res));
+}
+
+function designShow(name, pretty) {
+  if (!name) throw new Error('Usage: jonggrang design show <name>');
+  const t = design.loadTemplate(name);
+  if (!pretty) { console.log(JSON.stringify({ key: t.key, manifest: t.manifest, components: t.components.map(c => ({ id: c.id, variants: c.variants })) })); return; }
+  console.log(`${t.key}  ${DIM}${t.manifest.intent || ''}${NC}`);
+  console.log(`  dir:        ${t.dir}`);
+  console.log(`  shapes:     ${(t.manifest.product_shapes || []).join(', ')}`);
+  console.log(`  components:  ${t.components.length ? t.components.map(c => c.id).join(', ') : '(none)'}`);
+  const sections = uiContext.markdownSections(t.guideFragment).sections.filter(s => s.level === 2).map(s => s.title);
+  console.log(`  guide:      ${sections.length} sections`);
+  const v = design.validateTemplate(name);
+  console.log(`  valid:      ${v.valid ? `${GREEN}yes${NC}` : `${RED}no — ${v.errors.join('; ')}${NC}`}`);
+  if (v.warnings.length) console.log(`  warnings:   ${YELLOW}${v.warnings.join('; ')}${NC}`);
+}
+
+function designValidate(name, pretty) {
+  if (!name) throw new Error('Usage: jonggrang design validate <name>');
+  const v = design.validateTemplate(name);
+  if (!pretty) { console.log(JSON.stringify(v)); if (!v.valid) process.exit(1); return; }
+  if (v.valid) logSuccess(`${name} is valid`);
+  else { logError(`${name} invalid:`); v.errors.forEach(e => console.log(`  - ${e}`)); }
+  if (v.warnings.length) { console.log(`${YELLOW}warnings:${NC}`); v.warnings.forEach(w => console.log(`  - ${w}`)); }
+  if (!v.valid) process.exit(1);
+}
+
+function designRemove(name, pretty) {
+  if (!name) throw new Error('Usage: jonggrang design remove <name>');
+  design.removeTemplate(name);
+  if (pretty) logSuccess(`Removed design template ${name}`);
+  else console.log(JSON.stringify({ removed: name }));
+}
+
+// design <name> get <tokens|guide|manifest|component>  — RAW output (agent-facing)
+function designGet(name, what, flags) {
+  if (!name || !what) throw new Error('Usage: jonggrang design <name> get <tokens|guide|manifest|component-id>');
+  process.stdout.write(design.getArtifact(name, what, { variant: flags.variant }));
+  if (process.stdout.isTTY) process.stdout.write('\n');
+}
+
+function cmdDesignHelp() {
+  console.log(`jonggrang design — global, reusable design templates (~/.jonggrang/design/<name>)
+
+A design template is a superset of a UI baseline pack: manifest.yml + guide-fragment.md
++ tokens.css.template + framework-agnostic HTML/token components. Personal templates are
+selectable in \`plan\` exactly like built-in baseline packs.
+
+Usage: jonggrang design <subcommand> [options]
+
+Subcommands:
+  list                          List templates in ~/.jonggrang/design
+  new <name> [--intent "..."]   Scaffold a new template (--shapes a,b --keywords a,b)
+  promote <name> [--from <dir>] Build a template from a project's .jonggrang/UI.md + tokens
+  show <name>                   Show manifest, components, guide sections, validity
+  validate <name>               Validate against the pack + component contract
+  <name> get <what>             Emit tokens | guide | manifest | <component-id> (raw, agent-facing)
+  remove <name>                 Delete a template
+
+Options: --from <dir>  --intent  --shapes a,b  --keywords a,b  --variant <v>  --force  --json
+
+Examples:
+  jonggrang design new acme --intent "Acme brand" --shapes dashboard
+  jonggrang design promote acme --from ~/work/acme-app
+  jonggrang design acme get button
+  jonggrang design acme get tokens > acme-tokens.css
+  jonggrang design list
+`);
+}
+
+// ============================================================
 // HELP
 // ============================================================
 
@@ -4522,6 +4964,7 @@ Commands:
   task <subcommand>       Manage tasks (list, add, update, done, block, remove, show, next)
   memory <subcommand>     Repo-tracked memory (read, recall, fragment add, compact, promote) (#79)
   manifest [sub]          Inspect output-file manifests (list, show, add)
+  design <sub>            Global design templates (list, new, promote, show, get, validate, remove)
   codemap [opts]          Show/refresh deterministic codebase map (LLM-free)
   agent                   Start interactive chat with the AI agent (Pi TUI)
   login                   Add provider credentials (OAuth subscription or API key)
@@ -4732,6 +5175,11 @@ async function main() {
 
   if (command === 'issues') {
     await cmdIssues(rest);
+    return;
+  }
+
+  if (command === 'design') {
+    cmdDesign(rest);
     return;
   }
 

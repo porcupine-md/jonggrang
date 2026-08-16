@@ -68,9 +68,11 @@ You describe what you want
         |
         v
   jonggrang plan  -->  Phase 1: AI writes .jonggrang/.drafts/<session>/plan.md (high-level, human-editable)
+        |              UI work also audits local design evidence and drafts guide/handoff context
         |              Review / edit the plan in your editor
         v
   jonggrang approve  -->  Phase 2: AI reads plan.md → decomposes into tasks
+        |                 UI tasks receive bounded ui_context + feature UI_HANDOFF.md
         |                 plan.md archived, per-feature jonggrang-tasks.json written
         v
   jonggrang work  -->  For each task:
@@ -286,13 +288,17 @@ your-project/
 │   └── library/             # Tier 2 — JIT via gateway
 ├── .jonggrang/
 │   ├── jonggrang.json       # Project config
+│   ├── UI.md                # Canonical project UI guide (tracked; optional)
 │   ├── .drafts/<session>/     # Draft plans (gitignored, per-session — concurrent-safe)
-│   │   └── plan.md            # Pending plan (exists between plan → approve)
+│   │   ├── plan.md            # Pending plan (exists between plan → approve)
+│   │   ├── UI.md              # Proposed guide update (UI plans only)
+│   │   └── UI_HANDOFF.md      # Feature direction draft (UI plans only)
 │   ├── .output/
 │   │   └── features/<id>/
 │   │       ├── plan.md              # Archived plan (after approve)
 │   │       ├── MANIFEST.yaml        # Phase state
 │   │       ├── jonggrang-tasks.json # Task board state (per-feature)
+│   │       ├── UI_HANDOFF.md        # Approved UI task contracts (optional)
 │   │       └── progress.txt         # Auto-generated learnings (per-feature)
 │   ├── .ephemeral/          # Runtime state (feedback loop, compaction)
 │   └── locks/               # File ownership locks
@@ -312,6 +318,16 @@ your-project/
 ### AGENTS.md
 
 The most important file for output quality. Tells AI agents about your project's conventions, patterns, and gotchas. **Human-curated** — research shows human-written AGENTS.md improves agent success ~4%.
+
+### .jonggrang/UI.md and feature UI_HANDOFF.md
+
+UI context follows the same thin-agent principle as the rest of Jonggrang. The
+project guide stores durable product rules and source paths. The feature handoff
+freezes approved intent and state behavior. Each task receives only selected
+handoff sections and may read named guide sections or source files on demand.
+This prevents both context overload and local design drift. When sources
+conflict, agents report `UI_GUIDE_DRIFT` instead of inventing a new rule. See
+[UI_CONTEXT.md](UI_CONTEXT.md).
 
 ### .jonggrang/.output/features/{id}/progress.txt
 

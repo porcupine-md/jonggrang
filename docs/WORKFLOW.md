@@ -18,8 +18,9 @@ Phase 1 — jonggrang plan "description"
     │   (an agent-facing intake command, the sibling of `task import`) instead of
     │   guessing. You answer each — pick an option (every option carries its
     │   rationale) or type your own. Skipped when the request is unambiguous, or
-    │   with `--no-ask`. Q&A is stored in .jonggrang/plan-questions.json +
-    │   plan-answers.json (durable — reused on `plan --revise`).
+    │   with `--no-ask`. Q&A is stored beside the draft as
+    │   .jonggrang/.drafts/<session>/plan-questions.json + plan-answers.json
+    │   (durable — reused on `plan --revise`).
     │
     ├─ Pass B — AI writes .jonggrang/.drafts/<session>/plan.md  (high-level,
     │   human-editable), honoring the answers and recording them in a
@@ -28,6 +29,11 @@ Phase 1 — jonggrang plan "description"
     │   frontmatter: feature, branch, work_type, description, created_at
     │   optional `base:` (set via `--base` / the web base picker) — the branch the
     │   worktree is cut from; fetched fresh from origin at run time. Default: main/master.
+    │
+    ├─ UI requests only — deterministic audit finds local tokens, components,
+    │   screens, and checks. Pass B also writes UI.md when the project guide must
+    │   change and UI_HANDOFF.md for approved feature direction. The interactive
+    │   view shows the artifacts and guide diff.
     │
     ├─ Interactive prompt:
     │   > Approve (immediately run Phase 2)
@@ -40,6 +46,9 @@ Phase 2 — jonggrang approve   (or `jonggrang approve --session <id>` / auto-tr
     ├─ Resolves the draft (most-recent, or --session <id>)
     ├─ AI reads the draft plan.md
     ├─ Decomposes into atomic tasks → .jonggrang/.output/features/<id>/jonggrang-tasks.json
+    ├─ UI plans only: writes per-task `ui_context`, validates one matching handoff
+    │   section per UI task, and materializes `.jonggrang/UI.md` plus feature
+    │   `UI_HANDOFF.md`
     └─ Promotes plan → .jonggrang/.output/features/<id>/plan.md
        Discards the draft session folder
 ```
@@ -61,6 +70,7 @@ Phase 2 — jonggrang approve   (or `jonggrang approve --session <id>` / auto-tr
 | `jonggrang plan "feat" --yes` | Plan + auto-approve + tasks (no interactive prompt) |
 | `jonggrang plan "feat" --deep` | Deep mode: 3-phase analysis → enriched plan.md |
 | `jonggrang plan "feat" --deep --yes` | Deep mode + auto-approve in one shot |
+| `jonggrang plan "feat" --baseline helo@1` | Pre-select a UI design template / baseline pack (built-in or `~/.jonggrang/design/*`) — planner styles from it and skips the "which starter?" question. Bare id (`--baseline helo`) resolves to `helo@1`. In the web New Plan form this is the **"design:"** picker. |
 | `jonggrang plan` | No description → picker: list all pending + archived plans |
 | `jonggrang work "feat" --yes` | Full pipeline: plan → approve → execute |
 | `jonggrang work --ignore-plan` | Skip pending plan warning, run existing tasks |
@@ -119,6 +129,24 @@ jonggrang plan        # no description → shows list of pending + archived plan
 > ids), and error with `AMBIGUOUS_TASK_ID` when genuinely ambiguous. Existing
 > projects keep their current ids — no renumber, no migration.
 
+#### UI planning context
+
+UI-affecting plans follow the same two phases. The difference is that planning
+also audits local UI evidence. Before any built-in starter is selected, the user
+provides a preference/reference, explicitly accepts the recommendation, or
+declines starter packs. Approval then materializes three bounded levels: project
+`.jonggrang/UI.md`, feature `UI_HANDOFF.md`, and task `ui_context`.
+Backend-only tasks carry none of this context. A missing token source creates one
+UI-foundation task and blocks later UI work. Runtime prompts include only feature
+intent, shared direction, and the current task contract; agents read named guide
+sections and source files on demand. Conflicts fail closed as `UI_GUIDE_DRIFT`.
+
+Valid baseline packs are discovered from `templates/ui-baselines/`; current
+version-one packs include `landing-page-minimalist@1`,
+`dashboard-operational@1`, and `mobile-app-minimalist@1`. They are optional
+starting points, not mandatory libraries. See [UI planning context](UI_CONTEXT.md)
+and [UI baseline packs](UI_BASELINES.md).
+
 ---
 
 ### Iteration Lifecycle
@@ -136,6 +164,8 @@ jonggrang memory recall --query <task goal> [--feature <id>] [--task <id>]  --> 
 .jonggrang/.output/features/<id>/jonggrang-tasks.json  --> Current task state
 git log --oneline -20                              --> Recent changes for context
 .jonggrang/jonggrang.json                          --> Project config
+UI tasks only: selected feature handoff sections   --> Intent + shared direction + own task contract
+UI tasks on demand: named UI.md sections/files     --> Reusable rules and implementation evidence
 ```
 
 Total context budget: ~30% of window for context, ~70% for work.

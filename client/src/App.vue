@@ -8,6 +8,7 @@
       <div class="nav-links">
         <RouterLink to="/" class="nav-link">projects</RouterLink>
         <RouterLink to="/issues" class="nav-link">issues</RouterLink>
+        <RouterLink to="/design" class="nav-link">design</RouterLink>
         <RouterLink to="/secrets" class="nav-link">secrets</RouterLink>
         <RouterLink to="/settings" class="nav-link">settings</RouterLink>
       </div>

@@ -1,0 +1,37 @@
+id: mobile-app-minimalist
+version: 1
+intent: Focused mobile products with short task flows, clear navigation, and calm surfaces.
+product_shapes:
+  - mobile-app
+  - responsive-app
+recommend_keywords:
+  - mobile
+  - ios
+  - android
+  - react native
+  - react-native
+  - flutter
+  - expo
+recommend_frameworks:
+  - react-native
+  - flutter
+recommend_priority: 30
+framework_targets:
+  - css
+  - react-native
+  - flutter
+  - any
+flavor:
+  density: comfortable
+  geometry: restrained-soft
+  typography: system-sans
+avoid:
+  - nested cards
+  - floating controls without a task reason
+  - tiny secondary actions
+  - gesture-only critical behavior
+guide_fragment: guide-fragment.md
+token_template: tokens.css.template
+plan_questions:
+  - What is the user's primary one-handed task?
+  - Which state must survive interruption or poor connectivity?

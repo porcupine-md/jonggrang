@@ -33,6 +33,8 @@ const routes = [
     ],
   },
   { path: '/issues',   component: () => import('../views/IssuesView.vue') },
+  { path: '/design',        component: () => import('../views/DesignListView.vue') },
+  { path: '/design/:name',  component: () => import('../views/DesignStudioView.vue') },
   { path: '/settings', component: () => import('../views/SettingsView.vue') },
   { path: '/secrets',  component: () => import('../views/SecretsView.vue') },
   // Legacy single-project route — keep old UI accessible

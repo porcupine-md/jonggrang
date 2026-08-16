@@ -20,30 +20,43 @@
           @keydown.ctrl.enter="generatePlan"
         />
         <div class="plan-form-footer">
-          <label class="deep-label">
-            <input type="checkbox" v-model="deep" />
-            Deep analysis
-          </label>
-          <label class="deep-label" style="gap:6px" title="Branch the worktree is cut from (fetched fresh from origin)">
-            base:
-            <Select v-model="selectedBase" :options="availableBranches" filter resetFilterOnHide
-                    filterPlaceholder="search branch…" scrollHeight="240px"
-                    placeholder="base branch" class="base-select" />
-          </label>
-          <div style="flex:1" />
-          <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD source file">
-            <i class="pi pi-upload" /> BRD/PRD
-          </button>
-          <input ref="fileInputRef" type="file" style="display:none" @change="onFileChange" />
-          <button class="tool-config-btn" @click="openToolModal">
-            <span>{{ TOOLS.find(t => t.value === selectedTool)?.label || 'Configure' }}</span>
-            <span v-if="selectedModel" class="tool-config-extra">· {{ selectedModel }}</span>
-            <span v-if="selectedEffort" class="tool-config-extra">· {{ selectedEffort }}</span>
-            <i class="pi pi-cog" />
-          </button>
-          <Button :disabled="(!description.trim() && !uploadedFile) || generating" @click="generatePlan">
-            <i class="pi pi-sparkles" /> {{ generating ? 'Generating...' : 'Generate Plan' }}
-          </Button>
+          <div class="plan-footer-config">
+            <label class="deep-label">
+              <input type="checkbox" v-model="deep" />
+              Deep analysis
+            </label>
+            <label class="deep-label" title="Branch the worktree is cut from (fetched fresh from origin)">
+              base:
+              <Select v-model="selectedBase" :options="availableBranches" filter resetFilterOnHide
+                      filterPlaceholder="search branch…" scrollHeight="240px"
+                      placeholder="base branch" class="base-select" />
+            </label>
+            <label v-if="baselineOptions.length" class="deep-label" title="Design template / UI baseline to style this plan from (skips the design question)">
+              design:
+              <Select v-model="selectedBaseline" :options="baselineOptions" optionLabel="label" optionValue="value"
+                      filter resetFilterOnHide filterPlaceholder="search design…" scrollHeight="240px"
+                      showClear placeholder="auto" class="base-select" />
+            </label>
+          </div>
+          <div class="plan-footer-actions">
+            <button v-if="storageConfigured" class="tool-config-btn" @click="triggerUpload" :disabled="uploading" title="Upload a file to storage — inserts a shareable link into the description">
+              <i :class="uploading ? 'pi pi-spin pi-spinner' : 'pi pi-cloud-upload'" /> {{ uploading ? 'Uploading…' : 'Upload' }}
+            </button>
+            <input ref="uploadInputRef" type="file" style="display:none" @change="onUploadChange" />
+            <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD source file">
+              <i class="pi pi-upload" /> BRD/PRD
+            </button>
+            <input ref="fileInputRef" type="file" style="display:none" @change="onFileChange" />
+            <button class="tool-config-btn" @click="openToolModal">
+              <span>{{ TOOLS.find(t => t.value === selectedTool)?.label || 'Configure' }}</span>
+              <span v-if="selectedModel" class="tool-config-extra">· {{ selectedModel }}</span>
+              <span v-if="selectedEffort" class="tool-config-extra">· {{ selectedEffort }}</span>
+              <i class="pi pi-cog" />
+            </button>
+            <Button class="plan-generate-btn" :disabled="(!description.trim() && !uploadedFile) || generating" @click="generatePlan">
+              <i class="pi pi-sparkles" /> {{ generating ? 'Generating...' : 'Generate Plan' }}
+            </Button>
+          </div>
         </div>
         <div v-if="genError" class="error-text">{{ genError }}</div>
       </div>
@@ -164,23 +177,34 @@
               @keydown.ctrl.enter="generatePlan"
             />
             <div class="plan-new-footer">
-              <label class="deep-label">
-                <input type="checkbox" v-model="deep" />
-                Deep analysis
-              </label>
-              <label class="deep-label" style="gap:6px" title="Branch the worktree is cut from (fetched fresh from origin)">
-                base:
-                <Select v-model="selectedBase" :options="availableBranches" filter resetFilterOnHide
-                        filterPlaceholder="search branch…" scrollHeight="240px"
-                        placeholder="base branch" class="base-select" />
-              </label>
-              <div style="flex:1" />
-              <div style="display:flex;gap:8px">
+              <div class="plan-footer-config">
+                <label class="deep-label">
+                  <input type="checkbox" v-model="deep" />
+                  Deep analysis
+                </label>
+                <label class="deep-label" title="Branch the worktree is cut from (fetched fresh from origin)">
+                  base:
+                  <Select v-model="selectedBase" :options="availableBranches" filter resetFilterOnHide
+                          filterPlaceholder="search branch…" scrollHeight="240px"
+                          placeholder="base branch" class="base-select" />
+                </label>
+                <label v-if="baselineOptions.length" class="deep-label" title="Design template / UI baseline to style this plan from (skips the design question)">
+                  design:
+                  <Select v-model="selectedBaseline" :options="baselineOptions" optionLabel="label" optionValue="value"
+                          filter resetFilterOnHide filterPlaceholder="search design…" scrollHeight="240px"
+                          showClear placeholder="auto" class="base-select" />
+                </label>
+              </div>
+              <div class="plan-footer-actions">
+                <button v-if="storageConfigured" class="tool-config-btn" @click="triggerUpload" :disabled="uploading" title="Upload a file to storage — inserts a shareable link into the description">
+                  <i :class="uploading ? 'pi pi-spin pi-spinner' : 'pi pi-cloud-upload'" /> {{ uploading ? 'Uploading…' : 'Upload' }}
+                </button>
+                <input ref="uploadInputRef" type="file" style="display:none" @change="onUploadChange" />
                 <button class="tool-config-btn" @click="triggerFileInput" title="Upload BRD/PRD source file">
                   <i class="pi pi-upload" /> BRD/PRD
                 </button>
                 <Button severity="secondary" @click="cancelNewPlan">Cancel</Button>
-                <Button :disabled="!description.trim() && !uploadedFile" @click="generatePlan">
+                <Button class="plan-generate-btn" :disabled="!description.trim() && !uploadedFile" @click="generatePlan">
                   <i class="pi pi-sparkles" /> Generate Plan
                 </Button>
               </div>
@@ -222,6 +246,39 @@
                   @input="onEditorChange"
                 />
               </div>
+
+              <section v-if="selectedPlan.ui" class="ui-context-review">
+                <header class="ui-context-header">
+                  <div>
+                    <div class="ui-context-title">UI planning context</div>
+                    <div class="ui-context-path">Review with the plan before approval</div>
+                  </div>
+                  <div class="ui-context-badges">
+                    <span class="ui-context-badge">{{ selectedPlan.ui.guide_status }}</span>
+                    <span v-if="selectedPlan.ui.baseline" class="ui-context-badge">{{ selectedPlan.ui.baseline }}</span>
+                    <span v-if="selectedPlan.ui.token_status" class="ui-context-badge">tokens: {{ selectedPlan.ui.token_status }}</span>
+                  </div>
+                </header>
+
+                <details v-if="selectedPlan.ui.handoff_content" open class="ui-context-details">
+                  <summary>Feature handoff · {{ selectedPlan.ui.handoff_path }}</summary>
+                  <div class="ui-context-markdown" v-html="renderedUiHandoff" />
+                </details>
+
+                <details v-if="selectedPlan.ui.guide_content || selectedPlan.ui.current_guide_content" class="ui-context-details">
+                  <summary>Project guide {{ selectedPlan.ui.current_guide_content && selectedPlan.ui.guide_content ? 'comparison' : '' }} · {{ selectedPlan.ui.guide_path }}</summary>
+                  <div class="ui-guide-compare" :class="{ 'ui-guide-compare--single': !selectedPlan.ui.current_guide_content || !selectedPlan.ui.guide_content }">
+                    <div v-if="selectedPlan.ui.current_guide_content" class="ui-guide-version">
+                      <div class="ui-guide-version-label">Current</div>
+                      <div class="ui-context-markdown" v-html="renderedUiCurrentGuide" />
+                    </div>
+                    <div v-if="selectedPlan.ui.guide_content" class="ui-guide-version">
+                      <div class="ui-guide-version-label">Proposed</div>
+                      <div class="ui-context-markdown" v-html="renderedUiGuide" />
+                    </div>
+                  </div>
+                </details>
+              </section>
 
               <!-- Revise bar -->
               <div v-if="showReviseBar" class="revise-bar">
@@ -381,7 +438,7 @@
     </div>
     <template #footer>
       <Button label="Cancel" text @click="cancelQuestions" />
-      <Button label="Generate Plan" icon="pi pi-sparkles" @click="submitAnswers" />
+      <Button label="Generate Plan" icon="pi pi-sparkles" :disabled="!canSubmitQuestionAnswers" @click="submitAnswers" />
     </template>
   </Dialog>
 </template>
@@ -393,6 +450,7 @@ import Button from 'primevue/button';
 import Textarea from 'primevue/textarea';
 import Select from 'primevue/select';
 import Dialog from 'primevue/dialog';
+import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useLogTerminal } from '../../composables/useLogTerminal.js';
 import { useWsStore } from '../../stores/ws.js';
@@ -434,9 +492,25 @@ const showNewPlanForm = ref(false);
 const uploadedFile = ref(null);
 const fileInputRef = ref(null);
 
+// File → object storage (S3). When configured, an "Upload" button uploads a file
+// and inserts its shareable link into the description textbox.
+const storageConfigured = ref(false);
+const uploadInputRef = ref(null);
+const uploading = ref(false);
+
 // Base branch the worktree is cut from (fetched fresh from origin at run time)
 const selectedBase = ref('');
 const availableBranches = ref([]);
+
+// UI design baseline/template (built-in packs + personal ~/.jonggrang/design/*).
+// Picking one here selects it up front so the planner styles from it and never
+// asks the "which starter?" question (passed as `plan --baseline <key>`).
+const selectedBaseline = ref('');
+const availableBaselines = ref([]);
+const baselineOptions = computed(() => availableBaselines.value.map(b => ({
+  value: b.key,
+  label: b.source === 'design' ? `${b.key} · your design` : b.key,
+})));
 
 // Tool / model / effort
 const selectedTool = ref(null);
@@ -453,6 +527,13 @@ const loadingModels = ref(false);
 const pendingQuestions = ref(null);   // { goal_analysis, questions:[] } or null
 const showQuestionForm = ref(false);
 const answerDraft = reactive({});     // keyed by question id
+const canSubmitQuestionAnswers = computed(() => {
+  const question = pendingQuestions.value?.questions?.find(item => item.id === 'ui-preference');
+  if (!question) return true;
+  const draft = answerDraft[question.id] || {};
+  if (!draft.choice) return false;
+  return draft.choice !== '__freetext__' || Boolean((draft.freetext || '').trim());
+});
 
 const TOOLS = [
   { label: 'OpenCode',      value: 'opencode' },
@@ -491,7 +572,12 @@ function applyPlanQuestions(goal_analysis, questions) {
   Object.keys(answerDraft).forEach(k => delete answerDraft[k]);
   for (const q of (questions || [])) {
     if (q.type === 'multi_choice') answerDraft[q.id] = { choices: [], freetext: '', useFreetext: false };
-    else if (q.type === 'single_choice') answerDraft[q.id] = { choice: (q.options && q.options[0] ? q.options[0].value : ''), freetext: '' };
+    else if (q.type === 'single_choice') answerDraft[q.id] = {
+      // ui-preference (baseline consent) must not auto-select a pack;
+      // the user has to explicitly choose before submit is enabled.
+      choice: q.id === 'ui-preference' ? '' : (q.options && q.options[0] ? q.options[0].value : ''),
+      freetext: '',
+    };
     else answerDraft[q.id] = { freetext: '' };
   }
   pendingQuestions.value = { goal_analysis: goal_analysis || '', questions: questions || [] };
@@ -545,14 +631,22 @@ const reviseInputEl = ref(null);
 const showDiscussPanel = ref(false);
 const discussTool = computed(() => selectedTool.value || 'jonggrang');
 
-// Rendered markdown for viewer
+// Rendered markdown for viewer. Plans and UI artifacts may contain agent-authored
+// raw HTML, so sanitize every markdown surface before passing it to v-html.
+function renderMarkdown(content) {
+  return DOMPurify.sanitize(marked.parse(content || ''));
+}
+
 const renderedContent = computed(() => {
   const plan = selectedPlan.value;
   if (!plan) return '';
-  return marked.parse(plan.content || '');
+  return renderMarkdown(plan.content);
 });
 
-const renderedDraftContent = computed(() => marked.parse(planContent.value || ''));
+const renderedDraftContent = computed(() => renderMarkdown(planContent.value));
+const renderedUiHandoff = computed(() => renderMarkdown(selectedPlan.value?.ui?.handoff_content));
+const renderedUiGuide = computed(() => renderMarkdown(selectedPlan.value?.ui?.guide_content));
+const renderedUiCurrentGuide = computed(() => renderMarkdown(selectedPlan.value?.ui?.current_guide_content));
 
 // Computed
 const isIdle = computed(() =>
@@ -608,6 +702,17 @@ async function loadBranches() {
     const data = await res.json();
     availableBranches.value = data.branches || [];
     if (!selectedBase.value) selectedBase.value = data.default || availableBranches.value[0] || '';
+  } catch {}
+}
+
+// Selectable UI baselines (built-in packs + personal design templates) for the
+// New Plan "Design" picker. Empty list simply hides the picker.
+async function loadBaselines() {
+  try {
+    const res = await fetch('/api/baselines');
+    if (!res.ok) return;
+    const data = await res.json();
+    availableBaselines.value = data.baselines || [];
   } catch {}
 }
 
@@ -761,6 +866,28 @@ function clearFile() {
   uploadedFile.value = null;
 }
 
+async function loadStorageConfig() {
+  try { const r = await fetch('/api/storage/config'); if (r.ok) storageConfigured.value = !!(await r.json()).configured; } catch {}
+}
+function triggerUpload() { uploadInputRef.value?.click(); }
+async function onUploadChange(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file || uploading.value) return;
+  uploading.value = true; genError.value = '';
+  try {
+    const buf = await file.arrayBuffer();
+    const r = await fetch(`/api/storage/upload?filename=${encodeURIComponent(file.name)}`, {
+      method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: buf,
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'Upload failed');
+    // Drop the shareable link straight into the description textbox.
+    description.value = description.value ? `${description.value.replace(/\s+$/, '')}\n${d.url}` : d.url;
+  } catch (err) { genError.value = `Upload failed: ${err.message}`; }
+  finally { uploading.value = false; }
+}
+
 async function generatePlan() {
   if ((!description.value.trim() && !uploadedFile.value) || generating.value) return;
   genError.value = '';
@@ -775,6 +902,7 @@ async function generatePlan() {
     if (selectedModel.value)  body.model  = selectedModel.value;
     if (selectedEffort.value) body.effort = selectedEffort.value;
     if (selectedBase.value)   body.base   = selectedBase.value;
+    if (selectedBaseline.value) body.baseline = selectedBaseline.value;
 
     if (uploadedFile.value) {
       // Read file as base64 in chunks to avoid blowing the call stack on
@@ -843,6 +971,7 @@ async function submitAnswers() {
   if (selectedModel.value)  body.model  = selectedModel.value;
   if (selectedEffort.value) body.effort = selectedEffort.value;
   if (selectedBase.value)   body.base   = selectedBase.value;
+  if (selectedBaseline.value) body.baseline = selectedBaseline.value;
   try {
     const res = await fetch(`/api/projects/${projectId.value}/plan/answers`, {
       method: 'POST',
@@ -941,6 +1070,8 @@ onMounted(async () => {
   await loadProjectTool();
   loadBase();
   loadBranches();
+  loadBaselines();
+  loadStorageConfig();
   applyPickupPrefill();
 
   // Restore the active plan-op spinner + log region from server truth. The
@@ -1044,7 +1175,7 @@ onUnmounted(() => {
 .plan-empty-icon { font-size: 40px; color: var(--jg-green); }
 .plan-empty-title { font-size: 16px; color: var(--jg-text); font-weight: 600; }
 .plan-empty-desc { font-size: 12px; color: var(--jg-text-muted); }
-.plan-form { width: 100%; max-width: 560px; margin-top: 12px; }
+.plan-form { width: 100%; max-width: 640px; margin-top: 12px; }
 .plan-form-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
 
 /* SPLIT LAYOUT */
@@ -1133,10 +1264,15 @@ onUnmounted(() => {
 
 /* New plan form */
 .plan-new-wrap { display: flex; align-items: center; justify-content: center; flex: 1; padding: 20px; }
-.plan-new-inner { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 12px; }
+.plan-new-inner { width: 100%; max-width: 640px; display: flex; flex-direction: column; gap: 12px; }
 .plan-new-title { font-size: 13px; font-weight: 600; color: var(--jg-text); }
-.plan-form-footer { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.plan-new-footer { display: flex; align-items: center; gap: 8px; }
+.plan-form-footer { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 10px 12px; margin-top: 8px; }
+.plan-new-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+/* Footer splits into a config group (left) and an actions group (pinned right via
+   margin-left:auto). flex-wrap lets the actions drop to their own right-aligned row
+   on narrow widths instead of crushing the controls. */
+.plan-footer-config { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.plan-footer-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
 
 /* Draft editor */
 .plan-editor-wrap { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
@@ -1152,6 +1288,28 @@ onUnmounted(() => {
 .plan-editor-body { flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; }
 .plan-editor-body :deep(.plan-editor-textarea) { flex: 1; height: 100% !important; resize: none; border: none !important; border-radius: 0 !important; font-size: 13px !important; line-height: 1.7 !important; padding: 16px !important; background: var(--jg-bg) !important; color: var(--jg-text) !important; }
 .plan-editor-body :deep(.plan-editor-textarea:focus) { box-shadow: none !important; outline: none !important; }
+
+/* UI guide + handoff review */
+.ui-context-review { max-height: 46%; overflow-y: auto; border-top: 1px solid var(--jg-border); background: var(--jg-card); flex-shrink: 0; }
+.ui-context-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--jg-border); background: var(--jg-card); }
+.ui-context-title { font-size: 12px; font-weight: 700; color: var(--jg-text); }
+.ui-context-path { margin-top: 2px; font-size: 10px; color: var(--jg-text-faint); }
+.ui-context-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ui-context-badge { padding: 2px 6px; border: 1px solid var(--jg-border); color: var(--jg-cyan); font-size: 10px; }
+.ui-context-details { border-bottom: 1px solid var(--jg-border); }
+.ui-context-details summary { cursor: pointer; padding: 8px 16px; color: var(--jg-text-dim); font-size: 11px; font-weight: 600; }
+.ui-context-details summary:hover { color: var(--jg-text); background: var(--jg-hover); }
+.ui-guide-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border-top: 1px solid var(--jg-border); }
+.ui-guide-compare--single { grid-template-columns: minmax(0, 1fr); }
+.ui-guide-version { min-width: 0; padding: 0 14px 14px; overflow-x: auto; }
+.ui-guide-version + .ui-guide-version { border-left: 1px solid var(--jg-border); }
+.ui-guide-version-label { position: sticky; top: 0; padding: 8px 0 6px; background: var(--jg-card); color: var(--jg-text-faint); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+.ui-context-markdown { padding: 0 16px 12px; color: var(--jg-text-dim); font-size: 11px; line-height: 1.6; }
+.ui-guide-version .ui-context-markdown { padding: 0; }
+.ui-context-markdown :deep(h1), .ui-context-markdown :deep(h2), .ui-context-markdown :deep(h3) { margin: 12px 0 6px; color: var(--jg-text); font-size: 12px; }
+.ui-context-markdown :deep(p), .ui-context-markdown :deep(ul) { margin: 0 0 8px; }
+.ui-context-markdown :deep(pre) { overflow-x: auto; padding: 8px; border: 1px solid var(--jg-border); background: var(--jg-bg); }
+.ui-context-markdown :deep(code) { font-family: var(--font-mono); font-size: 10px; }
 
 /* Revise bar */
 .revise-bar {
@@ -1213,8 +1371,11 @@ onUnmounted(() => {
 .file-badge-clear .pi { font-size: 10px; }
 
 /* Shared */
-.deep-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--jg-text-faint); }
-.base-select { min-width: 150px; font-size: 12px; }
+.deep-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--jg-text-faint); white-space: nowrap; }
+.base-select { min-width: 144px; font-size: 12px; }
+/* Keep the primary action on one line — never let "Generate Plan" wrap. */
+.plan-generate-btn { white-space: nowrap; flex-shrink: 0; }
+.plan-generate-btn :deep(.p-button-label) { white-space: nowrap; }
 .error-text { font-size: 11px; color: var(--jg-red); margin-top: 8px; }
 
 /* Tool config button */
