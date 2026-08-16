@@ -65,6 +65,8 @@ Set it from the dashboard under **Project → Settings → Claude execution**, o
 
 Interactive mode degrades to headless — with a warning, never an error — when `node-pty` cannot be loaded or the prompt is too large to pass as a single argv entry (>96 KB).
 
+**Where the log comes from.** Claude Code paints a screen, so scraping the TUI can only ever approximate it. The log is therefore read from the session's JSONL transcript (`$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/*.jsonl`), which carries the same assistant text and tool calls the headless stream-json path prints, and cannot be garbled by a redraw. If no transcript is found within 20 seconds, the run says so and falls back to the screen capture, which is lossy on wrapped or rewritten lines.
+
 > Completion in a TUI is detected by idleness, so interactive mode expects a non-blocking permission mode (`autonomous`, or `balanced`). In `supervised` mode a permission prompt looks identical to a finished turn.
 
 #### Model/effort resolution order

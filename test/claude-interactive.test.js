@@ -204,6 +204,91 @@ test('TuiTranscript: partial line is held until it completes', () => {
   assert.deepStrictEqual(out, ['half a line']);
 });
 
+// ── Session transcript (JSONL) — the accurate log source ──────
+
+function writeSession(configDir, projectRoot, records, { name = 'sess.jsonl' } = {}) {
+  const dir = path.join(configDir, 'projects', projectRoot.replace(/[/.]/g, '-'));
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, name);
+  fs.appendFileSync(file, records.map(r => JSON.stringify(r)).join('\n') + '\n');
+  return file;
+}
+
+const assistant = (blocks, uuid = String(Math.random())) =>
+  ({ type: 'assistant', uuid, message: { role: 'assistant', content: blocks } });
+
+function collectTail(configDir, projectRoot, since = 0) {
+  const out = [];
+  process.env.CLAUDE_CONFIG_DIR = configDir;
+  const tail = new lib.ClaudeSessionTail({
+    projectRoot, since,
+    onText: t => out.push(t.replace(/\n$/, '')),
+    onLine: l => out.push(l),
+  });
+  return { tail, out };
+}
+
+test('claudeSessionDir: cwd maps to Claude Code\'s project slug', () => {
+  process.env.CLAUDE_CONFIG_DIR = '/cfg';
+  try {
+    assert.strictEqual(lib.claudeSessionDir('/root/helo-ops-dashboard'), '/cfg/projects/-root-helo-ops-dashboard');
+    assert.strictEqual(lib.claudeSessionDir('/root/.jonggrang/design/helo'), '/cfg/projects/-root--jonggrang-design-helo');
+  } finally { delete process.env.CLAUDE_CONFIG_DIR; }
+});
+
+test('ClaudeSessionTail: renders text and tool calls, skips thinking', () => {
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-cfg-'));
+  const root = '/tmp/some-project';
+  try {
+    writeSession(cfg, root, [
+      assistant([{ type: 'thinking', thinking: 'internal reasoning' }]),
+      assistant([{ type: 'text', text: 'Decomposing the plan' }]),
+      assistant([{ type: 'tool_use', name: 'Bash', input: { command: 'git status' } }]),
+      { type: 'user', uuid: 'u1', message: { role: 'user', content: [{ type: 'tool_result', is_error: true, content: 'boom failed' }] } },
+    ]);
+    const { tail, out } = collectTail(cfg, root);
+    tail.poll();
+    const text = out.join('\n');
+    assert.ok(text.includes('Decomposing the plan'), `assistant text missing: ${text}`);
+    assert.ok(/▸ Bash/.test(text) && text.includes('git status'), `tool call missing: ${text}`);
+    assert.ok(text.includes('boom failed'), `tool error missing: ${text}`);
+    assert.ok(!text.includes('internal reasoning'), 'thinking must not be logged');
+  } finally { delete process.env.CLAUDE_CONFIG_DIR; }
+});
+
+test('ClaudeSessionTail: follows appends without repeating earlier records', () => {
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-cfg-'));
+  const root = '/tmp/append-project';
+  try {
+    writeSession(cfg, root, [assistant([{ type: 'text', text: 'first' }], 'a1')]);
+    const { tail, out } = collectTail(cfg, root);
+    tail.poll();
+    assert.deepStrictEqual(out, ['first']);
+
+    writeSession(cfg, root, [assistant([{ type: 'text', text: 'second' }], 'a2')]);
+    tail.poll();
+    assert.deepStrictEqual(out, ['first', 'second']);
+
+    tail.poll();                                     // nothing new
+    assert.deepStrictEqual(out, ['first', 'second']);
+  } finally { delete process.env.CLAUDE_CONFIG_DIR; }
+});
+
+test('ClaudeSessionTail: ignores transcripts that predate this run', () => {
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-cfg-'));
+  const root = '/tmp/stale-project';
+  try {
+    const file = writeSession(cfg, root, [assistant([{ type: 'text', text: 'from an older run' }])]);
+    const old = Date.now() - 60 * 60 * 1000;
+    fs.utimesSync(file, new Date(old), new Date(old));
+
+    const { tail, out } = collectTail(cfg, root, Date.now());
+    tail.poll();
+    assert.strictEqual(tail.active, false, 'a stale transcript must not be adopted');
+    assert.deepStrictEqual(out, []);
+  } finally { delete process.env.CLAUDE_CONFIG_DIR; }
+});
+
 // ── End-to-end pty runs against a fake claude ─────────────────
 
 const FAST = { idleSec: 1, minRuntimeMs: 0, exitGraceMs: 200, killGraceMs: 400 };
@@ -231,6 +316,41 @@ testAsync('runClaudeInteractive: prompt is passed as argv without --add-dir swal
     assert.ok(!argv.includes('--add-dir'), 'interactive mode must not pass the variadic --add-dir');
     assert.strictEqual(argv[argv.length - 1], 'do the thing', 'prompt must be the final argv entry');
   } finally { process.env.PATH = prevPath; }
+});
+
+// The whole point of reading the JSONL: the screen scrape is lossy, so when a
+// session transcript exists it must be the log — and the screen must go quiet.
+testAsync('runClaudeInteractive: logs the session transcript, not the screen', async () => {
+  const root = tmpProject();
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-cfg-'));
+  const sessionDir = path.join(cfg, 'projects', root.replace(/[/.]/g, '-'));
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const sessionFile = path.join(sessionDir, 'run.jsonl');
+
+  const record = (blocks) => JSON.stringify({ type: 'assistant', uuid: String(Math.random()), message: { role: 'assistant', content: blocks } });
+  const { bin } = fakeClaude(root, [
+    `echo '${record([{ type: 'text', text: 'clean transcript line' }])}' >> "${sessionFile}"`,
+    `echo '${record([{ type: 'tool_use', name: 'Read', input: { file_path: 'src/app.js' } }])}' >> "${sessionFile}"`,
+    'echo "GARBLED screen text"',
+    'sleep 2',
+    'exit 0',
+  ].join('\n'));
+
+  const prevPath = process.env.PATH;
+  process.env.PATH = `${bin}:${prevPath}`;
+  process.env.CLAUDE_CONFIG_DIR = cfg;
+  const chunks = [];
+  try {
+    const code = await lib.runClaudeInteractive({ prompt: 'p', projectRoot: root, textChunks: chunks, ...FAST });
+    assert.strictEqual(code, 0);
+    const text = chunks.join('');
+    assert.ok(text.includes('clean transcript line'), `transcript text missing: ${JSON.stringify(text)}`);
+    assert.ok(/▸ Read/.test(text) && text.includes('src/app.js'), `tool call missing: ${JSON.stringify(text)}`);
+    assert.ok(!text.includes('GARBLED'), `screen capture leaked into the log: ${JSON.stringify(text)}`);
+  } finally {
+    process.env.PATH = prevPath;
+    delete process.env.CLAUDE_CONFIG_DIR;
+  }
 });
 
 // The folder-trust dialog looks exactly like a finished turn to an idle detector,
