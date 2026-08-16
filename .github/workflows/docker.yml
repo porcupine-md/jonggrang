@@ -56,10 +56,13 @@ jobs:
           cache-from: type=gha,scope=agent-dev
           cache-to: type=gha,mode=max,scope=agent-dev
 
-      - name: Smoke-test agent-browser
+      # Bounded: a browser that never comes up should fail the job, not hang it.
+      # The previous smoke step once sat at 22 minutes against a 4-6 minute norm.
+      - name: Smoke-test anoa
+        timeout-minutes: 8
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/jonggrang-agent:dev-${{ github.sha }}
-        run: bash scripts/agent-browser-smoke.sh "$IMAGE"
+        run: bash scripts/anoa-smoke.sh "$IMAGE"
 
   # Pushes to main and release tags build & push latest + tunnel (multi-arch).
   # On a release tag (vX.Y.Z) the images are also tagged X.Y.Z and X.Y.

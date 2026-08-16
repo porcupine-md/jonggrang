@@ -44,18 +44,29 @@ RUN npm install -g --no-fund --no-audit \
     jonggrang \
     @anthropic-ai/claude-code \
     opencode-ai \
-    @openai/codex \
-    agent-browser
+    @openai/codex
 
-# ── agent-browser Chrome (frontend design validation for every agent) ─────────
-# Bundles a headless Chromium + Linux system libs so `agent-browser` works
-# offline inside the sandbox. We use Playwright's Chromium build because it is
-# cross-arch (Chrome for Testing has no Linux arm64 build, and its --with-deps
-# path shells out to `sudo apt-get`, which is absent here). Playwright installs
-# the apt deps directly as root (no sudo) and agent-browser auto-detects the
-# resulting Chromium. All coding agents use this to validate frontend design
-# (see skills/library/frontend/validating-visual-design).
-RUN npx --yes playwright@latest install --with-deps chromium
+# ── anoa (the browser every agent drives) ─────────────────────────────────────
+# anoa ships as ONE self-contained binary with its own Chromium — no npm package
+# and no second download at run time. That is why it replaced agent-browser,
+# which needed `npm i -g agent-browser` plus a separate Playwright Chromium
+# install, and still fell back to Playwright's build on arm64 because Chrome for
+# Testing publishes no Linux arm64. anoa publishes native x86_64 and aarch64
+# builds, so both architectures get the same browser.
+#
+# Installed to /usr/local so it lands on PATH for every user in the container.
+# All coding agents use it to validate frontend design (see skills/core/anoa and
+# skills/library/frontend/validating-visual-design).
+RUN curl -fsSL https://raw.githubusercontent.com/porcupine-md/anoa-browser/master/scripts/install-linux.sh \
+    | bash -s -- --prefix /usr/local \
+    && anoa --version
+
+# Chromium refuses to start as root without --no-sandbox, and our containers run
+# as root so bind-mounted project files stay writable. Setting the flags here
+# rather than in every command keeps the agent-facing recipe plain
+# `anoa --headless --port 9222` — the same line that works on a laptop.
+# Mirrors what the anoa image itself sets.
+ENV QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu --no-sandbox"
 
 # ── openvscode-server (powers the "Full" code-editor mode in the dashboard) ───
 # Installed to /opt/openvscode-server, symlinked onto PATH. Latest stable tag is

@@ -126,7 +126,7 @@ jonggrang work --feature feat-abc123 # Target a specific approved feature (multi
   - Jonggrang (Pi SDK) → `npm install -g @earendil-works/pi-coding-agent`
 - [jq](https://jqlang.github.io/jq/) → `brew install jq`
 - git
-- *(optional)* [agent-browser](https://github.com/vercel-labs/agent-browser) → `npm install -g agent-browser && agent-browser install` — lets agents validate frontend design in a real headless browser. Preinstalled (with Chrome) in the Jonggrang sandbox image.
+- *(optional)* [anoa](https://github.com/porcupine-md/anoa-browser) → `curl -fsSL https://raw.githubusercontent.com/porcupine-md/anoa-browser/master/scripts/install-linux.sh | bash` — lets agents validate frontend design in a real headless browser. A single self-contained binary that carries its own browser, so there is no second download; preinstalled in the Jonggrang sandbox image.
 
 ---
 

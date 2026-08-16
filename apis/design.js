@@ -232,8 +232,31 @@ module.exports = function register(app, io, _ctx) {
     try { return execFileSync('docker', ['ps', '-q', '-f', `name=^${DESIGN_CONTAINER}$`], { encoding: 'utf8' }).trim().length > 0; }
     catch { return false; }
   }
+
+  // True when the running studio container was created from a different image
+  // than AGENT_IMAGE resolves to now. The studio container is long-lived — it
+  // outlives image updates — so without this check a container started before a
+  // tool landed in the image keeps running without it. That is exactly how the
+  // studio agent ended up with no browser: its container predated the browser
+  // being added, so the agent found nothing on PATH and installed its own.
+  function containerImageDrifted() {
+    try {
+      const running = execFileSync('docker', ['inspect', '--format', '{{.Image}}', DESIGN_CONTAINER],
+        { encoding: 'utf8' }).trim();
+      const current = execFileSync('docker', ['image', 'inspect', '--format', '{{.Id}}', AGENT_IMAGE],
+        { encoding: 'utf8' }).trim();
+      return Boolean(running && current && running !== current);
+    } catch {
+      return false;   // image not pulled yet, or container gone — nothing to compare
+    }
+  }
+
   function ensureDesignContainer() {
-    if (containerRunning()) return;
+    if (containerRunning() && !containerImageDrifted()) return;
+    if (containerRunning()) {
+      console.log(`[design] studio container is running an older ${AGENT_IMAGE} — recreating`);
+      killAllPtys();                       // its ptys point into the container we are replacing
+    }
     try { execFileSync('docker', ['rm', '-f', DESIGN_CONTAINER], { stdio: 'ignore' }); } catch { /* not present */ }
     execFileSync('docker', ['run', '-d', '--name', DESIGN_CONTAINER, '--env', 'IS_SANDBOX=1', ...designMounts(), AGENT_IMAGE, 'sleep', 'infinity'], { stdio: 'ignore' });
   }

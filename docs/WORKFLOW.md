@@ -401,7 +401,7 @@ The orchestrate command runs a deterministic 17-phase pipeline. Each phase is ex
 | 17 | Complete | Lead | Final summary, update `.jonggrang/.output/features/{id}/progress.txt`, MANIFEST → done | — |
 
 > **Frontend design validation.** In phases that touch the UI — Implement (8),
-> DesignVerify (10), and the interface-quality audit — agents use the `agent-browser`
+> DesignVerify (10), and the interface-quality audit — agents use the `anoa`
 > CLI (preinstalled in the sandbox, with Chrome) to open the running app in a real
 > headless browser and check the *rendered* result: layout, responsive behavior,
 > theming, and accessibility. Routed via the `validating-visual-design` skill. This

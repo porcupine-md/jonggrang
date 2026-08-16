@@ -42,7 +42,7 @@ skills/
     ├── frontend/
     │   ├── debugging-react-hooks/SKILL.md
     │   ├── optimizing-react-performance/SKILL.md
-    │   └── validating-visual-design/SKILL.md     ← agent-browser design validation
+    │   └── validating-visual-design/SKILL.md     ← anoa design validation        
     ├── testing/
     │   ├── unit-testing-patterns/SKILL.md
     │   └── fixing-flaky-tests/SKILL.md
@@ -112,7 +112,8 @@ The Gateway is the routing layer between agent intent and skill files. Instead o
 |----------|--------|-----------------------|
 | route, controller, service, endpoint, middleware | backend | developing-with-tdd, debugging-systematically, error-handling-patterns |
 | component, hook, render, state, UI | frontend | debugging-react-hooks, optimizing-react-performance |
-| visual, design check, screenshot, responsive, browser validation, agent-browser | frontend | validating-visual-design |
+| visual, design check, screenshot, responsive, browser validation | frontend | validating-visual-design |
+| browser, anoa, click, fill form, login flow, scrape, console errors | core | anoa |
 | REST, GraphQL, OpenAPI, validation | api | input-validation |
 | test, spec, coverage, mock, fixture | testing | unit-testing-patterns, fixing-flaky-tests |
 | migration, query, schema, ORM | database | safe-migrations |

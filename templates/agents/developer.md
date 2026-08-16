@@ -57,14 +57,17 @@ If any check fails, fix before signaling.
 
 **Frontend tasks — validate the rendered design too.** Typecheck + unit tests do not
 prove the UI looks right. If your task touched any component, page, layout, or styling,
-verify it in a real browser with `agent-browser` (preinstalled in the sandbox) before
-signalling. Load the `validating-visual-design` gateway skill for the full workflow:
+verify it in a real browser with `anoa` (preinstalled in the sandbox) before
+signalling. The browser is a session — start it once, then drive it. Load the
+`validating-visual-design` gateway skill for the full workflow:
 
 ```bash
-agent-browser open <app-url> && agent-browser wait --load networkidle
-agent-browser snapshot                       # a11y tree
-agent-browser screenshot ui.png              # review layout/contrast/responsive/dark mode
-agent-browser close
+anoa --headless --port 9222 &                # once; anoa status: exit 3 = not running
+anoa open <app-url> && anoa wait --load
+anoa snapshot -i                             # interactive elements with @refs
+anoa screenshot ui.png                       # review layout/contrast/responsive
+anoa set media dark                          # dark-mode check
+anoa errors                                  # uncaught exceptions
 ```
 
 ## Bugs Discovered While Implementing
