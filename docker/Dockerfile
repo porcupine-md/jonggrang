@@ -35,8 +35,14 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOPATH="/root/go"
 ENV PATH="${GOPATH}/bin:${PATH}"
 
-# ── Rust (stable via rustup) ─────────────────────────────────────────────────
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path
+# ── Rust (stable via rustup, minimal profile) ────────────────────────────────
+# The default profile ships rust-docs: 902MB of offline HTML in an image where
+# nothing has a browser pointed at it. The minimal profile drops that, and
+# clippy + rustfmt are added back because Rust work needs a linter and a
+# formatter — jonggrang detects Cargo.toml as the `rust` stack and runs
+# `cargo test`, so the toolchain has to stay usable.
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path \
+    && /root/.cargo/bin/rustup component add clippy rustfmt
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # ── AI tools + jonggrang ─────────────────────────────────────────────────────
@@ -44,18 +50,46 @@ RUN npm install -g --no-fund --no-audit \
     jonggrang \
     @anthropic-ai/claude-code \
     opencode-ai \
-    @openai/codex \
-    agent-browser
+    @openai/codex
 
-# ── agent-browser Chrome (frontend design validation for every agent) ─────────
-# Bundles a headless Chromium + Linux system libs so `agent-browser` works
-# offline inside the sandbox. We use Playwright's Chromium build because it is
-# cross-arch (Chrome for Testing has no Linux arm64 build, and its --with-deps
-# path shells out to `sudo apt-get`, which is absent here). Playwright installs
-# the apt deps directly as root (no sudo) and agent-browser auto-detects the
-# resulting Chromium. All coding agents use this to validate frontend design
-# (see skills/library/frontend/validating-visual-design).
-RUN npx --yes playwright@latest install --with-deps chromium
+# ── anoa (the browser every agent drives) ─────────────────────────────────────
+# anoa ships as ONE self-contained binary with its own Chromium — no npm package
+# and no second download at run time. That is why it replaced agent-browser,
+# which needed `npm i -g agent-browser` plus a separate Playwright Chromium
+# install, and still fell back to Playwright's build on arm64 because Chrome for
+# Testing publishes no Linux arm64. anoa publishes native x86_64 and aarch64
+# builds, so both architectures get the same browser.
+#
+# Installed to /usr/local so it lands on PATH for every user in the container.
+# All coding agents use it to validate frontend design (see skills/core/anoa and
+# skills/library/frontend/validating-visual-design).
+#
+# The bundle carries Chromium but NOT Chromium's system dependencies — those
+# must come from the distro. This list mirrors the one in anoa's own Dockerfile.
+# Missing any of them fails at *runtime* with a dlopen error, not at build: the
+# browser starts, answers on CDP, and then renders nothing. (This is what the
+# removed `playwright install --with-deps` used to pull in as a side effect.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 libnspr4 \
+    libxcomposite1 libxdamage1 libxrandr2 libxkbcommon0 libxkbfile1 libxshmfence1 \
+    libdrm2 libasound2t64 libcups2t64 \
+    libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 \
+    libglib2.0-0t64 libdbus-1-3 \
+    libgl1 libglx-mesa0 libegl1 libgbm1 libopengl0 \
+    libfontconfig1 libfreetype6 \
+    fonts-liberation fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY install-anoa.sh /tmp/install-anoa.sh
+RUN bash /tmp/install-anoa.sh \
+    && rm /tmp/install-anoa.sh
+
+# Chromium refuses to start as root without --no-sandbox, and our containers run
+# as root so bind-mounted project files stay writable. Setting the flags here
+# rather than in every command keeps the agent-facing recipe plain
+# `anoa --headless --port 9222` — the same line that works on a laptop.
+# Mirrors what the anoa image itself sets.
+ENV QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu --no-sandbox"
 
 # ── openvscode-server (powers the "Full" code-editor mode in the dashboard) ───
 # Installed to /opt/openvscode-server, symlinked onto PATH. Latest stable tag is

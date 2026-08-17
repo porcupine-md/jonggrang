@@ -188,22 +188,36 @@ created_at: 2026-04-16T10:30:00Z
 
 ## Browser Automation (frontend design validation)
 
-The `agent-browser` CLI is preinstalled in the Jonggrang sandbox and available to every
+The `anoa` CLI is preinstalled in the Jonggrang sandbox and available to every
 agent backend (claude, opencode, codex, jonggrang). Use it to validate frontend design in
 a real headless browser — do not sign off UI work on typecheck + unit tests alone.
 
+The browser is a **session**: start it once, and every later command attaches to the
+running browser, so the page and its state survive between commands.
+
 ```bash
-agent-browser open http://localhost:3000   # open the running app
-agent-browser wait --load networkidle
-agent-browser snapshot                       # accessibility tree with @refs (a11y)
-agent-browser screenshot ui.png              # capture; review layout/contrast/dark mode
-agent-browser set viewport 375 812           # responsive re-check, then screenshot again
-agent-browser close
+anoa --headless --port 9222 &              # start once (anoa status: exit 3 = not running)
+anoa open http://localhost:3000            # open the running app
+anoa wait --load                           # or --text/--url: name what you expect
+anoa snapshot -i                           # interactive elements, each with an @ref
+anoa screenshot ui.png                     # capture; review layout/contrast
+anoa set viewport 375 812                  # responsive re-check, then screenshot again
+anoa set media dark                        # dark-mode check
+anoa errors                                # a page can look right and still throw
 ```
 
 Full workflow lives in the `validating-visual-design` skill
-(`.claude/skills/validating-visual-design/SKILL.md` or the equivalent path for your tool).
-On a bare host (outside the sandbox), run `agent-browser install` once to fetch Chrome.
+(`.claude/skills/validating-visual-design/SKILL.md` or the equivalent path for your tool);
+`anoa skills get commands` prints the complete command reference.
+
+In the sandbox anoa is already installed. On a bare host, install the binary once:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/porcupine-md/anoa-browser/master/scripts/install-linux.sh | bash
+```
+
+It carries its own browser, so there is never a second download for a browser — but
+if `anoa` is not on PATH, install it rather than reaching for another tool.
 
 ---
 

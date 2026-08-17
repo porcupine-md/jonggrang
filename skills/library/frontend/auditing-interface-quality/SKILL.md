@@ -16,18 +16,22 @@ Perform a systematic audit of the interface quality across accessibility (A11y),
 ## Execution Steps
 
 1. **Discover Context:** Use `glob` and `read` to review the frontend components built or modified for the current feature.
-2. **Live Browser Check (agent-browser):** Whenever the app can be served, validate the
-   *rendered* UI — not just the source — with the `agent-browser` CLI (preinstalled in the
+2. **Live Browser Check (anoa):** Whenever the app can be served, validate the
+   *rendered* UI — not just the source — with the `anoa` CLI (preinstalled in the
    sandbox). It only observes the page, so it is safe under the read-only Reviewer role.
+   The browser is a session: start it once, then every command attaches to it.
    ```bash
-   agent-browser open <app-url> && agent-browser wait --load networkidle
-   agent-browser snapshot                       # a11y tree with roles/labels
-   agent-browser screenshot audit-desktop.png
-   agent-browser set viewport 375 812           # re-check responsive
-   agent-browser screenshot audit-mobile.png
-   agent-browser close
+   anoa --headless --port 9222 &                # once; `anoa status` exit 3 = not running
+   anoa open <app-url> && anoa wait --load
+   anoa snapshot -i                             # interactive elements with @refs
+   anoa screenshot audit-desktop.png
+   anoa set viewport 375 812                    # re-check responsive
+   anoa screenshot audit-mobile.png
+   anoa set media dark && anoa screenshot audit-dark.png
+   anoa errors                                  # a page can look right and still throw
    ```
    Save screenshots into the active feature directory. See
+   `skills/core/anoa/SKILL.md` for the tool and
    `skills/library/frontend/validating-visual-design/SKILL.md` for the full workflow.
 3. **Diagnostic Scan** (use the snapshot/screenshots as evidence):
    - **Accessibility (A11y):** Check for contrast issues, missing ARIA roles, poor keyboard navigation, semantic HTML, and alt text.

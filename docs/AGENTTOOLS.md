@@ -4,12 +4,17 @@ This guide covers every file and function you must touch to integrate a new AI a
 
 > **Not every tool is a backend.** Some tools are *shared utilities* that agents call via
 > Bash rather than agent runtimes that drive the pipeline. For example
-> [`agent-browser`](https://github.com/vercel-labs/agent-browser) (frontend design
-> validation) is not integrated through this guide — it is installed in the sandbox image
-> (`docker/Dockerfile`) and surfaced to agents through a skill
-> (`skills/library/frontend/validating-visual-design`) plus the instruction templates. Use
+> [`anoa`](https://github.com/porcupine-md/anoa-browser) (the browser agents drive) is not
+> integrated through this guide — it is installed in the sandbox image
+> (`docker/Dockerfile`) and surfaced to agents through skills (`skills/core/anoa`,
+> `skills/library/frontend/validating-visual-design`) plus the instruction templates. Use
 > the skill + image route for shared CLIs; use the checklist below only for new agent
 > *backends* selected via `.jonggrang/jonggrang.json`.
+>
+> Prefer a shared CLI that carries what it needs. `anoa` replaced `agent-browser` because
+> the latter was an npm package that then had to download a browser at run time — two
+> installs, and on arm64 the download was a different browser than on amd64. A
+> self-contained binary removes the run-time step and the per-architecture divergence.
 
 ---
 

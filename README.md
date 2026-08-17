@@ -87,6 +87,7 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 
 ```bash
 # Quick flags
+jonggrang init --force               # Re-init: refresh AGENTS.md, CLAUDE.md, skills and sub-agents
 jonggrang plan "feature" --yes       # Skip review, auto-approve
 jonggrang work "feature" --yes       # Full pipeline in one command
 jonggrang plan "feature" --src docs/brd.md  # Reference source document for the agent to read
@@ -126,7 +127,7 @@ jonggrang work --feature feat-abc123 # Target a specific approved feature (multi
   - Jonggrang (Pi SDK) → `npm install -g @earendil-works/pi-coding-agent`
 - [jq](https://jqlang.github.io/jq/) → `brew install jq`
 - git
-- *(optional)* [agent-browser](https://github.com/vercel-labs/agent-browser) → `npm install -g agent-browser && agent-browser install` — lets agents validate frontend design in a real headless browser. Preinstalled (with Chrome) in the Jonggrang sandbox image.
+- *(optional)* [anoa](https://github.com/porcupine-md/anoa-browser) → `curl -fsSL https://raw.githubusercontent.com/porcupine-md/anoa-browser/master/scripts/install-linux.sh | bash` — lets agents validate frontend design in a real headless browser. A single self-contained binary that carries its own browser, so there is no second download; preinstalled in the Jonggrang sandbox image.
 
 ---
 

@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Smoke-test agent-browser inside a Jonggrang agent image.
-# Verifies the packaged browser can open a page, read its accessibility tree,
-# resize the viewport, capture a valid PNG, and close cleanly.
+# Smoke-test anoa inside a Jonggrang agent image.
+# Verifies the packaged browser starts, opens a page, snapshots its interactive
+# elements, resizes the viewport and captures a valid PNG — the whole path an
+# agent takes when it validates a rendered UI.
 #
 # Usage:
-#   bash scripts/agent-browser-smoke.sh [image]
+#   bash scripts/anoa-smoke.sh [image]
 #
 # Default:
 #   ghcr.io/porcupine-md/jonggrang-agent:dev
 
 IMAGE="${1:-${IMAGE:-ghcr.io/porcupine-md/jonggrang-agent:dev}}"
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jg-agent-browser-smoke.XXXXXX")"
-CONTAINER_NAME="jg-agent-browser-smoke-$$"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jg-anoa-smoke.XXXXXX")"
+CONTAINER_NAME="jg-anoa-smoke-$$"
 
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -71,7 +72,7 @@ if (width !== 375 || height !== 812) {
 }
 JS
 
-printf 'Testing agent-browser in %s\n' "$IMAGE"
+printf 'Testing anoa in %s\n' "$IMAGE"
 docker run --name "$CONTAINER_NAME" --rm \
   -v "$TMP_DIR:/smoke" \
   "$IMAGE" \
@@ -79,15 +80,24 @@ docker run --name "$CONTAINER_NAME" --rm \
     set -euo pipefail
 
     cleanup() {
-      agent-browser close >/dev/null 2>&1 || true
+      kill "${BROWSER_PID:-}" >/dev/null 2>&1 || true
       kill "${SERVER_PID:-}" >/dev/null 2>&1 || true
     }
     trap cleanup EXIT INT TERM
 
-    command -v agent-browser >/dev/null
-    agent-browser --version
+    command -v anoa >/dev/null
+    anoa --version
 
-    node /smoke/server.js >/tmp/jg-agent-browser-smoke-server.log 2>&1 &
+    # anoa is a session: start one browser, everything else attaches to it.
+    anoa --headless --port 9222 >/tmp/jg-anoa-smoke-browser.log 2>&1 &
+    BROWSER_PID=$!
+    for _ in $(seq 1 50); do
+      anoa status >/dev/null 2>&1 && break
+      sleep 0.2
+    done
+    anoa status >/dev/null
+
+    node /smoke/server.js >/tmp/jg-anoa-smoke-server.log 2>&1 &
     SERVER_PID=$!
 
     for _ in $(seq 1 30); do
@@ -98,18 +108,15 @@ docker run --name "$CONTAINER_NAME" --rm \
     done
     curl -fsS http://127.0.0.1:4173 >/dev/null
 
-    agent-browser open http://127.0.0.1:4173 >/dev/null
-    agent-browser wait --load networkidle >/dev/null
+    anoa open http://127.0.0.1:4173 >/dev/null
+    anoa wait --text "Jonggrang browser smoke" >/dev/null
 
-    SNAPSHOT="$(agent-browser snapshot)"
-    grep -q "Jonggrang browser smoke" <<<"$SNAPSHOT"
-    grep -q "button" <<<"$SNAPSHOT"
+    grep -q "Jonggrang browser smoke" <<<"$(anoa get text)"
+    grep -q "button" <<<"$(anoa snapshot -i)"
 
-    agent-browser set viewport 375 812 >/dev/null
-    agent-browser screenshot /smoke/mobile.png >/dev/null
+    anoa set viewport 375 812 >/dev/null
+    anoa screenshot /smoke/mobile.png >/dev/null
     node /smoke/verify-png.js
-
-    agent-browser close >/dev/null
   '
 
-printf 'PASS: agent-browser open/snapshot/viewport/screenshot/close\n'
+printf 'PASS: anoa start/open/get text/snapshot/viewport/screenshot\n'

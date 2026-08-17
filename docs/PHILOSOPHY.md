@@ -52,7 +52,7 @@ To keep this phase from overflowing a small context window, the agent is fed the
 The agent writes the tests, runs them, and verifies coverage. Tests are not an afterthought appended at the end; they are part of the definition of done for every task.
 
 ### Review
-A dedicated review pass reads the implementation as a future maintainer would. It asks: is this correct? is this maintainable? does it match the plan? For frontend work the reviewer does not stop at the source — it drives the *rendered* UI in a real headless browser via the `agent-browser` CLI (preinstalled in the sandbox), checking layout, responsiveness, theming, and accessibility that code inspection and unit tests cannot see.
+A dedicated review pass reads the implementation as a future maintainer would. It asks: is this correct? is this maintainable? does it match the plan? For frontend work the reviewer does not stop at the source — it drives the *rendered* UI in a real headless browser via the `anoa` CLI (preinstalled in the sandbox), checking layout, responsiveness, theming, and accessibility that code inspection and unit tests cannot see.
 
 ### Compact Mode (the deliberate exception)
 Sometimes the loop *is* the point — you are iterating fast and the gates are a later, separate pass. Compact mode (`jonggrang work --compact`, or `orchestration.pipeline_mode: "compact"`) runs Plan → Implement and stops.
