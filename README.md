@@ -87,6 +87,7 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 
 ```bash
 # Quick flags
+jonggrang init --force               # Re-init: refresh AGENTS.md, CLAUDE.md, skills and sub-agents
 jonggrang plan "feature" --yes       # Skip review, auto-approve
 jonggrang work "feature" --yes       # Full pipeline in one command
 jonggrang plan "feature" --src docs/brd.md  # Reference source document for the agent to read
