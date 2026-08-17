@@ -9,9 +9,13 @@ trigger: "browser, anoa, screenshot, render, responsive, viewport, dark mode, co
 
 # anoa
 
-`anoa` is the browser every Jonggrang agent drives. It is preinstalled in the
-sandbox image as a single self-contained binary — there is **nothing to install
-at run time**, and no Playwright or Chrome download to wait for.
+`anoa` is the browser every Jonggrang agent drives — a single self-contained
+binary that carries its own browser, so there is **no Playwright or Chrome
+download to wait for**.
+
+In the sandbox it is preinstalled. On a bare host, install it once with
+`scripts/install-linux.sh` from the anoa repo; if `anoa` is not on PATH, install
+it rather than reaching for another tool.
 
 ## The one thing to know
 

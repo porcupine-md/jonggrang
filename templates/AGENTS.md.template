@@ -208,8 +208,16 @@ anoa errors                                # a page can look right and still thr
 
 Full workflow lives in the `validating-visual-design` skill
 (`.claude/skills/validating-visual-design/SKILL.md` or the equivalent path for your tool);
-`anoa skills get commands` prints the complete command reference. There is nothing to
-install — anoa is a single self-contained binary that carries its own browser.
+`anoa skills get commands` prints the complete command reference.
+
+In the sandbox anoa is already installed. On a bare host, install the binary once:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/porcupine-md/anoa-browser/master/scripts/install-linux.sh | bash
+```
+
+It carries its own browser, so there is never a second download for a browser — but
+if `anoa` is not on PATH, install it rather than reaching for another tool.
 
 ---
 

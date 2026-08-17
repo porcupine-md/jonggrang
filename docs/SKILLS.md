@@ -42,7 +42,7 @@ skills/
     ├── frontend/
     │   ├── debugging-react-hooks/SKILL.md
     │   ├── optimizing-react-performance/SKILL.md
-    │   └── validating-visual-design/SKILL.md     ← anoa design validation        
+    │   └── validating-visual-design/SKILL.md     ← anoa design validation
     ├── testing/
     │   ├── unit-testing-patterns/SKILL.md
     │   └── fixing-flaky-tests/SKILL.md

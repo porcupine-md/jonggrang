@@ -15,8 +15,18 @@ This skill uses **`anoa`** — the browser CLI preinstalled in the Jonggrang san
 actually works.
 
 `anoa` is available to every agent backend (claude, opencode, codex, jonggrang).
-Call it via Bash. It is a single self-contained binary with its own browser:
-**nothing to install, in the sandbox or on a bare host.**
+Call it via Bash. In the sandbox it is already there — start with the session
+step below.
+
+On a bare host, install the binary once:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/porcupine-md/anoa-browser/master/scripts/install-linux.sh | bash
+```
+
+That is one binary carrying its own browser, so there is **no second download
+for a browser** — but the binary itself does have to exist. If `anoa` is not on
+PATH, install it rather than reaching for another tool.
 
 ## The browser is a session
 

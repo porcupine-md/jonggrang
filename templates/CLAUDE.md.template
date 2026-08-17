@@ -77,7 +77,9 @@ anoa errors                                # uncaught exceptions behind a page t
 
 Full workflow (responsive checks, interactions): read
 `.claude/skills/validating-visual-design/SKILL.md`, or run `anoa skills get commands`
-for the complete reference. Nothing to install — anoa carries its own browser.
+for the complete reference. In the sandbox anoa is already installed; on a bare
+host install the binary once (see AGENTS.md). It carries its own browser, so
+there is never a second download for a browser.
 
 ## Rules
 

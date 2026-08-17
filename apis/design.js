@@ -252,8 +252,9 @@ module.exports = function register(app, io, _ctx) {
   }
 
   function ensureDesignContainer() {
-    if (containerRunning() && !containerImageDrifted()) return;
-    if (containerRunning()) {
+    const running = containerRunning();
+    if (running && !containerImageDrifted()) return;
+    if (running) {
       console.log(`[design] studio container is running an older ${AGENT_IMAGE} — recreating`);
       killAllPtys();                       // its ptys point into the container we are replacing
     }

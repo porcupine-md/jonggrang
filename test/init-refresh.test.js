@@ -84,6 +84,30 @@ test('init --force refreshes stale sub-agent definitions', () => {
     '--force must restore the shipped sub-agent definition');
 });
 
+// Sub-agent definitions are written twice, once per tool tree. Refreshing only
+// the Claude copy would leave an OpenCode project on stale instructions.
+test('init --force refreshes the OpenCode sub-agent definitions too', () => {
+  const root = tmpProject();
+  initProject(root);
+  const agent = path.join(root, '.opencode', 'agents', 'developer.md');
+  assert.ok(fs.existsSync(agent), 'first init should install the OpenCode definition');
+  const shipped = fs.readFileSync(agent, 'utf8');
+
+  fs.writeFileSync(agent, '# stale opencode developer definition\n');
+  initProject(root, { force: true });
+  assert.strictEqual(fs.readFileSync(agent, 'utf8'), shipped,
+    '--force must restore the shipped OpenCode definition');
+});
+
+test('a plain re-init leaves an edited OpenCode definition alone', () => {
+  const root = tmpProject();
+  initProject(root);
+  const agent = path.join(root, '.opencode', 'agents', 'developer.md');
+  fs.writeFileSync(agent, '# locally edited\n');
+  initProject(root);
+  assert.strictEqual(fs.readFileSync(agent, 'utf8'), '# locally edited\n');
+});
+
 test('the browser skill a refreshed project receives names anoa, not agent-browser', () => {
   const root = tmpProject();
   initProject(root, { force: true });
