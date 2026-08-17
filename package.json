@@ -34,6 +34,9 @@
     "README.md"
   ],
   "scripts": {
+    "ensure:pty-helper": "bash scripts/ensure-node-pty-helper.sh",
+    "prestart": "npm run ensure:pty-helper",
+    "pretest": "npm run ensure:pty-helper",
     "start": "bash scripts/ensure-build.sh && node server.js",
     "dev": "nodemon server.js",
     "build": "cd client && npm install && npm run build",
