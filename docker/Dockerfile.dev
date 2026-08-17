@@ -35,8 +35,14 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOPATH="/root/go"
 ENV PATH="${GOPATH}/bin:${PATH}"
 
-# ── Rust (stable via rustup) ─────────────────────────────────────────────────
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path
+# ── Rust (stable via rustup, minimal profile) ────────────────────────────────
+# The default profile ships rust-docs: 902MB of offline HTML in an image where
+# nothing has a browser pointed at it. The minimal profile drops that, and
+# clippy + rustfmt are added back because Rust work needs a linter and a
+# formatter — jonggrang detects Cargo.toml as the `rust` stack and runs
+# `cargo test`, so the toolchain has to stay usable.
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path \
+    && /root/.cargo/bin/rustup component add clippy rustfmt
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # ── AI tools (jonggrang installed from local source, not npm) ────────────────
