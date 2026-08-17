@@ -127,7 +127,8 @@ Jonggrang is built on a **Thin Agent / Fat Platform** model. The AI models are s
 ├─────────────────────────────────────────────┤
 │  HOOK LAYER        Deterministic enforcement │
 │  Claude Code hooks · OpenCode plugin        │
-│  Jonggrang extension (.jonggrang/extensions)│
+│  Codex hooks · Jonggrang extension           │
+│  (.claude / .opencode / .codex / .jonggrang)│
 ├─────────────────────────────────────────────┤
 │  INFRASTRUCTURE    Compaction · Feedback     │
 │  Token gates · Dirty bits · Lock files      │
@@ -206,18 +207,20 @@ Returns: Read skills/library/frontend/debugging-react-hooks/SKILL.md
 
 Hooks enforce quality gates outside the LLM's context. The same rules apply regardless of which AI tool is used:
 
-| Layer | Event | Claude Code | OpenCode | Jonggrang (Pi) | Enforcement |
-|-------|-------|-------------|----------|----------------|-------------|
-| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `tool_call` | Block direct edits (agent-first) |
-| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `tool_call` | Block agent spawn if context > 85% |
-| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `tool_call` | Block `git commit` if agent trailer present but structured fields missing ([COMMIT-CONVENTION.md](COMMIT-CONVENTION.md)) |
-| 6 | Post-tool | `PostToolUse` | `tool.execute.after` | `tool_result` | Set dirty bit when files modified |
-| 6 | File edit | `PostToolUse` | `file.edited` | `tool_result` | Track domain (backend/frontend/testing) |
-| 7 | Sub-stop | `SubagentStop` | `session.updated` | `agent_end` | Block exit if output in wrong location |
-| 8 | Stop | `Stop` | `session.idle` | `agent_end` | Block exit until review + tests pass |
-| 8 | Stop | `Stop` | `session.idle` | `agent_end` | Final quality gate (defense in depth) |
+| Layer | Event | Claude Code | OpenCode | Codex | Jonggrang (Pi) | Enforcement |
+|-------|-------|-------------|----------|-------|----------------|-------------|
+| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `PreToolUse` | `tool_call` | Block direct edits (agent-first) |
+| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | — (no Task event) | `tool_call` | Block agent spawn if context > 85% |
+| 5 | Pre-tool | `PreToolUse` | `tool.execute.before` | `PreToolUse` | `tool_call` | Block `git commit` if agent trailer present but structured fields missing ([COMMIT-CONVENTION.md](COMMIT-CONVENTION.md)) |
+| 6 | Post-tool | `PostToolUse` | `tool.execute.after` | `PostToolUse` | `tool_result` | Set dirty bit when files modified |
+| 6 | File edit | `PostToolUse` | `file.edited` | `PostToolUse` | `tool_result` | Track domain (backend/frontend/testing) |
+| 7 | Sub-stop | `SubagentStop` | `session.updated` | `SubagentStop` | `agent_end` | Block exit if output in wrong location |
+| 8 | Stop | `Stop` | `session.idle` | `Stop` | `agent_end` | Block exit until review + tests pass |
+| 8 | Stop | `Stop` | `session.idle` | `Stop` | `agent_end` | Final quality gate (defense in depth) |
 
 Jonggrang hooks live in `hooks/pi/jonggrang-extension.ts` and are loaded automatically via `--extension` on every `jonggrang agent` invocation — no separate installation step required.
+
+> **Codex runtime caveat:** the Codex column describes Jonggrang's installed native hook mapping. Current `codex exec` releases do not dispatch hooks reliably even when `.codex/hooks.json` is valid and `--dangerously-bypass-hook-trust` is passed (tracked upstream in openai/codex#25875 and #26452). Jonggrang therefore adds a Codex-only JSONL runtime guard in `lib/jonggrang.js`; it can redact output, abort after risky events are observed, mark dirty bits, and block completion on exit gates. It is not true pre-execution hook parity because JSONL events are emitted after Codex has dispatched the action.
 
 **Feedback Loop (Level 2 enforcement):**
 
