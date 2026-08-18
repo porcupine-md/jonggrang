@@ -338,6 +338,28 @@ module.exports = function(deps) {
         } catch (err) { console.error('seedFeatureFromMain error:', err.message); }
     }
 
+    // Project settings live in .jonggrang/jonggrang.json and are seeded into a
+    // worktree when it is CREATED — so a worktree outlives every later change to
+    // them. That made project settings silently not apply: switching Claude to
+    // interactive execution, or the pipeline to compact, left an existing plan's
+    // worker running with whatever the worktree was born with. Re-seed the file
+    // on every run so the dashboard stays the source of truth for settings.
+    //
+    // Only this one file: the rest of COPY_INTO_WORKTREE (AGENTS.md, hooks,
+    // .claude, …) is branch content the agent may legitimately have changed, and
+    // re-copying that would clobber its work.
+    function seedProjectConfig(project, ctx, featureId) {
+        const rel = path.join('.jonggrang', 'jonggrang.json');
+        const wt = ctx.wt(featureId);
+        try {
+            if (ctx.mode === 'container') {
+                containerCopy(ctx, [{ src: `${ctx.root}/${rel}`, dst: `${wt}/${rel}` }]);
+            } else {
+                lib.copyToWorktree(project.path, ctx.hostWt(featureId), [rel]);
+            }
+        } catch (err) { console.error('seedProjectConfig error:', err.message); }
+    }
+
     // In-container push using the mounted SSH key (staged to a root-owned 0600 file).
     function containerPush(ctx, branch) {
         return new Promise((resolve, reject) => {
@@ -796,6 +818,9 @@ module.exports = function(deps) {
         // Pull the latest approved/appended task list from main into the worktree
         // so a reused worktree picks up tasks added since it was created.
         seedFeatureFromMain(project, ctx, g.featureId);
+        // …and the current project settings, which a long-lived worktree would
+        // otherwise keep ignoring (see seedProjectConfig).
+        seedProjectConfig(project, ctx, g.featureId);
         const group = {
             featureId: g.featureId, branch: wt.branch, title: g.title, taskIds: g.taskIds,
             status: 'running', worktreePath: wt.worktreePath, hostWorktreePath: wt.hostWorktreePath,
