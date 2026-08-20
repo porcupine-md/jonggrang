@@ -106,7 +106,14 @@ module.exports = function(deps) {
           if (err.code !== 'ENOENT') console.error('Failed to read existing project config:', err);
         }
         Object.assign(existing, jonggrang_config);
-        fs.writeFileSync(configPath, JSON.stringify(existing, null, 2), 'utf-8');
+        // A sandbox project's files belong to its container (which runs as
+        // root on the bind mount), so the write goes through it. Writing from
+        // the host instead returned EACCES and the UI silently reverted —
+        // switching Claude to interactive execution looked like it saved and
+        // never did. Non-sandbox projects, and a stopped container, fall back
+        // to an atomic host write.
+        sandbox.writeProjectFile(project, path.join('.jonggrang', 'jonggrang.json'),
+          JSON.stringify(existing, null, 2) + '\n');
       } catch (err) {
         return res.status(500).json({ error: err.message });
       }
