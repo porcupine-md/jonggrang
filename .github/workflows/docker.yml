@@ -4,7 +4,8 @@ name: Build & Push Docker Images
 #   PR update     -> jonggrang-agent:dev only
 #   merge to main -> jonggrang-agent:latest + jonggrang-tunnel:latest
 #   tag vX.Y.Z    -> npm publish FIRST, then agent + tunnel :X.Y.Z, :X.Y, :latest
-#   manual run    -> all images (pass `version` to re-publish an existing X.Y.Z)
+#   manual run    -> all images (pass `version` to re-publish an existing
+#                    X.Y.Z; a repair does NOT move :latest or :X.Y)
 # Auth uses the built-in GITHUB_TOKEN — no extra secrets needed.
 
 on:
@@ -179,10 +180,21 @@ jobs:
             echo "minor=${VERSION%.*}"  >> "$GITHUB_OUTPUT"   # 1.2.3 -> 1.2
             # Pinned, so the tag cannot outrun the package it claims to contain.
             echo "npm_version=$VERSION" >> "$GITHUB_OUTPUT"
-            echo "Release build: $VERSION"
+            # A repair rebuilds an OLD version's images. Moving :latest there
+            # would hand every project a downgrade — the repair for 0.19.2 would
+            # have pulled :latest back from 0.19.3. Only a tag push, which is
+            # always the newest release, moves :latest.
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              echo "move_latest=true" >> "$GITHUB_OUTPUT"
+              echo "Release build: $VERSION (moves :latest)"
+            else
+              echo "move_latest=false" >> "$GITHUB_OUTPUT"
+              echo "Repair build: $VERSION (leaves :latest alone)"
+            fi
           else
             echo "is_release=false"   >> "$GITHUB_OUTPUT"
             echo "npm_version=latest" >> "$GITHUB_OUTPUT"
+            echo "move_latest=true"   >> "$GITHUB_OUTPUT"
             echo "Build: ${{ matrix.image }}:latest"
           fi
 
@@ -199,7 +211,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # tags: always :latest; plus X.Y.Z and X.Y on a release tag.
+      # tags: :latest and :X.Y float, so only a tag push (always the newest
+      # release) writes them. A repair of an older version writes :X.Y.Z ONLY —
+      # rebuilding 0.19.2 must not pull :latest back from 0.19.3.
       - name: Build & push ${{ matrix.image }} (${{ matrix.name }})
         uses: docker/build-push-action@v6
         with:
@@ -208,9 +222,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:latest
+            ${{ steps.ver.outputs.move_latest == 'true' && format('{0}/{1}/{2}:latest', env.REGISTRY, env.NAMESPACE, matrix.image) || '' }}
             ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.version) || '' }}
-            ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.minor) || '' }}
+            ${{ steps.ver.outputs.move_latest == 'true' && steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.minor) || '' }}
           build-args: |
             JONGGRANG_VERSION=${{ steps.ver.outputs.npm_version }}
           cache-from: type=gha,scope=${{ matrix.name }}
