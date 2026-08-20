@@ -156,10 +156,34 @@ image: the tag was pushed first and npm published afterwards, so
 under the new tag. Projects then ran a CLI a release behind their dashboard.
 The pin now fails that build instead of publishing a tag that lies.
 
-**Requires** a repository secret `NPM_TOKEN` (an npm automation token with
-publish rights on `jonggrang`). Without it the `npm-release` job fails and no
-image is built — deliberately, since an image pinned to an unpublished version
-cannot be built anyway.
+### One-time setup
+
+**1. npmjs.com** — Account → *Access Tokens* → **Generate New Token**:
+
+- **Granular Access Token** (preferred): expiration up to 1 year, *Packages and
+  scopes* → select `jonggrang`, permission **Read and write**.
+- or **Classic Token** → type **Automation**. Automation tokens are the ones
+  exempt from the 2FA prompt, which a CI run cannot answer. A classic *Publish*
+  token still asks for an OTP and will fail the job.
+
+Nothing else on npm needs changing: `jonggrang` is already public and owned by
+`anak10thn` + `ans4175`, so a token from either account has publish rights.
+
+**2. GitHub** — repo → Settings → *Secrets and variables* → **Actions** → *New
+repository secret*, name it exactly `NPM_TOKEN`. Or from a terminal:
+
+```bash
+gh secret set NPM_TOKEN            # paste the token when prompted
+```
+
+Without it `npm-release` fails and no image is built — deliberately, since an
+image pinned to an unpublished version cannot be built anyway.
+
+**Provenance.** The publish runs with `--provenance`, which needs three things
+that are now in place: `id-token: write` on the job, a public repository, and a
+`repository` field in `package.json` pointing at it. Provenance is what makes the
+npm page show the commit and workflow the tarball was built from — remove the
+flag rather than let it fail if any of those ever stops being true.
 
 **Repairing a mis-tagged image** (built before its npm version existed) — run the
 workflow manually with the version, no new release needed:

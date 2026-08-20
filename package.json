@@ -3,6 +3,14 @@
   "version": "0.19.2",
   "description": "Deterministic AI orchestration platform — 16-phase workflow engine for autonomous software development",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/porcupine-md/jonggrang.git"
+  },
+  "homepage": "https://github.com/porcupine-md/jonggrang#readme",
+  "bugs": {
+    "url": "https://github.com/porcupine-md/jonggrang/issues"
+  },
   "main": "server.js",
   "engines": {
     "node": ">=18.0.0"
