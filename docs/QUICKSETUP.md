@@ -186,7 +186,9 @@ repository, and a `repository` field in `package.json` — all three are in plac
 It is what makes the npm page show the commit and workflow a tarball came from.
 
 **Repairing a mis-tagged image** (built before its npm version existed) — run the
-workflow manually with the version, no new release needed:
+workflow manually with the version, no new release needed. A repair writes the
+`X.Y.Z` tag **only**: `:latest` and `:X.Y` float, and moving them to an older
+version would hand every project a downgrade.
 
 ```bash
 gh workflow run docker.yml -f version=0.19.2
