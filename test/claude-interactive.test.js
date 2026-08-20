@@ -382,6 +382,37 @@ testAsync('runClaudeInteractive: auto-confirms the folder-trust dialog in autono
   } finally { process.env.PATH = prevPath; }
 });
 
+// The dialog is answered off the RAW stream as well as off rendered lines.
+// Rendered lines only appear once a newline arrives (and an identical line is
+// dropped as a redraw), so a prompt painted without a trailing newline — a
+// normal thing for a TUI that is waiting on the same row — used to leave the
+// dialog unanswered, and the run looked like it had simply done nothing.
+testAsync('runClaudeInteractive: confirms a trust prompt that never gets a newline', async () => {
+  const root = tmpProject();
+  const { bin } = fakeClaude(root, [
+    'printf "Quick safety check: Is this a project you created or one you trust? "',
+    'read _answer',                      // blocks on the same row, no newline sent
+    'echo "TRUST_CONFIRMED"',
+    'exit 0',
+  ].join('\n'));
+  const prevPath = process.env.PATH;
+  process.env.PATH = `${bin}:${prevPath}`;
+  const chunks = [];
+  try {
+    const code = await lib.runClaudeInteractive({
+      prompt: 'p',
+      permFlags: lib.claudePermissionFlags('autonomous'),
+      projectRoot: root,
+      textChunks: chunks,
+      ...FAST,
+      idleSec: 20,                       // must finish by answering, not by idling out
+    });
+    assert.strictEqual(code, 0);
+    assert.ok(chunks.join('').includes('TRUST_CONFIRMED'),
+      `unterminated trust prompt was not answered: ${JSON.stringify(chunks.join(''))}`);
+  } finally { process.env.PATH = prevPath; }
+});
+
 testAsync('runClaudeInteractive: leaves the trust dialog alone outside autonomous mode', async () => {
   const root = tmpProject();
   const { bin } = fakeClaude(root, [
