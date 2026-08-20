@@ -43,6 +43,40 @@ const COPY_INTO_WORKTREE = [
     'hooks',
 ];
 
+// Send a control frame down the worker's stdin — how keystrokes reach the pty.
+//
+// ONLY a worker that actually opened a pty reads these frames. A headless worker
+// never reads its stdin, so a frame written there sits in the pipe until
+// something else reads a line from it — and the work loop's test-retry
+// escalation does exactly that (`readline.question`). A stray `pty_resize` from
+// a browser tab then arrives as if a human had typed feedback, which resets the
+// retry counter and re-dispatches the same task forever. So: no live pty, no
+// frames.
+//
+// A resize that arrives before the pty is live is remembered rather than dropped
+// — the browser terminal emits its geometry on mount, which is usually before
+// the agent has printed its first byte, and the TUI needs it to lay out.
+function sendPtyFrame(group, frame) {
+    if (!group) return false;
+    if (!group.ptyLive) {
+        if (frame && frame.type === 'pty_resize') group.pendingResize = frame;
+        return false;
+    }
+    const stdin = group.child && group.child.stdin;
+    if (!stdin || stdin.destroyed) return false;
+    try { stdin.write(`${JSON.stringify(frame)}\n`); return true; } catch { return false; }
+}
+
+// The worker's first pty_data frame is the proof that it runs a pty and is
+// reading control frames back. Flush any geometry the browser sent early.
+function markPtyLive(group) {
+    if (group.ptyLive) return;
+    group.ptyLive = true;
+    const pending = group.pendingResize;
+    group.pendingResize = null;
+    if (pending) sendPtyFrame(group, pending);
+}
+
 module.exports = function(deps) {
     const { fs, webState, io, JONGGRANG_HOME, activeRuns } = deps;
     const router = Router();
@@ -573,13 +607,6 @@ module.exports = function(deps) {
         }
     }
 
-    // Send a control frame down the worker's stdin — how keystrokes reach the pty.
-    function sendPtyFrame(group, frame) {
-        const stdin = group?.child?.stdin;
-        if (!stdin || stdin.destroyed) return false;
-        try { stdin.write(`${JSON.stringify(frame)}\n`); return true; } catch { return false; }
-    }
-
     function groupForSession(projectId, session) {
         const run = activeRuns.get(projectId);
         if (!run || typeof session !== 'string' || !session.startsWith('work:')) return null;
@@ -760,11 +787,13 @@ module.exports = function(deps) {
                 // browser terminal and kept as scrollback for tabs opened later.
                 if (signal && signal.type === 'pty_data' && signal.b64) {
                     const text = Buffer.from(signal.b64, 'base64').toString('utf8');
+                    markPtyLive(group);
                     pushPtyScrollback(group, text);
                     emit(project.id, 'pty.data', { project_id: project.id, session: signal.session, data: text });
                     continue;
                 }
                 if (signal && signal.type === 'pty_exit') {
+                    group.ptyLive = false;
                     emit(project.id, 'pty.exit', { project_id: project.id, session: signal.session, code: signal.code });
                     continue;
                 }
@@ -777,6 +806,7 @@ module.exports = function(deps) {
 
         child.on('close', (code) => {
             group.exitCode = code;
+            group.ptyLive = false;
             group.finishedAt = new Date().toISOString();
             if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
             // Decision (b): one-time snapshot of the worktree's final progress → main
@@ -1153,3 +1183,8 @@ module.exports = function(deps) {
 
     return router;
 };
+
+// The pty relay policy is the fix for a real defect (frames written into a
+// headless worker's stdin were read by its next readline prompt), so it is
+// unit-tested directly — see test/pty-relay-guard.test.js.
+module.exports.ptyRelay = { sendPtyFrame, markPtyLive };

@@ -305,6 +305,12 @@ function updateTaskMode(tasksFile, taskId, status, worktreeMode = false) {
 }
 
 const TEST_RETRY_LIMIT = 3;
+// How many times human feedback may restart the TEST_RETRY_LIMIT budget for one
+// task. Without a cap, each round resets testAttempt to 0 and runIteration never
+// returns — so work.kill_after_fails (which only counts *returned* failures)
+// can't stop it, and the same task is re-dispatched forever. Observed in the
+// wild: nine identical passes on one task, ~2.3M tokens, zero tasks completed.
+const TEST_FEEDBACK_ROUND_LIMIT = 2;
 
 /**
  * Auto-promote feature lessons → project MEMORY.md at a phase boundary.
@@ -360,8 +366,9 @@ async function runWorkLoop(tasksFile, options) {
   }
 
   let iteration = 0;
-  let consecutiveFails = 0;
-  let lastFailedTask = '';
+  // taskId → how many times it has failed in this run. Per task, not a single
+  // rolling counter: see the failure path below.
+  const failCounts = new Map();
   const killAfter = parseInt(lib.readConfig(CONFIG_FILE, 'work.kill_after_fails', '3'), 10);
 
   while (maxIterations === 0 || iteration < maxIterations) {
@@ -413,27 +420,30 @@ async function runWorkLoop(tasksFile, options) {
     const success = await runIteration(tasksFile, iteration, taskId, MODE, dryRun, worktreeMode);
 
     if (success) {
-      consecutiveFails = 0;
-      lastFailedTask = '';
+      failCounts.delete(taskId);
     } else {
-      if (lastFailedTask === taskId) {
-        consecutiveFails++;
-      } else {
-        consecutiveFails = 1;
-        lastFailedTask = taskId;
-      }
+      // Count failures PER TASK. A single "last failed task" counter is reset by
+      // any other task failing in between, so with two or more failing tasks in
+      // a group it never reaches killAfter and the queue is refilled forever —
+      // the run loops until someone cancels it.
+      const fails = (failCounts.get(taskId) || 0) + 1;
+      failCounts.set(taskId, fails);
 
-      if (consecutiveFails >= killAfter) {
-        logError(`Task ${taskId} failed ${consecutiveFails} times. Marking as blocked.`);
+      // runIteration blocks a task itself when its tests keep failing. Blocked
+      // means "a human has to look at this", so re-queuing it just burns another
+      // agent pass on the same dead end.
+      const status = lib.getTask(tasksFile, taskId)?.status;
+      if (status === 'blocked') {
+        logWarn(`Task ${taskId} is blocked — leaving it for a human instead of re-queuing.`);
+      } else if (fails >= killAfter) {
+        logError(`Task ${taskId} failed ${fails} times. Marking as blocked.`);
         updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
-        consecutiveFails = 0;
-        lastFailedTask = '';
       } else if (groupTaskIds.length > 0) {
         // Group/worktree mode never falls back to getNextTask, so a task that
         // got reverted to pending would be dropped from the queue and the run
         // would falsely report "All tasks completed". Re-queue it to retry
         // within this run (bounded by kill_after_fails above).
-        logWarn(`Re-queuing ${taskId} for retry (attempt ${consecutiveFails}/${killAfter}).`);
+        logWarn(`Re-queuing ${taskId} for retry (attempt ${fails}/${killAfter}).`);
         taskQueue.push(taskId);
       }
     }
@@ -483,6 +493,7 @@ async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, 
   const testCmd = lib.readConfig(CONFIG_FILE, 'testing.command', '');
   let testFeedback = '';    // injected into prompt on retry
   let testAttempt = 0;
+  let feedbackRounds = 0;   // human-feedback restarts of the retry budget
 
   while (true) {
     // Build prompt — inject test failure feedback on retries
@@ -547,21 +558,29 @@ async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, 
       return false;
     }
 
+    if (feedbackRounds >= TEST_FEEDBACK_ROUND_LIMIT) {
+      logError(`Task ${taskId} marked as blocked — feedback did not make the tests pass after ${TEST_FEEDBACK_ROUND_LIMIT} rounds.`);
+      updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
+      return false;
+    }
+
     const userInput = await askUserFeedback(
       'Provide feedback for the agent (or press Enter to mark task blocked): '
     );
 
-    if (!userInput) {
+    if (!userInput || lib.isControlFrame(userInput)) {
+      if (userInput) logWarn('Ignoring a jonggrang control frame read from stdin — that is not human feedback.');
       logError(`Task ${taskId} marked as blocked after ${TEST_RETRY_LIMIT} failed test retries.`);
       updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
       return false;
     }
+    feedbackRounds++;
 
     // User gave feedback — inject it and reset counter for another round
     testFeedback = `User feedback: ${userInput}\n\nLast test output:\n${output}`;
     testAttempt = 0;
     lib.updateTaskStatus(tasksFile, taskId, 'pending');
-    logInfo('Retrying with user feedback...');
+    logInfo(`Retrying with user feedback... (round ${feedbackRounds}/${TEST_FEEDBACK_ROUND_LIMIT})`);
   }
 }
 
