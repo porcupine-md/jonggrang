@@ -36,6 +36,7 @@ html, body { margin: 0; background: var(--ui-canvas, #fff); color: var(--ui-text
 }
 
 module.exports = function register(app, io, _ctx) {
+  const httpServer = _ctx && _ctx.server;
   // Live preview: watch the design store so ANY change — the studio's Save button
   // OR the TUI agent writing files directly (in sandbox mode via the ~/.jonggrang
   // bind mount) — emits `design.changed` and refreshes the open preview. Polling is
@@ -266,6 +267,34 @@ module.exports = function register(app, io, _ctx) {
     designPtys.clear();
   }
 
+  // The studio agent needs a URL it can actually open, which only the running
+  // server knows. Resolved from the live bind address rather than an assumed
+  // port so a dashboard on a custom port still works.
+  //
+  // A container cannot reach the host's loopback, so a sandbox session gets the
+  // docker bridge gateway instead — which is what a sandbox deployment binds to
+  // anyway. When the dashboard is bound to loopback only, nothing inside a
+  // container can reach it; say so in the URL rather than handing the agent an
+  // address that silently times out.
+  const DOCKER_BRIDGE_HOST = '172.17.0.1';
+  function designPreviewUrl(name, sandbox) {
+    let host = '127.0.0.1';
+    let port = 7777;
+    try {
+      const addr = httpServer && httpServer.address();
+      if (addr && typeof addr === 'object') {
+        port = addr.port || port;
+        if (addr.address && addr.address !== '::' && addr.address !== '0.0.0.0') host = addr.address;
+      }
+    } catch { /* fall back to the defaults above */ }
+
+    if (sandbox) {
+      const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+      host = loopback ? DOCKER_BRIDGE_HOST : host;
+    }
+    return `http://${host}:${port}/api/design/${encodeURIComponent(name)}/preview`;
+  }
+
   function spawnDesign(name, tool, cols, rows, sandbox) {
     // Auto-resume: if this template+tool+mode has been opened before, launch the
     // tool with its resume/continue flag so it continues the prior conversation.
@@ -273,6 +302,15 @@ module.exports = function register(app, io, _ctx) {
     const resume = canResume && hasDesignSession(name, tool, !!sandbox);
     const resolved = resolveToolCommand(tool, resume);
     if (!resolved) throw new Error(`unsupported tool: ${tool}`);
+
+    // A template scaffolded before the brief existed would otherwise leave the
+    // agent with no instructions at all — write it on first open.
+    try {
+      const wrote = design.writeStudioInstructions(path.join(design.designRoot(), name), name);
+      if (wrote) console.log(`[design] wrote studio instructions into template ${name}`);
+    } catch (err) { console.error('[design] could not write studio instructions:', err.message); }
+
+    const previewUrl = designPreviewUrl(name, sandbox);
     const key = `design:${name}`;
     if (designPtys.has(key)) { try { designPtys.get(key).kill(); } catch { /* ignore */ } designPtys.delete(key); }
     const dims = { cols: Math.max(20, cols | 0), rows: Math.max(6, rows | 0) };
@@ -280,12 +318,15 @@ module.exports = function register(app, io, _ctx) {
     if (sandbox) {
       ensureDesignContainer();
       const cwd = `/root/.jonggrang/design/${name}`;
-      proc = pty.spawn('docker', ['exec', '-it', '--workdir', cwd, DESIGN_CONTAINER, resolved.cmd, ...resolved.args],
+      proc = pty.spawn('docker', ['exec', '-it', '--workdir', cwd,
+        '--env', `JONGGRANG_DESIGN_PREVIEW=${previewUrl}`,
+        DESIGN_CONTAINER, resolved.cmd, ...resolved.args],
         { name: 'xterm-256color', ...dims, cwd: os.homedir(), env: { ...process.env, TERM: 'xterm-256color' } });
     } else {
       const dir = path.join(design.designRoot(), name);
       proc = pty.spawn(resolved.cmd, resolved.args,
-        { name: 'xterm-256color', ...dims, cwd: dir, env: { ...process.env, TERM: 'xterm-256color' } });
+        { name: 'xterm-256color', ...dims, cwd: dir,
+          env: { ...process.env, TERM: 'xterm-256color', JONGGRANG_DESIGN_PREVIEW: previewUrl } });
     }
     designPtys.set(key, proc);
     // Record the session so the next open of this template+tool+mode resumes.
