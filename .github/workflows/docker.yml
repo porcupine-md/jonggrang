@@ -112,9 +112,15 @@ jobs:
 
       - run: npm test
 
+      # Trusted publishing: npm authenticates via the job's OIDC token, so there
+      # is no NPM_TOKEN to store or rotate. It needs npm >= 11.5.1, and Node 22
+      # still ships npm 10.x — hence the upgrade. The publisher is configured on
+      # npmjs.com against this repo and this workflow FILENAME, so renaming this
+      # file breaks publishing until the setting is updated to match.
+      - name: Upgrade npm (OIDC publishing support)
+        run: npm install -g npm@latest
+
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VER="$(node -p "require('./package.json').version")"
           # Idempotent: re-running a release workflow must not fail on E409.

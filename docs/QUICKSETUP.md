@@ -158,32 +158,32 @@ The pin now fails that build instead of publishing a tag that lies.
 
 ### One-time setup
 
-**1. npmjs.com** — Account → *Access Tokens* → **Generate New Token**:
+Publishing uses npm **trusted publishing** (OIDC): npm trusts a named workflow in
+a named repository, so there is no token stored anywhere and nothing to rotate.
 
-- **Granular Access Token** (preferred): expiration up to 1 year, *Packages and
-  scopes* → select `jonggrang`, permission **Read and write**.
-- or **Classic Token** → type **Automation**. Automation tokens are the ones
-  exempt from the 2FA prompt, which a CI run cannot answer. A classic *Publish*
-  token still asks for an OTP and will fail the job.
+On npmjs.com → package `jonggrang` → *Settings* → **Trusted publisher**:
 
-Nothing else on npm needs changing: `jonggrang` is already public and owned by
-`anak10thn` + `ans4175`, so a token from either account has publish rights.
+| Field | Value |
+|---|---|
+| Organization or user | `porcupine-md` |
+| Repository | `jonggrang` |
+| Workflow filename | `docker.yml` |
+| Environment | *(leave empty)* |
 
-**2. GitHub** — repo → Settings → *Secrets and variables* → **Actions** → *New
-repository secret*, name it exactly `NPM_TOKEN`. Or from a terminal:
+That is the whole npm-side setup — `jonggrang` is already public and owned by
+`anak10thn` + `ans4175`, and no GitHub secret is involved.
 
-```bash
-gh secret set NPM_TOKEN            # paste the token when prompted
-```
+Two things this couples to the filename and the job:
 
-Without it `npm-release` fails and no image is built — deliberately, since an
-image pinned to an unpublished version cannot be built anyway.
+- **Renaming `.github/workflows/docker.yml` breaks publishing** until the trusted
+  publisher setting is updated to the new name. Same for moving the
+  `npm-release` job into another file.
+- The job needs **npm >= 11.5.1** for OIDC, and Node 22 still ships npm 10.x, so
+  it upgrades npm before publishing.
 
-**Provenance.** The publish runs with `--provenance`, which needs three things
-that are now in place: `id-token: write` on the job, a public repository, and a
-`repository` field in `package.json` pointing at it. Provenance is what makes the
-npm page show the commit and workflow the tarball was built from — remove the
-flag rather than let it fail if any of those ever stops being true.
+**Provenance.** `--provenance` needs `id-token: write` on the job, a public
+repository, and a `repository` field in `package.json` — all three are in place.
+It is what makes the npm page show the commit and workflow a tarball came from.
 
 **Repairing a mis-tagged image** (built before its npm version existed) — run the
 workflow manually with the version, no new release needed:
