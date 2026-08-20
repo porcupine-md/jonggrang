@@ -120,7 +120,7 @@ Interactive mode degrades to headless — with a warning, never an error — whe
 |-------|------|---------|-------------|
 | `max_iterations` | number | 0 | Max loop iterations per session (`0` = unlimited — run until all tasks complete) |
 | `retry_limit` | number | 2 | Retries before skipping failed task |
-| `kill_after_fails` | number | 3 | Consecutive fails before BLOCKED exit |
+| `kill_after_fails` | number | 3 | Fails **for that task** before BLOCKED exit (counted per task, so other tasks failing in between do not reset it) |
 | `branch_prefix` | string | `feat/` | Prefix for auto-created branches |
 | `commit_prefix` | string | `feat\|fix\|...` | Allowed conventional commit types |
 

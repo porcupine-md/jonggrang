@@ -261,10 +261,12 @@ Run testCmd
          attempt 1 → inject test output into prompt → re-run agent
          attempt 2 → inject test output into prompt → re-run agent
          attempt 3 → interactive (TTY)?
-                     ├── yes → show test output + prompt:
+                     ├── yes → 2 feedback rounds already used? → task marked blocked
+                     │         else show test output + prompt:
                      │         "Provide feedback for the agent (or Enter to block): "
                      │         ├── user types feedback → inject feedback + reset counter → loop again
-                     │         └── Enter (empty)       → task marked blocked
+                     │         ├── Enter (empty)       → task marked blocked
+                     │         └── pty control frame   → ignored → task marked blocked
                      └── no (piped stdin: web/sandbox/CI) → task marked blocked, move on
 ```
 
@@ -273,6 +275,9 @@ Run testCmd
 - **Max auto-retries: 3** — the agent gets 3 attempts to fix failing tests without human intervention. Configurable via `TEST_RETRY_LIMIT` constant.
 - **Feedback injection** — on each retry, the full test output (capped at 4000 chars, tail-end preserved) is injected into the prompt under a `## Test Failure Feedback` section with the raw output in a code block. The prompt asks the agent to fix *whichever side is wrong* — the implementation, or an outdated test case — not to blindly edit the easier one.
 - **Human escalation (interactive only)** — after 3 failures **on a TTY**, the test output is displayed and the user is prompted. User feedback is combined with the last test output and injected into the next prompt. The retry counter resets, giving the agent another 3 attempts.
+- **Feedback rounds are capped at 2** (`TEST_FEEDBACK_ROUND_LIMIT`). Each accepted feedback resets the retry counter, and `runIteration` does not return while it loops — so `work.kill_after_fails`, which only counts failures the loop *returns*, cannot bound it. Without the cap one task can be re-dispatched indefinitely; a real run spent nine identical passes and ~2.3M tokens on a single task, finishing with every task still `pending`. After the second round the task is marked `blocked`.
+- **A task the loop has already blocked is not re-queued.** In group/worktree mode a failed task is pushed back onto the queue, bounded by `work.kill_after_fails` — which is counted **per task**. A single rolling "last failed task" counter was reset by any other task failing in between, so with two or more failing tasks in a plan the bound was never reached and the queue refilled forever (measured: 17 iterations and climbing on a two-task plan, every iteration a fresh agent). A task that `runIteration` marked `blocked` needs a human, so it is left alone and the run ends.
+- **A pty control frame is not feedback** — the dashboard writes `pty_resize`/`pty_input` JSON frames into a worker's stdin so keystrokes can reach an interactive agent. A *headless* worker never reads its stdin, so those frames queue in the pipe and the escalation's `readline` prompt would read one as the human's answer. Frames are now only sent to a worker with a live pty, and the worker rejects anything shaped like a control frame.
 - **Non-interactive escalation** — when stdin is **not** a TTY (web dashboard, `docker exec -i`, CI — the worker is spawned with piped stdio), there is no human to prompt, so after 3 failures the task is marked `blocked` immediately and the work loop moves on. This avoids hanging the worker on a `readline` prompt that can never be answered.
 - **Blocked exit** — if the user presses Enter without typing feedback (interactive), the task is marked `blocked` and the work loop moves to the next task.
 - **No test command** — if `testing.command` is not configured (empty string), the test step is skipped entirely and the task completes immediately after the agent finishes.

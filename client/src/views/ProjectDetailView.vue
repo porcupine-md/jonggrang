@@ -69,6 +69,10 @@
           <span class="sbx-status-label">{{ sandboxStatus || 'stopped' }}</span>
         </div>
         <div class="sbx-container-name">{{ containerName }}</div>
+        <div v-if="sandboxAgent?.outdated" class="sbx-stale" :title="`Rebuild the sandbox to run jonggrang ${sandboxAgent.expected}`">
+          <i class="pi pi-exclamation-triangle" />
+          <span>jonggrang {{ sandboxAgent.version }} in container — server runs {{ sandboxAgent.expected }}. Rebuild.</span>
+        </div>
         <div class="sbx-actions">
           <button class="sbx-btn" :disabled="sandboxStatus === 'starting'" @click="restartSandbox" title="Restart">
             <i class="pi pi-refresh" />
@@ -161,6 +165,8 @@ const ws = useWsStore();
 const loading = ref(false);
 const showInit = ref(false);
 const sandboxStatus = ref(null);
+// { version, expected, outdated } for the jonggrang inside the container.
+const sandboxAgent = ref(null);
 const sandboxLogTail = ref('');
 const containerName = computed(() => project.value ? `jonggrang-${id.value}` : '');
 
@@ -337,14 +343,22 @@ onMounted(async () => {
       const res = await fetch(`/api/projects/${id.value}/sandbox/status`);
       const data = await res.json();
       sandboxStatus.value = data.status;
+      sandboxAgent.value = data.agent || null;
       if (data.status === 'stopped') startSandbox();
     }
 
     const socket = ws.socket;
     if (socket) {
-      socket.on('sandbox.status', ({ project_id, status }) => {
+      socket.on('sandbox.status', async ({ project_id, status }) => {
         if (project_id !== id.value) return;
         sandboxStatus.value = status;
+        // A rebuild is the fix for a stale container, so re-ask which jonggrang
+        // it runs — otherwise the warning outlives the problem until a reload.
+        if (status !== 'running') { sandboxAgent.value = null; return; }
+        try {
+          const res = await fetch(`/api/projects/${id.value}/sandbox/status`);
+          sandboxAgent.value = (await res.json()).agent || null;
+        } catch { /* the dot already shows the container state */ }
       });
       socket.on('sandbox.log', ({ project_id, line }) => {
         if (project_id !== id.value) return;
@@ -466,6 +480,11 @@ async function onInitDone() {
 .sbx-container-name {
   font-size: 9px; color: var(--jg-text-faint); font-family: monospace;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-bottom: 8px;
+}
+.sbx-stale {
+  display: flex; align-items: flex-start; gap: 5px;
+  font-size: 9px; line-height: 1.4; color: var(--jg-orange);
   margin-bottom: 8px;
 }
 .sbx-actions { display: flex; gap: 6px; }

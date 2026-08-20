@@ -3,6 +3,8 @@
 const { Router } = require('express');
 const sandbox = require('../../lib/sandbox');
 
+const SERVER_VERSION = require('../../package.json').version;
+
 // Track in-progress starts to avoid duplicate starts
 const startingSet = new Set();
 
@@ -19,7 +21,14 @@ module.exports = function(deps) {
             const running = await sandbox.isRunning(project.id);
             const starting = startingSet.has(project.id);
             const status = starting ? 'starting' : running ? 'running' : 'stopped';
-            res.json({ status, container: sandbox.getContainerName(project.id) });
+            // A container can be long-lived enough to run a jonggrang several
+            // releases behind this server. The work loop's behaviour differs
+            // across those releases, so the mismatch is reported rather than
+            // left to be inferred from a run that misbehaves.
+            const agent = running
+                ? await sandbox.jonggrangVersionStatus(project.id, SERVER_VERSION)
+                : null;
+            res.json({ status, container: sandbox.getContainerName(project.id), agent });
         } catch (err) {
             res.status(500).json({ error: err.message });
         }
