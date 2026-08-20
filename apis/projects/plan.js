@@ -513,8 +513,11 @@ module.exports = function (deps) {
         }
 
         try {
-            fs.mkdirSync(path.dirname(planPath), { recursive: true });
-            fs.writeFileSync(planPath, content, 'utf-8');
+            // Same ownership trap as the project config: for a sandbox project
+            // the draft was written by the container (root), so an in-place host
+            // write of an edited plan fails EACCES. Route it the way the project
+            // runs; a stopped container falls back to an atomic host write.
+            sandbox.writeProjectFile(project, path.relative(project.path, planPath), content);
             const newMtime = fs.statSync(planPath).mtimeMs;
             res.json({ sessionId: draft.sessionId, mtime: newMtime });
         } catch (err) {

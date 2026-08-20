@@ -9,10 +9,11 @@
 // Claude to interactive execution looked like it saved and never did; the run
 // kept starting headless.
 //
-// Renaming a temp file into the directory needs only the DIRECTORY to be
-// writable, which it is — so the write survives a target the container took
-// over. `lib.writeJSON` already does exactly that; the settings route was the
-// one place still writing in place.
+// The fix has two halves. A sandbox project's files belong to its container, so
+// the write goes through it — that is where those files are written from
+// everywhere else. And when there is no container to write through, the host
+// fallback is atomic (temp file plus rename), which needs only the DIRECTORY to
+// be writable, so it still succeeds against a target the container took over.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -23,6 +24,7 @@ const express = require('express');
 
 const registerSettings = require('../apis/projects/settings');
 const lib = require('../lib/jonggrang');
+const sandboxLib = require('../lib/sandbox');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-settings-'));
 const PROJECT = path.join(TMP, 'project');
@@ -92,12 +94,44 @@ test('a fresh project with no config file still saves', async (t) => {
   assert.equal(saved.orchestration.pipeline_mode, 'compact');
 });
 
-// The route is the only host-side config writer that was not atomic; guard the
-// pattern rather than just this one call.
-test('the settings route does not write config in place', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'settings.js'), 'utf8');
-  assert.match(src, /lib\.writeJSON\(configPath/, 'config is written atomically');
-  assert.ok(!/writeFileSync\(configPath/.test(src), 'no in-place write to the config path');
+// Guard the pattern, not just this one call site.
+test('neither the settings nor the plan route writes project files in place', () => {
+  const read = (f) => fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', f), 'utf8');
+  const settings = read('settings.js');
+  assert.match(settings, /sandbox\.writeProjectFile\(project/, 'config goes through the sandbox-aware writer');
+  assert.ok(!/writeFileSync\(configPath/.test(settings), 'no in-place write to the config path');
+  const plan = read('plan.js');
+  assert.match(plan, /sandbox\.writeProjectFile\(project/, 'an edited draft plan goes through it too');
+  assert.ok(!/writeFileSync\(planPath/.test(plan), 'no in-place write to the draft plan');
+});
+
+// The routing decision itself: a sandbox project must not be written host-side
+// while its container is up, and must still be writable when it is not.
+test('writeProjectFile routes to the container for a sandbox project', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-route-'));
+  const project = { id: 'proj_nope', name: 'route probe', path: dir, sandbox: { enabled: true } };
+  // No container named jonggrang-proj_nope exists, so the container attempt
+  // fails and the host fallback takes over — the file must still land.
+  const where = sandboxLib.writeProjectFile(project, path.join('.jonggrang', 'jonggrang.json'), '{"a":1}\n');
+  assert.equal(where, 'host', 'with no container to write through, the host write happens');
+  assert.equal(fs.readFileSync(path.join(dir, '.jonggrang', 'jonggrang.json'), 'utf8'), '{"a":1}\n');
+});
+
+test('writeProjectFile writes host-side for a non-sandbox project', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-route-host-'));
+  const project = { id: 'proj_host', name: 'plain', path: dir, sandbox: { enabled: false } };
+  assert.equal(sandboxLib.writeProjectFile(project, 'notes.txt', 'hi'), 'host');
+  assert.equal(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8'), 'hi');
+});
+
+test('writeProjectFile replaces a file it cannot open for writing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-route-locked-'));
+  const project = { id: 'proj_locked', name: 'locked', path: dir, sandbox: { enabled: false } };
+  const target = path.join(dir, 'locked.json');
+  fs.writeFileSync(target, '{"old":true}');
+  fs.chmodSync(target, 0o444);
+  sandboxLib.writeProjectFile(project, 'locked.json', '{"replaced":true}');
+  assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), { replaced: true });
 });
 
 test('writeJSON itself replaces an unwritable file', () => {

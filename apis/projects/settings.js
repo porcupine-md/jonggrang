@@ -4,7 +4,6 @@ const { Router } = require('express');
 const fs = require('fs');
 const path = require('path');
 const sandbox = require('../../lib/sandbox');
-const lib = require('../../lib/jonggrang');
 
 module.exports = function(deps) {
   const { webState } = deps;
@@ -107,14 +106,14 @@ module.exports = function(deps) {
           if (err.code !== 'ENOENT') console.error('Failed to read existing project config:', err);
         }
         Object.assign(existing, jonggrang_config);
-        // Atomic (temp file + rename), like every other config writer in lib.
-        // A sandbox container runs as root on a bind-mounted project, so it can
-        // leave .jonggrang/jonggrang.json owned by root — and then an in-place
-        // write from the dashboard (a different uid) fails EACCES and the UI
-        // silently reverts: switching Claude to interactive execution looked
-        // like it saved and never did. Renaming into the directory only needs
-        // the DIRECTORY to be writable, which it is.
-        lib.writeJSON(configPath, existing);
+        // A sandbox project's files belong to its container (which runs as
+        // root on the bind mount), so the write goes through it. Writing from
+        // the host instead returned EACCES and the UI silently reverted —
+        // switching Claude to interactive execution looked like it saved and
+        // never did. Non-sandbox projects, and a stopped container, fall back
+        // to an atomic host write.
+        sandbox.writeProjectFile(project, path.join('.jonggrang', 'jonggrang.json'),
+          JSON.stringify(existing, null, 2) + '\n');
       } catch (err) {
         return res.status(500).json({ error: err.message });
       }
