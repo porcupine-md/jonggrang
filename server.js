@@ -55,7 +55,7 @@ const projectsCtx = { JONGGRANG_HOME, webState, orchestration, server };
 const cleanupProjects = require('./apis/projects')(app, io, projectsCtx);
 
 // Global design-template studio API (~/.jonggrang/design)
-const cleanupDesign = require('./apis/design')(app, io, { JONGGRANG_HOME });
+const cleanupDesign = require('./apis/design')(app, io, { JONGGRANG_HOME, server });
 
 // Global object-storage API (S3-compatible uploads: R2, MinIO, custom)
 const cleanupStorage = require('./apis/storage')(app, io, { JONGGRANG_HOME });
