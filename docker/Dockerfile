@@ -46,11 +46,30 @@ RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-to
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # ── AI tools + jonggrang ─────────────────────────────────────────────────────
+# The tag on this image and the jonggrang inside it must be the same version.
+# Unpinned, `npm install -g jonggrang` takes whatever the registry serves at
+# build time, so an image built before its release was published shipped the
+# PREVIOUS version under the new tag — jonggrang-agent:0.19.2 contained 0.19.1.
+# A project then ran a CLI a release behind its dashboard, missing guards the
+# server assumed were there, and nothing said so.
+#
+# The release workflow now publishes to npm before building, and pins that
+# version here. The check turns a registry that served something else into a
+# failed build instead of a lying tag. `latest` (the default) means "whatever npm
+# calls latest" and skips the check — that is what non-release builds want.
+ARG JONGGRANG_VERSION=latest
 RUN npm install -g --no-fund --no-audit \
-    jonggrang \
+    jonggrang@${JONGGRANG_VERSION} \
     @anthropic-ai/claude-code \
     opencode-ai \
-    @openai/codex
+    @openai/codex \
+ && INSTALLED="$(jonggrang --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" \
+ && if [ -z "$INSTALLED" ]; then echo "jonggrang did not report a version" >&2; exit 1; fi \
+ && if [ "$JONGGRANG_VERSION" != "latest" ] && [ "$INSTALLED" != "$JONGGRANG_VERSION" ]; then \
+      echo "REFUSING: image asks for jonggrang $JONGGRANG_VERSION, npm served $INSTALLED" >&2; \
+      exit 1; \
+    fi \
+ && echo "jonggrang $INSTALLED"
 
 # ── anoa (the browser every agent drives) ─────────────────────────────────────
 # anoa ships as ONE self-contained binary with its own Chromium — no npm package

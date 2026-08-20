@@ -3,8 +3,8 @@ name: Build & Push Docker Images
 # Builds the Jonggrang images for GitHub Container Registry, selected by event:
 #   PR update     -> jonggrang-agent:dev only
 #   merge to main -> jonggrang-agent:latest + jonggrang-tunnel:latest
-#   tag vX.Y.Z    -> agent + tunnel :X.Y.Z, :X.Y, :latest
-#   manual run    -> all images
+#   tag vX.Y.Z    -> npm publish FIRST, then agent + tunnel :X.Y.Z, :X.Y, :latest
+#   manual run    -> all images (pass `version` to re-publish an existing X.Y.Z)
 # Auth uses the built-in GITHUB_TOKEN — no extra secrets needed.
 
 on:
@@ -13,6 +13,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Re-publish the images for this already-published jonggrang version (e.g. 0.19.2). Empty = build :latest from npm latest.'
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -20,8 +25,11 @@ env:
 
 jobs:
   # PR commits (and manual runs) build & push the dev image only.
+  # A manual run that names a version is a release-image repair, not a dev build.
   dev:
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'pull_request'
+      || (github.event_name == 'workflow_dispatch' && inputs.version == '')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -64,12 +72,67 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/jonggrang-agent:dev-${{ github.sha }}
         run: bash scripts/anoa-smoke.sh "$IMAGE"
 
+  # A release tag publishes to npm BEFORE any image is built.
+  #
+  # The agent image installs jonggrang from npm, and the release ritual pushed
+  # the tag first and published by hand afterwards — so the image was built
+  # against whatever npm still served. jonggrang-agent:0.19.2 shipped 0.19.1,
+  # and every project running it was a release behind its dashboard, missing
+  # guards the server assumed were there. One publisher, one order, no race.
+  npm-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write          # npm provenance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Tag must match package.json
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag v$TAG does not match package.json $PKG — refusing to publish" >&2
+            exit 1
+          fi
+          echo "releasing $PKG"
+
+      - run: npm ci
+
+      # client/dist is in the published `files` list but is gitignored, so it has
+      # to be built here or the package ships a dashboard with no assets.
+      - run: npm run build
+
+      - run: npm test
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VER="$(node -p "require('./package.json').version")"
+          # Idempotent: re-running a release workflow must not fail on E409.
+          if npm view "jonggrang@$VER" version >/dev/null 2>&1; then
+            echo "jonggrang@$VER is already on npm — nothing to publish"
+          else
+            npm publish --provenance --access public
+          fi
+
   # Pushes to main and release tags build & push latest + tunnel (multi-arch).
   # On a release tag (vX.Y.Z) the images are also tagged X.Y.Z and X.Y.
   publish:
+    needs: [npm-release]
     if: >-
-      github.event_name == 'workflow_dispatch'
-      || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+      always()
+      && (needs.npm-release.result == 'success' || needs.npm-release.result == 'skipped')
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -92,16 +155,28 @@ jobs:
 
       - name: Resolve release version
         id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          # Version tags only on a release tag push (vX.Y.Z).
+          # A version comes from a release tag push, or from the manual `version`
+          # input — the way to repair images built before their npm version
+          # existed, without inventing a release.
+          VERSION=""
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
+          elif [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="${INPUT_VERSION#v}"
+          fi
+          if [[ -n "$VERSION" ]]; then
             echo "is_release=true"      >> "$GITHUB_OUTPUT"
             echo "version=$VERSION"     >> "$GITHUB_OUTPUT"
             echo "minor=${VERSION%.*}"  >> "$GITHUB_OUTPUT"   # 1.2.3 -> 1.2
+            # Pinned, so the tag cannot outrun the package it claims to contain.
+            echo "npm_version=$VERSION" >> "$GITHUB_OUTPUT"
             echo "Release build: $VERSION"
           else
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "is_release=false"   >> "$GITHUB_OUTPUT"
+            echo "npm_version=latest" >> "$GITHUB_OUTPUT"
             echo "Build: ${{ matrix.image }}:latest"
           fi
 
@@ -130,5 +205,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:latest
             ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.version) || '' }}
             ${{ steps.ver.outputs.is_release == 'true' && format('{0}/{1}/{2}:{3}', env.REGISTRY, env.NAMESPACE, matrix.image, steps.ver.outputs.minor) || '' }}
+          build-args: |
+            JONGGRANG_VERSION=${{ steps.ver.outputs.npm_version }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}

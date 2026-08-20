@@ -131,9 +131,41 @@ make build-binary BIN_OUT=out/jonggrang-darwin
 ## Release Workflow
 
 ```bash
-make release                # patch bump + build
+make release                # patch bump + build, no tag (local check)
 make release BUMP=minor
 make release-major
+
+make publish                # patch bump + build + commit + push tag  → CI releases
+make publish BUMP=minor
+```
+
+**The tag is the release.** Pushing `vX.Y.Z` runs `.github/workflows/docker.yml`,
+which does two things in this order:
+
+1. `npm-release` — verifies the tag matches `package.json`, builds `client/dist`
+   (gitignored, but in the published `files`), runs the test suite, and publishes
+   `jonggrang@X.Y.Z` to npm. Re-running is safe: an already-published version is
+   skipped, not failed.
+2. `publish` — builds `jonggrang-agent` and `jonggrang-tunnel` for amd64 + arm64,
+   **pinned** to `jonggrang@X.Y.Z` via the `JONGGRANG_VERSION` build arg, and
+   tags them `X.Y.Z`, `X.Y` and `latest`.
+
+Nothing publishes to npm by hand. Two publishers race, and the loser is the
+image: the tag was pushed first and npm published afterwards, so
+`jonggrang-agent:0.19.2` was built while npm still served 0.19.1 and shipped it
+under the new tag. Projects then ran a CLI a release behind their dashboard.
+The pin now fails that build instead of publishing a tag that lies.
+
+**Requires** a repository secret `NPM_TOKEN` (an npm automation token with
+publish rights on `jonggrang`). Without it the `npm-release` job fails and no
+image is built — deliberately, since an image pinned to an unpublished version
+cannot be built anyway.
+
+**Repairing a mis-tagged image** (built before its npm version existed) — run the
+workflow manually with the version, no new release needed:
+
+```bash
+gh workflow run docker.yml -f version=0.19.2
 ```
 
 ---
