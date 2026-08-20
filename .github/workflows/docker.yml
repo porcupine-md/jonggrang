@@ -1,7 +1,7 @@
 name: Build & Push Docker Images
 
 # Builds the Jonggrang images for GitHub Container Registry, selected by event:
-#   PR update     -> jonggrang-agent:dev only
+#   PR update     -> npm test + jonggrang-agent:dev
 #   merge to main -> jonggrang-agent:latest + jonggrang-tunnel:latest
 #   tag vX.Y.Z    -> npm publish FIRST, then agent + tunnel :X.Y.Z, :X.Y, :latest
 #   manual run    -> all images (pass `version` to re-publish an existing
@@ -26,6 +26,22 @@ env:
 
 jobs:
   # PR commits (and manual runs) build & push the dev image only.
+  # The suite runs on every PR, not only at release time.
+  #
+  # It used to run only inside npm-release, so a broken test surfaced as a FAILED
+  # RELEASE — v0.19.4 published nothing because of one — when a PR check would
+  # have caught it minutes after the push. Cheap: no docker, no QEMU.
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+
   # A manual run that names a version is a release-image repair, not a dev build.
   dev:
     if: >-
