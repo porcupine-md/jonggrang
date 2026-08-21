@@ -3179,7 +3179,7 @@ function parseFlags(args, valueFlags) {
   return { flags, positional };
 }
 
-const DEVICE_VALUE_FLAGS = new Set(['server', 'user', 'localuser', 'path', 'workdir', 'label', 'id', 'pubkey', 'ssh-opt']);
+const DEVICE_VALUE_FLAGS = new Set(['server', 'user', 'localuser', 'path', 'workdir', 'label', 'id', 'pubkey', 'ssh-opt', 'remote-jonggrang']);
 
 function cmdDevice(args) {
   const tunnel = require('../lib/tunnel');
@@ -3195,6 +3195,7 @@ function cmdDevice(args) {
       console.log(`Usage:
   On your machine (the device):
     jonggrang device register --server <sshhost> [--user <localuser>] [--path <dir>] [--label <name>]
+                              [--remote-jonggrang <cmd>]  # if the server's jonggrang is not on the ssh PATH
     jonggrang tunnel up | status | down
 
   On the jonggrang server:
@@ -3260,10 +3261,11 @@ function deviceRegister(tunnel, flags) {
       server, pubkey: key.pub, label, localuser, workdir,
       id: existing && existing.server === server ? existing.device_id : null,
       sshArgs: flags['ssh-opt'] ? ['-o', flags['ssh-opt']] : [],
+      remoteBin: flags['remote-jonggrang'],
     });
   } catch (err) {
     logError(err.message);
-    logInfo('The server needs jonggrang on its PATH for the ssh user you connect as.');
+    logInfo('If the server has jonggrang but not on its non-interactive ssh PATH, pass --remote-jonggrang <path>.');
     return 1;
   }
   logSuccess(`Server reserved port ${reg.port} for ${reg.device_id}`);
