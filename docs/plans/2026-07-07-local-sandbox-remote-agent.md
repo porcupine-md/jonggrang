@@ -5,11 +5,10 @@
 > `lib/tunnel.js`, `jonggrang device` / `jonggrang tunnel`, `GET /api/devices`
 > and the Settings "Local Devices" card. A project can now live on a device
 > (`source.type: "device"`) and its **Terminal runs there** through the tunnel.
-> The **Bash redirect** (§3) ships too, as a separate server-side hook bundle —
-> but see §16: it delivers execution on the device, *not* the "agent unaware"
-> premise, because the agent's native file tools still act on the server. The
-> SSHFS mount (§5) is what closes that, and is now the blocking gap. Orchestration
-> on a device (P5) is still design only.
+> The **Bash redirect** (§3) and the **SSHFS mount** (§5) ship too, so an agent's
+> file tools and its Bash address the same files by the same paths (see §16 for
+> how that was measured, and why "the same paths" is the part that matters).
+> Orchestration on a device (P5) is still design only.
 > Decisions captured from discussion 2026-07-07. Open decisions marked **[DECIDE]**.
 >
 > See §15 for what the implementation changed about this design.
@@ -406,6 +405,41 @@ preference between two workable options: the file tools have to land on the same
 files Bash does. §5's "Alt — no mount, everything via Bash" reads differently in
 this light too — it is consistent, but only if native file tools are actually
 denied, which is what §14 entry (a2) tested.
+
+### 17. Fixed by the mount — and the mount point has to be the same path
+
+`sshfs` the device's project onto the server and the split closes. But *where*
+matters more than the design says. Mounted at a server-side path of its own
+(`~/mnt-probe`), a real agent probed it and reported:
+
+> They see the *same files* (identical content, changes visible both ways in real
+> time), but through **different mount paths on different operating systems** —
+> so a naked path string is not portable between my file tools and Bash.
+
+Mounted at the **same absolute path** the device uses (`/tmp/jg-device-project`
+on both), the same agent read a file with `Read` and ran the suite with Bash and
+reported neither a mismatch nor a surprise:
+
+| # | What | Result |
+|---|------|--------|
+| 27 | sshfs over the tunnel | ✅ the server lists and reads the laptop's project files |
+| 28 | Mounted at its own path | ⚠️ same files, different paths — the agent found the seam and said so |
+| 29 | **Mounted at the same path** | ✅ marker files written by either side appeared to the other at identical paths |
+| 30 | **The dashboard's Agent tab** | ✅ the mount is created on agent start; Claude Code opens in `/tmp/jg-device-project`, and "Read test.js, then run the suite" answered `const assert = require('assert');` / `PASS sum() ok` — one native Read, one redirected Bash, no complaint |
+
+So the mount goes at the device's own absolute path, and the server refuses to
+mount over a non-empty directory of its own — a workdir that collides with a real
+server path fails by name instead of silently shadowing it.
+
+Two things still leak, both cosmetic rather than functional: `uname` in a
+redirected Bash reports the device's OS while the agent's own environment is the
+server's, and each redirected command used to end with "Connection to localhost
+closed." (now suppressed with `LogLevel=QUIET`). The agent can still notice if it
+looks; what it can no longer do is act on a path that does not exist.
+
+The hook is loaded with `--settings` pointing at the server-side bundle, because
+the project directory is now the *device's* — and per §4 the redirect hook must
+never land there.
 
 **[DECIDE-b]** gains a data point as well: with Bash redirected and files on a
 mount, the two would agree; with Bash on the server against the mount, they also

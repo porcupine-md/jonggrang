@@ -29,7 +29,11 @@ module.exports = function(deps) {
                 containerCwd: project.sandbox?.enabled ? sandbox.getContainerPath(project) : null,
                 // A device project's files are not here at all — its cwd is a
                 // path on the developer's machine, reached through the tunnel.
+                // The agent gets that same path locally, via the sshfs mount.
                 deviceCwd: project.device?.enabled ? project.device.workdir : null,
+                // Where jonggrang's own state for this project lives (the
+                // redirect hook + its settings), which is NOT on the device.
+                serverStateDir: project.path,
             };
         }
         const hostWt = path.join(sandbox.projectWorktreeDir(project.id), featureId);
@@ -252,6 +256,36 @@ module.exports = function(deps) {
         const { cmd, args } = resolveAgentCommand(resolvedTool, project.sandbox?.enabled);
         const scope = resolveScope(project, 'agent', feature_id);
         if (worktreeMissing(scope, res)) return;
+
+        // A device project's agent runs HERE, over the device's files: sshfs
+        // mounts them at the same absolute path they have on the device, so the
+        // agent's Read/Edit and its redirected Bash address the same bytes by the
+        // same name. The redirect hook is passed with --settings rather than
+        // living in the project dir, because that dir is now the device's and the
+        // hook must never land there (§4).
+        if (project.device?.enabled) {
+            if (resolvedTool !== 'claude') {
+                return res.status(400).json({
+                    error: 'DEVICE_TOOL_UNSUPPORTED',
+                    message: `A device project's agent needs the Bash-redirect hook, which today is claude-only (this project is set to ${resolvedTool}).`,
+                });
+            }
+            const device = tunnel.deviceFor(project.device.device_id);
+            if (!device) return res.status(409).json({ error: 'DEVICE_NOT_REGISTERED', message: 'This project\'s device is no longer registered.' });
+            if (!await tunnel.portListening(device.port)) {
+                return res.status(503).json({
+                    error: 'DEVICE_TUNNEL_DOWN',
+                    message: `No tunnel from ${device.label}. Run \`jonggrang tunnel up\` on that machine.`,
+                });
+            }
+            try {
+                tunnel.mountDevice(device, project.device.workdir);
+            } catch (err) {
+                return res.status(500).json({ error: 'DEVICE_MOUNT_FAILED', message: err.message });
+            }
+            scope.hostCwd = project.device.workdir;
+            args.push('--settings', path.join(scope.serverStateDir, '.claude', 'settings.json'));
+        }
 
         if (project.sandbox?.enabled) {
             const running = await sandbox.isRunning(project.id);

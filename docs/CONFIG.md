@@ -574,9 +574,23 @@ or authenticated. So:
 - It is inert unless the spawn set `JONGGRANG_DEVICE_PORT/USER/WORKDIR/KEY`, so a
   copy anywhere else does nothing.
 
-> **Known limit.** The redirect moves *execution* to the device; the agent's
-> native file tools (`Read`, `Edit`, `Glob`) still act where the agent runs — on
-> the server. A real agent notices: asked to list files and run tests, it did
-> both on the device via Bash and then pointed out that its own working directory
-> "has no such files". Until the §5 mount lands, treat a device project as
-> Bash-only for agent work; the Terminal is unaffected.
+### The mount: the agent's files *are* the device's files
+
+The redirect alone moves execution but not the filesystem, and that split is
+visible — asked to list files and run tests, a real agent did both on the device
+and then pointed out that its own working directory "has no such files".
+
+So starting the agent on a device project also `sshfs`-mounts the device's project
+onto the server, **at the same absolute path it has on the device**. That last
+part is what makes the two halves agree: mounted anywhere else the files match but
+the paths do not, and a path read from one tool is invalid in the other.
+
+- The mount is created on agent start and is idempotent.
+- The server **refuses to mount over a non-empty directory of its own**, so a
+  workdir that collides with a real server path fails by name rather than
+  shadowing it.
+- The redirect hook is passed with `--settings`, because the project directory is
+  now the device's and the hook must not land there.
+- A device project's agent is **claude-only** today: the redirect is a Claude Code
+  `PreToolUse` hook, and the other backends' hook models are unverified (§12).
+- Heavy build/test I/O does not cross the mount — Bash still runs on the device.

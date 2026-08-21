@@ -248,3 +248,37 @@ test('deviceFor returns null for a device that is gone', () => {
   assert.equal(tunnel.deviceFor('dev_nope'), null);
   assert.equal(tunnel.deviceFor(null), null);
 });
+
+// ── the mount (§5) ───────────────────────────────────────────────
+//
+// The redirect alone gave a split view: Bash on the device, Read on the server.
+// The mount closes it — and it has to be at the SAME absolute path, or the files
+// agree while the paths do not. Measured with a real agent: mounted elsewhere it
+// reported "a naked path string is not portable between my file tools and Bash";
+// mounted at the same path it read a file and ran the suite without noticing.
+
+test('the mount point is the path the device itself uses', () => {
+  assert.equal(tunnel.mountPointFor({ workdir: '/tmp/app' }), '/tmp/app');
+  assert.equal(tunnel.mountPointFor({ workdir: '/tmp/app' }, '/tmp/other'), '/tmp/other',
+    'an explicit workdir wins, but it is still the device-side path');
+});
+
+test('nothing is reported mounted when nothing is', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-mnt-'));
+  assert.equal(tunnel.isMounted(dir), false);
+  assert.equal(tunnel.unmountDevice({ workdir: dir }), false, 'unmounting what is not mounted is not an error');
+});
+
+test('mounting refuses to shadow a directory the server already uses', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-mnt-busy-'));
+  fs.writeFileSync(path.join(dir, 'server-own-file.txt'), 'x');
+  assert.throws(
+    () => tunnel.mountDevice({ port: 1, localuser: 'me', workdir: dir }),
+    /already exists on this server and is not empty/,
+    'a workdir colliding with a real server path must fail by name, not by mounting over it'
+  );
+});
+
+test('mounting a device with no workdir is refused', () => {
+  assert.throws(() => tunnel.mountDevice({ port: 1, localuser: 'me' }), /no workdir/);
+});

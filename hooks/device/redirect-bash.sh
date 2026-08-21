@@ -45,7 +45,7 @@ REMOTE=$(jq -rn --arg wd "$WORKDIR" --arg c "$COMMAND" \
 
 REWRITTEN=$(jq -rn --arg r "$REMOTE" --arg p "$PORT" --arg u "$USER_AT" --arg k "$KEY" \
   '"ssh -tt -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
-   + " -o ServerAliveInterval=30 -p " + $p + " -i " + ($k|@sh) + " " + $u + "@localhost "
+   + " -o LogLevel=QUIET -o ServerAliveInterval=30 -p " + $p + " -i " + ($k|@sh) + " " + $u + "@localhost "
    + ($r|@sh)')
 
 jq -n --arg cmd "$REWRITTEN" '{
