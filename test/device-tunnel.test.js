@@ -192,3 +192,59 @@ test('portListening answers truthfully for a live and a dead port', async () => 
   assert.equal(await tunnel.portListening(port), false,
     'a closed port must read as offline — this is what the dashboard shows as tunnel state');
 });
+
+// ── reaching into a device (the P2 transport) ────────────────────
+
+test('the exec argv reaches the device through its own port with the agent key', () => {
+  const args = tunnel.buildSshExecArgs({ port: 22042, localuser: 'me' }, '/tmp/proj', null, [], {});
+  assert.equal(args[args.indexOf('-p') + 1], '22042', 'the device is reached on its reserved port');
+  assert.match(args[args.indexOf('-i') + 1], /device-agent\.key$/, 'authenticated as the server, not as anyone else');
+  assert.ok(args.includes('IdentitiesOnly=yes'));
+  assert.ok(args.includes('-tt'), 'force a remote pty so interactive tools and Ctrl-C behave');
+  assert.equal(args[args.length - 2], 'me@localhost', 'through the tunnel, so the far end is loopback here');
+});
+
+test('a bare shell request lands in the project directory as a login shell', () => {
+  const args = tunnel.buildSshExecArgs({ port: 1, localuser: 'me' }, '/tmp/proj', '/bin/zsh', [], {});
+  const remote = args[args.length - 1];
+  assert.match(remote, /^cd '\/tmp\/proj' \|\| exit 1 && exec "\$SHELL" -l$/,
+    'the device chooses its own shell, and -l loads its environment');
+});
+
+// A device's toolchain usually sits behind a version manager sourced from an rc
+// file. zsh reads .zshrc only when interactive, so -i is as load-bearing as -l:
+// without it `node` is simply not found, which is what the e2e hit.
+//
+// The remote string carries two levels of quoting — one so each argv token
+// survives, one so the whole command survives being an argument to -lic. That is
+// correct but unreadable, so these tests unwrap it with a real shell instead of
+// asserting on the escaped text.
+function unwrapLic(remote) {
+  const payload = remote.slice(remote.indexOf('-lic ') + 5);
+  const res = require('child_process').spawnSync('sh', ['-c', `printf '%s' ${payload}`], { encoding: 'utf8' });
+  assert.equal(res.status, 0, `the payload must be valid shell: ${payload}`);
+  return res.stdout;
+}
+
+test('a command runs through an interactive login shell', () => {
+  const args = tunnel.buildSshExecArgs({ port: 1, localuser: 'me' }, '/tmp/proj', 'npm', ['test'], {});
+  const remote = args[args.length - 1];
+  assert.match(remote, /exec "\$SHELL" -lic /);
+  assert.equal(unwrapLic(remote), "'npm' 'test'", 'what the login shell is asked to run');
+});
+
+test('env vars and paths are quoted, not interpolated', () => {
+  const args = tunnel.buildSshExecArgs({ port: 1, localuser: 'me' }, "/tmp/it's here", 'echo', ['a b'], { TOK: "x'y" });
+  const remote = args[args.length - 1];
+  const q = String.fromCharCode(39), bs = String.fromCharCode(92);
+  assert.ok(remote.startsWith("cd " + q + "/tmp/it" + q + bs + q + q + "s here" + q), 'a path with a quote survives');
+  // One more unwrap and the tokens are intact — a secret containing a quote
+  // cannot end the string early and turn the rest into commands.
+  const expected = "TOK=" + q + "x" + q + bs + q + q + "y" + q + " " + q + "echo" + q + " " + q + "a b" + q;
+  assert.equal(unwrapLic(remote), expected, 'a secret with a quote cannot end the string early');
+});
+
+test('deviceFor returns null for a device that is gone', () => {
+  assert.equal(tunnel.deviceFor('dev_nope'), null);
+  assert.equal(tunnel.deviceFor(null), null);
+});

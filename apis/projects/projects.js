@@ -150,7 +150,11 @@ module.exports = function(deps) {
                 }
 
                 const detected = webState.detectStack(targetPath);
-                webState.updateProject(id, { init_status: 'imported' });
+                // A device project has nothing to initialise here — its code is
+                // on the device, and `jonggrang init` belongs there, not against
+                // the empty state dir this side. Reporting `imported` would ask
+                // the user to fix something that is not wrong.
+                webState.updateProject(id, { init_status: source.type === 'device' ? 'ready' : 'imported' });
                 io.to(`project:${id}`).emit('import.done', { project_id: id, detected });
                 startProjectWatcher(webState.getProject(id));
             } catch (err) {
