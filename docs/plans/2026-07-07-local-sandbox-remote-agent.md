@@ -303,5 +303,35 @@ Device `jg2` (`temet01bare190`, Ubuntu), server `sj` (`sandbox.jonggrang.dev`).
 | 7 | Dashboard | ✅ `GET /api/devices` → `online: true`; the Settings card shows the device, its port, `localuser:workdir`, and the server agent key to authorize |
 | 8 | Live state, not a stored flag | ✅ `tunnel down` on the device → Refresh → dot grey, "tunnel down". The server derives it by probing the reserved loopback port |
 
+### Validation log — this laptop as a device, driving a real project (2026-08-21)
+
+Second device: the Mac (`anak10thn-mini.local`, Darwin 26.5.2), registered on the
+same server with `--path` pointing at a real checkout.
+
+| # | What | Result |
+|---|------|--------|
+| 9 | Two devices, two ports | ✅ the Mac got 22001 while jg2 kept 22000; both `online` in the dashboard |
+| 10 | Server enters the laptop | ✅ from sj: `ssh -p 22001 -i device-agent.key anak10thn@localhost` → `anak10thn-mini.local / anak10thn / Darwin 26.5.2` |
+| 11 | Server finds the project from the registry | ✅ read `workdir` from `devices.json`, then `cd` + `git rev-parse` returned the checkout's real branch and HEAD |
+| 12 | **Server runs the project's tests ON the laptop** | ✅ `node test/device-tunnel.test.js` → `pass 19, fail 0`, executed by the laptop's own node, code never left it |
+| 13 | Server writes into the laptop | ✅ a file created through the tunnel was present on the Mac afterwards |
+
+### Two more things the implementation found
+
+4. **A device's toolchain is not on the ssh PATH.** §12 notes the device needs the
+   tools its tests invoke; it does not say that a *non-interactive* ssh session
+   will not find them. `node` sat in nvm, sourced from `.zshrc`, which neither
+   `bash -lc` nor `zsh -lc` loads for that session — every command went
+   `node: command not found` until given an absolute path. **P2's redirect must
+   establish the device's PATH itself** (resolve the interpreter once at
+   registration, or run through a login shell that actually sources it) or the
+   transparent-bash premise breaks on the first `npm test`.
+
+5. **`systemsetup -getremotelogin` cannot be used as the sshd check.** It needs
+   admin, fails without it, and that read as "Remote Login is off" on a Mac where
+   it was on. Registration now probes port 22 with a TCP connect, which needs no
+   privileges and tests the thing that matters — the tunnel forwards to sshd, so
+   what counts is whether sshd answers.
+
 Not covered here (P2+): the Bash redirect, the SSHFS mount, `spawnForProject`'s
 device branch, worktrees on the device. §12's `[DECIDE-b]` is untouched.

@@ -3181,7 +3181,7 @@ function parseFlags(args, valueFlags) {
 
 const DEVICE_VALUE_FLAGS = new Set(['server', 'user', 'localuser', 'path', 'workdir', 'label', 'id', 'pubkey', 'ssh-opt', 'remote-jonggrang']);
 
-function cmdDevice(args) {
+async function cmdDevice(args) {
   const tunnel = require('../lib/tunnel');
   const sub = args[0];
   const { flags } = parseFlags(args.slice(1), DEVICE_VALUE_FLAGS);
@@ -3241,7 +3241,7 @@ function deviceProvision(tunnel, flags) {
 
 // Run ON THE DEVICE. Provisions on the server over ssh, then authorizes the
 // server's key here so the agent can come back in.
-function deviceRegister(tunnel, flags) {
+async function deviceRegister(tunnel, flags) {
   const server = flags.server;
   if (!server) { logError('device register: --server <sshhost> is required'); return 1; }
 
@@ -3290,11 +3290,11 @@ function deviceRegister(tunnel, flags) {
   });
   logSuccess(`Saved ${tunnel.deviceConfigPath()}`);
 
-  if (process.platform === 'darwin') {
-    const remote = require('child_process').spawnSync('systemsetup', ['-getremotelogin'], { encoding: 'utf8' });
-    const on = /On/i.test(String(remote.stdout || ''));
-    if (!on) logWarn('macOS Remote Login looks OFF — the tunnel needs sshd here: sudo systemsetup -setremotelogin on');
-  }
+  // The tunnel forwards to sshd on THIS machine, so check that sshd answers.
+  // `systemsetup -getremotelogin` needs admin and fails without it, which read
+  // as "off" and warned on a machine where Remote Login was on — a connect probe
+  // needs no privileges and tests the thing that actually matters.
+  await probeLocalSshd(tunnel, localuser);
 
   console.log('');
   logInfo('Next: jonggrang tunnel up');
@@ -3327,6 +3327,18 @@ function deviceRemove(tunnel, id) {
   logSuccess(`Removed ${id}`);
   logInfo(`Its key stays in ${tunnel.authorizedKeysPath()} — remove that line by hand if the device is gone for good.`);
   return 0;
+}
+
+// Does sshd here accept a connection at all? A device whose sshd is unreachable
+// registers fine and then the tunnel forwards to nothing.
+async function probeLocalSshd(tunnel, localuser) {
+  const port = 22;
+  const open = await tunnel.portListening(port, 800);
+  if (open) { logInfo(`sshd here answers on port ${port} — the tunnel has something to forward to.`); return; }
+  logWarn(`Nothing is listening on port ${port} here, so the tunnel would forward to nothing.`);
+  if (process.platform === 'darwin') logInfo('Turn Remote Login on: sudo systemsetup -setremotelogin on');
+  else logInfo('Start sshd on this machine (e.g. sudo systemctl enable --now ssh).');
+  logInfo(`The agent will enter as ${localuser}.`);
 }
 
 function cmdTunnel(args) {
@@ -5482,7 +5494,7 @@ async function main() {
   }
 
   if (command === 'device') {
-    process.exitCode = cmdDevice(rest) || 0;
+    process.exitCode = (await cmdDevice(rest)) || 0;
     return;
   }
 
