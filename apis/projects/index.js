@@ -60,7 +60,14 @@ module.exports = function register(app, io, ctx) {
         // write a plan about nothing.
         let cwd = project.path;
         const deviceEnv = {};
-        if (project.device?.enabled && !opts.local) {
+        // `opts.local` means "not in the container" — init uses it because a
+        // container may not be up yet. It must NOT mean "ignore the device": for a
+        // device project the CLI runs here either way, and what changes is only
+        // the directory it works in. Skipping this branch for init left the tool
+        // scaffold (AGENTS.md, .claude) on the server while .jonggrang — a symlink
+        // — landed on the device: one project, its instructions split across two
+        // machines.
+        if (project.device?.enabled) {
             const device = tunnel.deviceFor(project.device.device_id);
             if (!device) throw new Error(`device ${project.device.device_id} is no longer registered`);
             tunnel.mountDevice(device, project.device.workdir);

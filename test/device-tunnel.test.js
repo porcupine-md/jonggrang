@@ -438,3 +438,34 @@ test('an empty state directory is replaced by the link without complaint', () =>
   fs.mkdirSync(path.join(server, '.jonggrang'), { recursive: true });
   assert.equal(tunnel.linkProjectState({ path: server }, device).created, true);
 });
+
+// ── the redirect bundle must be nobody else's file ───────────────
+//
+// It was merged into the project's `.claude/settings.json` at first, and
+// `jonggrang init --force` writes that file: initialising a device project
+// silently removed the redirect, and the work loop's agent then ran its commands
+// on the SERVER. The run reported success both times — the only tell was the
+// artefact, which named the wrong machine.
+
+test('the bundle lives in its own directory, not in .claude', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-bundle-'));
+  const home = path.join(__dirname, '..');
+  const r = tunnel.installDeviceHooks(dir, home);
+  assert.equal(r.settings, path.join(dir, '.jonggrang-device', 'settings.json'));
+  assert.ok(!fs.existsSync(path.join(dir, '.claude')), 'nothing written into .claude, which init owns');
+  assert.ok(!fs.existsSync(path.join(dir, 'hooks')), 'nor into hooks, which is seeded into worktrees');
+
+  const settings = JSON.parse(fs.readFileSync(r.settings, 'utf8'));
+  const cmd = settings.hooks.PreToolUse[0].hooks[0].command;
+  assert.match(cmd, /redirect-bash\.sh/);
+  assert.equal(settings.hooks.PreToolUse[0].matcher, 'Bash');
+});
+
+test('reinstalling the bundle is idempotent and self-contained', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-bundle2-'));
+  const home = path.join(__dirname, '..');
+  tunnel.installDeviceHooks(dir, home);
+  const first = fs.readFileSync(tunnel.deviceSettingsPath(dir), 'utf8');
+  tunnel.installDeviceHooks(dir, home);
+  assert.equal(fs.readFileSync(tunnel.deviceSettingsPath(dir), 'utf8'), first, 'no accumulation');
+});
