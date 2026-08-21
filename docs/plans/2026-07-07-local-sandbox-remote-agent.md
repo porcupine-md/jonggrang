@@ -525,8 +525,27 @@ points at the answer, which is an account rather than an option string: a
 dedicated device user that owns only the projects it should reach
 (`--user jonggrang-agent`). The recipe is in docs/CONFIG.md.
 
+### The audit log (§7)
+
+The grant cannot be removed, but it can be made visible — and the record has to
+live on the **device**, since a log the server keeps is a log the server can
+rewrite. sshd already provides the hook: a forced command receives the client's
+real command in `$SSH_ORIGINAL_COMMAND`. So registration installs
+`~/.jonggrang/device-audit-shell.sh` on the device and names it as the forced
+command for the server's key; it appends the command and then runs it unchanged.
+
+| # | What | Result |
+|---|------|--------|
+| 40a | Programmatic call (git) | ✅ `## main` — works, and logged |
+| 40b | Agent-style redirect | ✅ `anak10thn-mini.local` / `v24.13.1` — works, and logged |
+| 40c | Dashboard Terminal (pty) | ✅ session starts, and the `exec "$SHELL" -l` is logged |
+| 40d | The log | ✅ on the laptop, with timestamp and source: `2026-08-21T14:32:33Z from=::1 cd '/tmp/jg-device-project' … git status …` |
+
+It rotates itself above 4MB (keeping the tail), so it cannot quietly fill a
+laptop. And it is visibility, not restriction: the server can still run anything.
+
 Still open from §7's list: workspace scoping below the account level, per-session
-ephemeral keys, key rotation, and an audit log.
+ephemeral keys, and key rotation.
 
 ## 21. Plan → approve → work on a device
 

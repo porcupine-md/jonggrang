@@ -521,3 +521,44 @@ test('the worktree mount is released when its run ends', () => {
   assert.match(close, /tunnel\.unmountDevice\(ctx\.device, group\.worktreePath\)/,
     'a mount outliving its run is a hostage to the next hiccup');
 });
+
+// ── the device keeps its own record ─────────────────────────────
+//
+// §7 left the audit log entirely open. The grant cannot be removed — running the
+// agent's commands there IS the feature — but it can be made visible, and the
+// record has to live on the DEVICE: a log kept on the server is a log the server
+// can rewrite. sshd hands the client's real command to a forced command in
+// $SSH_ORIGINAL_COMMAND, which is exactly the hook needed.
+
+test('the server key runs through the audit wrapper', () => {
+  const entry = tunnel.agentKeyEntry(KEY_A, '/home/me/.jonggrang/device-audit-shell.sh');
+  assert.match(entry, /^restrict,pty,command="\/home\/me\/\.jonggrang\/device-audit-shell\.sh" /);
+  assert.equal(tunnel.keyBody(entry), tunnel.keyBody(KEY_A));
+});
+
+test('without a wrapper the entry is still restricted', () => {
+  assert.match(tunnel.agentKeyEntry(KEY_A), /^restrict,pty ssh-ed25519/,
+    'a device registered before the wrapper existed keeps working');
+});
+
+test('installing the wrapper puts it on the device, executable', () => {
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-audit-'));
+  const prev = process.env.HOME;
+  process.env.HOME = fresh;
+  try {
+    const dst = tunnel.installAuditShell(path.join(__dirname, '..'));
+    assert.equal(dst, tunnel.auditShellPath());
+    assert.ok(fs.existsSync(dst));
+    assert.ok((fs.statSync(dst).mode & 0o111) !== 0, 'sshd has to be able to run it');
+    const body = fs.readFileSync(dst, 'utf8');
+    assert.match(body, /SSH_ORIGINAL_COMMAND/, 'it logs the real command');
+    assert.match(body, /exec "\$SHELL" -c/, 'and then runs it as asked');
+    assert.match(body, /exec "\$SHELL" -l/, 'with an interactive session still possible');
+  } finally { process.env.HOME = prev; }
+});
+
+test('the log rotates itself, so it cannot fill a laptop', () => {
+  const body = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'device', 'audit-shell.sh'), 'utf8');
+  assert.match(body, /4194304/, 'a size ceiling');
+  assert.match(body, /tail -c 1048576/, 'and it keeps the tail rather than truncating to nothing');
+});

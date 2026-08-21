@@ -630,6 +630,22 @@ jonggrang device register --server <host> --user jonggrang-agent --path /srv/pro
 The tunnel key is separate and already confined: it may forward its own reserved
 port and nothing else, with a forced command that refuses execution.
 
+**Everything the server runs on your device is logged — on your device.**
+Registration installs `~/.jonggrang/device-audit-shell.sh` and names it as the
+forced command for the server's key, so sshd hands it the real command in
+`$SSH_ORIGINAL_COMMAND`; it records it and then runs it unchanged. The record
+lives at `~/.jonggrang/device-audit.log`:
+
+```
+2026-08-21T14:32:33Z  from=::1  cd '/tmp/my-app' || exit 1 && exec "$SHELL" -lc 'git status'
+2026-08-21T14:33:12Z  from=::1  cd '/tmp/my-app' || exit 1 && exec "$SHELL" -l
+```
+
+It is deliberately on the device and not on the server: a log the server keeps is
+a log the server can rewrite. It rotates itself above 4MB, keeping the tail. And
+it is **visibility, not restriction** — the server can still run anything; a
+dedicated account is what narrows that.
+
 **When the tunnel drops mid-run.** A device group is watched: every 15 seconds the
 server asks whether the reserved port is still listening, and two consecutive
 misses stop the run — one is not enough, since an `autossh` reconnect should not

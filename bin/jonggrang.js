@@ -3274,9 +3274,12 @@ async function deviceRegister(tunnel, flags) {
 
   // Inbound trust: the agent enters through the tunnel as this user. set, not
   // add, so a device registered before the restrictions existed picks them up.
-  const entry = tunnel.agentKeyEntry(reg.server_pubkey);
+  // Record what the server runs here, on this machine, before it runs.
+  const wrapper = tunnel.installAuditShell(JONGGRANG_HOME);
+  const entry = tunnel.agentKeyEntry(reg.server_pubkey, wrapper);
   const { replaced } = tunnel.setAuthorizedKey(entry);
-  logInfo(`Server key ${replaced ? 'updated in' : 'added to'} ${tunnel.authorizedKeysPath()} (restrict,pty)`);
+  logInfo(`Server key ${replaced ? 'updated in' : 'added to'} ${tunnel.authorizedKeysPath()} (restrict,pty + audit)`);
+  logInfo(`Everything the server runs here is logged to ${tunnel.auditLogPath()}`);
 
   // Say plainly what was granted. The server can run commands as this user —
   // that IS the feature — but the user does not have to be the developer's own.
