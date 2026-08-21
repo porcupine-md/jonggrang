@@ -1,9 +1,12 @@
 # Local Sandbox — Remote Agent, Local Execution via Reverse SSH Tunnel
 
-> Status: **P0 + P1 IMPLEMENTED** (2026-08-21) — registration, two-way key exchange
-> and the tunnel lifecycle ship in `lib/tunnel.js`, `jonggrang device` /
-> `jonggrang tunnel`, `GET /api/devices` and the Settings "Local Devices" card.
-> P2+ (the agent transport) is still design only.
+> Status: **P0, P1 IMPLEMENTED; P2 transport + P4 project binding PARTIAL**
+> (2026-08-21). Registration, two-way key exchange and the tunnel ship in
+> `lib/tunnel.js`, `jonggrang device` / `jonggrang tunnel`, `GET /api/devices`
+> and the Settings "Local Devices" card. A project can now live on a device
+> (`source.type: "device"`) and its **Terminal runs there** through the tunnel.
+> Still design only: the transparent Bash redirect for agents (§3), the SSHFS
+> mount (§5), and orchestration on a device (P5).
 > Decisions captured from discussion 2026-07-07. Open decisions marked **[DECIDE]**.
 >
 > See §15 for what the implementation changed about this design.
@@ -335,5 +338,25 @@ a git repo with a `package.json` whose test prints the hostname it ran on.
    privileges and tests the thing that matters — the tunnel forwards to sshd, so
    what counts is whether sshd answers.
 
-Not covered here (P2+): the Bash redirect, the SSHFS mount, `spawnForProject`'s
-device branch, worktrees on the device. §12's `[DECIDE-b]` is untouched.
+### Validation log — a project on a device (2026-08-21, P2 transport + P4 binding)
+
+A project bound to the Mac, with its code at `/tmp/jg-device-project` and never
+copied to the server.
+
+| # | What | Result |
+|---|------|--------|
+| 15 | Import with `source.type: "device"` | ✅ `{ device_id, workdir }` recorded, nothing fetched; the server-side path holds only jonggrang's own state |
+| 16 | **Terminal in the browser is a shell on the laptop** | ✅ the dashboard on sj opened `(base) ➜ jg-device-project git:(main)` — the developer's own zsh prompt, conda and git prompt included, in the project dir |
+| 17 | The device's toolchain is there | ✅ typed into that terminal: `hostname` → `anak10thn-mini.local`, `node -v` → `v24.13.1` (the nvm one), `npm test` → `PASS · ran on anak10thn-mini.local` |
+| 18 | Non-interactive command path | ✅ the same `buildSshExecArgs` argv ran `npm test` on the laptop from the server, exit 0 |
+| 19 | Tunnel down is reported, not hung | ✅ starting a terminal answered `503 DEVICE_TUNNEL_DOWN`: "No tunnel from anak10thn-mini. Run `jonggrang tunnel up` on that machine." |
+
+Finding 4 (a device's toolchain is not on the ssh PATH) is **resolved for this
+path**: the transport runs commands through the device's *interactive* login
+shell, so `.zshrc` — and the version manager in it — is loaded. That is why entry
+17 finds node at all.
+
+Not covered here: the transparent Bash **redirect** for an agent running on the
+server (§3 — this transport is explicit, not yet hooked into a tool's Bash), the
+SSHFS mount for native file tools (§5), worktrees and the work loop on a device
+(P5). §12's `[DECIDE-b]` is untouched.

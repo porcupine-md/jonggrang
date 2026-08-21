@@ -528,3 +528,32 @@ forced command does not interfere with the tunnel.
 It has to be a *dedicated* key: if it were the developer's own, either sshd
 matches their unrestricted entry first and the restriction does nothing, or they
 lose their own shell on the server.
+
+### A project on a device
+
+Import with `source.type: "device"`:
+
+```jsonc
+POST /api/projects/import
+{
+  "name": "laptop-probe",
+  "source": { "type": "device", "device_id": "dev_my-laptop_a1b2c3", "path": "/tmp/my-app" }
+}
+```
+
+Nothing is fetched — the code stays on the device. The project record gains
+`device: { enabled, device_id, workdir }`, and two locations coexist on purpose:
+
+| | Where | Holds |
+|---|---|---|
+| `project.path` | the server | jonggrang's own state for the project (plans, tasks) |
+| `project.device.workdir` | the device | the code, and where commands actually run |
+
+Its **Terminal** is a shell on the device: `spawnPty` gains a third branch beside
+the host and container ones, and the child is `ssh` through the reserved port.
+Commands run under the device's *interactive* login shell, because a device's
+toolchain usually sits behind a version manager sourced from an rc file that a
+plain `ssh host cmd` never reads.
+
+Starting a terminal while the device's tunnel is down answers
+`503 DEVICE_TUNNEL_DOWN` naming the machine, rather than hanging on ssh.
