@@ -467,5 +467,39 @@ agree but every build pays SSHFS I/O. Either is coherent; the current state
 (redirect without mount) is not.
 
 Not covered here: the SSHFS mount (§5) — now the blocking gap, not a nicety —
-worktrees and the work loop on a device (P5), and hardening the server→device
-direction (§7).
+hardening the server→device direction (§7).
+
+## 19. P5 — worktrees and the work loop on a device
+
+`buildCtx` gains a third mode beside host and container. The repository is on the
+device, so its worktrees are too — `git worktree add` has to run where the repo
+is. The orchestrator and the agent stay on the server, over a mount of that
+worktree at the same absolute path, one per plan.
+
+Two things this forced, both found by running it:
+
+1. **Git cannot run against the mount.** A worktree's `.git` names the repository
+   by its *device* path, so `git status` on the server answers "not a git
+   repository: /private/tmp/…" for a directory it can otherwise read perfectly.
+   All git goes through ssh to the device; `gitSync` was already the single choke
+   point, so this is one branch.
+2. **The mount must be dropped before the worktree is replaced.** Creating a
+   worktree removes and re-adds the directory, and an sshfs session survives
+   that — pointing at an inode that no longer exists. The mount then looks healthy
+   and every write into it fails ENOENT.
+
+And one that took the dashboard down: **`deviceExec` was using the agent's ssh
+shape.** `-tt` plus an interactive login shell is right for a TUI and wrong for
+`git diff --cached`, which sat on the device for six minutes with a pty nobody
+was typing into — and because the caller is synchronous, every request froze
+behind it. There are now two shapes: `-tt … -lic` for the agent and the Terminal,
+`-T … -lc` with a timeout for programmatic calls.
+
+| # | What | Result |
+|---|------|--------|
+| 31 | Worktree created on the device | ✅ `git worktree list` on the laptop shows `p5-probe` on `feat/p5-device-probe`, made by the orchestrator on the server |
+| 32 | Mounted here at the same path | ✅ the server lists it; git against the mount correctly refuses, git over ssh answers in ~380ms |
+| 33 | State seeded into it | ✅ plan + tasks staged in the worktree, `.claude/` and `hooks/` present (and excluded from feature commits) |
+| 34 | **The work loop ran** | ✅ `mode: device`, one task, `All tasks completed! 1 / 1` |
+| 35 | **The agent worked on the laptop** | ✅ it created `WHERE.md` containing `anak10thn-mini.local` / `Darwin` — the laptop naming itself |
+| 36 | The commit is code-only | ✅ `docs: add WHERE.md…` with `WHERE.md | 2 ++` and nothing else; the seeded scaffold stayed out |

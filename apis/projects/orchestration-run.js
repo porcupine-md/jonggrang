@@ -20,6 +20,7 @@ const path = require('path');
 const lib = require('../../lib/jonggrang');
 const sandbox = require('../../lib/sandbox');
 const sandboxGit = require('../../lib/sandbox-git');
+const tunnel = require('../../lib/tunnel');
 
 const LOG_TAIL_MAX = 200;
 const GIT_MAXBUF = 1024 * 1024 * 64;
@@ -105,6 +106,22 @@ module.exports = function(deps) {
                 hostWt: (fid) => path.join(hostDir, fid),
             };
         }
+        // A device project's repository is on the developer's machine, so its
+        // worktrees are too — `git worktree add` has to run where the repo is.
+        // The orchestrator and the agent still run here, over a mount of that
+        // worktree at the same absolute path, so `wt` and `hostWt` agree.
+        if (project.device?.enabled) {
+            const device = tunnel.deviceFor(project.device.device_id);
+            if (!device) throw new Error(`device ${project.device.device_id} is no longer registered`);
+            return {
+                mode: 'device',
+                device,
+                root: project.device.workdir,
+                wt: (fid) => tunnel.deviceWorktreePath(device, fid),
+                hostWt: (fid) => tunnel.deviceWorktreePath(device, fid),
+            };
+        }
+
         return {
             mode: 'host',
             root: project.path,
@@ -119,6 +136,10 @@ module.exports = function(deps) {
             return execFileSync('docker', ['exec', '--workdir', cwd, ctx.container, 'git', ...argv],
                 { encoding: 'utf8', maxBuffer: GIT_MAXBUF });
         }
+        // Not against the mount: a worktree's .git points at the repository by
+        // its DEVICE path, so git run here reports "not a git repository" for a
+        // directory it can otherwise read perfectly. Measured, not assumed.
+        if (ctx.mode === 'device') return tunnel.deviceExec(ctx.device, cwd, 'git', argv);
         return execFileSync('git', argv, { cwd, encoding: 'utf8', maxBuffer: GIT_MAXBUF });
     }
 
@@ -184,6 +205,11 @@ module.exports = function(deps) {
     function createWorktreeCtx(ctx, g) {
         const wt = ctx.wt(g.featureId);
         const branch = g.branch;
+        // Device: drop any mount FIRST. This function removes and re-adds the
+        // worktree, and an sshfs session survives that — it then points at a
+        // directory that no longer exists, so the mount looks healthy and every
+        // write into it fails ENOENT.
+        if (ctx.mode === 'device') tunnel.unmountDevice(ctx.device, wt);
         try { gitSync(ctx, ctx.root, ['worktree', 'prune']); } catch {}
         try { gitSync(ctx, ctx.root, ['worktree', 'remove', wt, '--force']); } catch {}
         // Best-effort: drop a worktree left at the OLD in-repo location (migration).
@@ -193,6 +219,9 @@ module.exports = function(deps) {
         const startRef = resolveStartRef(ctx, g.base);
         const baseSha = gitSync(ctx, ctx.root, ['rev-parse', startRef]).trim();
         gitSync(ctx, ctx.root, ['worktree', 'add', '-b', branch, wt, startRef]);
+        // Device: git made the worktree on the developer's machine. Mount it here,
+        // at the same path, so the orchestrator and the agent can work in it.
+        if (ctx.mode === 'device') tunnel.mountDevice(ctx.device, wt);
         return { worktreePath: wt, hostWorktreePath: ctx.hostWt(g.featureId), branch, baseSha };
     }
 
@@ -320,6 +349,13 @@ module.exports = function(deps) {
         const all = readWorktreeMeta(project);
         const meta = all[info.featureId];
         const hostWt = ctx.hostWt(info.featureId);
+        // Device: the worktree lives on the developer's machine, so "is it there?"
+        // is only answerable through the mount — try to (re)establish it first.
+        // A run resumed after a tunnel drop otherwise reads as "no worktree" and
+        // would try to create one that already exists.
+        if (ctx.mode === 'device') {
+            try { tunnel.mountDevice(ctx.device, ctx.wt(info.featureId)); } catch { /* not there yet */ }
+        }
         if (meta && fs.existsSync(path.join(hostWt, '.git'))) {
             return {
                 worktreePath: ctx.wt(info.featureId), hostWorktreePath: hostWt,
@@ -336,6 +372,10 @@ module.exports = function(deps) {
                 dst: `${made.worktreePath}/${rel}`,
             })));
         } else {
+            // Device: the source is this server's project dir (jonggrang's own
+            // state, including the redirect bundle) and the destination is the
+            // mount — so a plain copy lands on the device. The seeded paths are
+            // already excluded from feature commits (SEEDED_PATHS).
             lib.copyToWorktree(project.path, made.hostWorktreePath, COPY_INTO_WORKTREE);
         }
         // Base commit so the diff (vs baseSha) shows ONLY work done in the worktree.
@@ -575,10 +615,24 @@ module.exports = function(deps) {
         }
 
         const nodeCli = path.join(__dirname, '..', '..', 'bin', 'jonggrang.js');
+
+        // A device project's worker runs HERE, in the mounted worktree — the
+        // orchestrator and the agent stay on the server (§2) and only the agent's
+        // Bash crosses to the device, via the redirect hook seeded into the
+        // worktree. These vars are what make that hook fire, and the prompt is
+        // what stops the agent writing GNU syntax for a BSD userland.
+        const deviceEnv = {};
+        if (ctx.mode === 'device') {
+            Object.assign(deviceEnv, tunnel.deviceRedirectEnv(ctx.device, group.worktreePath));
+            deviceEnv.JONGGRANG_DEVICE_PROMPT = tunnel.devicePlatformPrompt(
+                ctx.device, tunnel.devicePlatform(ctx.device_id || project.device.device_id), group.worktreePath);
+        }
+
         return spawn('node', [nodeCli, ...workerArgs], {
             cwd: group.worktreePath,
             env: {
                 ...process.env,
+                ...deviceEnv,
                 // Override inherited PWD so the agent CLI (opencode resolves its
                 // project root from $PWD, not process.cwd()) runs inside the
                 // worktree instead of the server's launch dir.

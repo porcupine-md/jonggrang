@@ -339,3 +339,34 @@ test('a stale mount is replaced rather than trusted', () => {
   assert.match(src, /if \(mountHealthy\(mountPoint\)\) return \{ mountPoint, mounted: false, reused: true \}/);
   assert.match(src, /is mounted but unusable/, 'and a mount that cannot be cleared fails loudly');
 });
+
+// ── two ssh shapes, and using the wrong one hangs ────────────────
+//
+// The agent and the Terminal need a pty and an interactive login shell. A
+// programmatic call needs neither — with the interactive shape `git diff
+// --cached` sat on the device for six minutes with a pty nobody was typing into,
+// and since the caller is synchronous the whole dashboard froze behind it.
+
+test('a programmatic call gets no pty and a non-interactive shell', () => {
+  const args = tunnel.buildSshExecArgs({ port: 1, localuser: 'me' }, '/tmp/x', 'git', ['status'], {}, { interactive: false });
+  assert.equal(args[0], '-T', 'no pty allocated');
+  assert.match(args[args.length - 1], /exec "\$SHELL" -lc /, 'login shell, but not interactive');
+});
+
+test('the agent and terminal path keeps the pty and the interactive shell', () => {
+  const args = tunnel.buildSshExecArgs({ port: 1, localuser: 'me' }, '/tmp/x', 'npm', ['test']);
+  assert.equal(args[0], '-tt');
+  assert.match(args[args.length - 1], /exec "\$SHELL" -lic /);
+});
+
+test('deviceExec is bounded, so one stuck command cannot take the server', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tunnel.js'), 'utf8');
+  assert.match(src, /timeout: timeoutSec \* 1000/);
+  assert.match(src, /interactive: false/, 'and it uses the non-interactive shape');
+});
+
+test('a plan worktree on a device gets its own path per feature', () => {
+  const d = { label: 'my mac' };
+  assert.equal(tunnel.deviceWorktreePath(d, 'feat-x'), '/tmp/jonggrang-worktrees/my_mac/feat-x');
+  assert.notEqual(tunnel.deviceWorktreePath(d, 'feat-x'), tunnel.deviceWorktreePath(d, 'feat-y'));
+});
