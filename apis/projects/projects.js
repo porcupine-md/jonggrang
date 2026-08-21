@@ -202,7 +202,13 @@ module.exports = function(deps) {
         // root user) so plain host fs.rmSync EACCESes — purgeProjectFiles clears
         // them via a throwaway container, then removes the empty dirs.
         try {
-            sandbox.purgeProjectFiles(project, { deleteRepo: req.query.delete_files === 'true' });
+            // For a device project, project.path is not the repo — the repo is on
+            // the device and stays there. What sits here is scaffolding this server
+            // wrote: the redirect bundle and a symlink into the mount. It goes with
+            // the project, `delete_files` or not, because keeping it would leave a
+            // directory of dangling links behind every deleted device project.
+            const deleteRepo = req.query.delete_files === 'true' || Boolean(project.device?.enabled);
+            sandbox.purgeProjectFiles(project, { deleteRepo });
         } catch (err) {
             console.error('purgeProjectFiles error during project deletion:', err);
         }

@@ -822,3 +822,11 @@ from under a run that is still using it is worse than leaving it.
 | 62 | Delete the last project on that workdir | ✅ mount released — 0 remaining |
 | 63 | `device remove` with a mount left over | ✅ `Unmounted /tmp/jg-device-jg2`, then named the three device-side leftovers |
 | 64 | Device-side cleanup, by hand as reported | ✅ server key gone from jg2's `authorized_keys` (5 → 4 lines), worktrees and registration removed |
+| 65 | Delete a device project | ✅ mount released **and** the server-side scaffolding dir removed — the device's own repo untouched |
+
+`delete_files` does not gate that last one. For a device project `project.path` is
+not the repo: the repo is on the device and stays there, and what sits on the
+server is scaffolding the server itself wrote — the redirect bundle and a symlink
+into the mount. Keeping it would leave a directory of dangling links behind every
+deleted device project, and asking "delete my files?" about scaffolding invites the
+answer no for the wrong reason.
