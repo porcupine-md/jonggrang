@@ -581,3 +581,39 @@ Worth keeping: this was caught by reading the **artefact**, not the log. The run
 reported success both times. The second run's agent even flagged it unprompted —
 "the prior progress.txt recorded Linux/x86_64 … but that was clearly a different
 host" — which is a better regression test than anything asserted here.
+
+## 23. A tunnel that drops mid-run
+
+§12 asked "how to pause/resume the agent gracefully" on a mid-run drop. Measured
+first, and the answer was worse than a crash: the mount answers EIO, and the agent
+— which now knows enough to *name* the problem — settles into a retry loop.
+
+> The device has been unreachable across multiple attempts. Let me give it more
+> time and retry.
+> ▸ Bash echo alive · ▸ Bash echo alive · ▸ Read … · ▸ Bash echo alive
+
+That is an LLM polling a dead mount, with the run reporting `running`. When it
+eventually gave up, the user was told `worker exited with code 1` — true, and
+useless.
+
+Three changes, and the grace period is the load-bearing one:
+
+- A **watchdog** per device group: every 15s, is the reserved port still
+  listening? Two consecutive misses stop the run — one is not enough, or an
+  autossh reconnect would kill a run that was about to be fine.
+- The run is **cancelled with the cause named**, and if a device run merely fails
+  while the device is unreachable, the exit code is annotated rather than left to
+  speak for itself.
+- The worktree mount is **released when the run ends**, whatever the outcome. A
+  mount outliving its run is a hostage to the next hiccup.
+
+| # | What | Result |
+|---|------|--------|
+| 45 | Tunnel dropped mid-run | ✅ `anak10thn-mini unreachable (1/2)`, then `went offline — the tunnel dropped mid-run. Stopping so the agent does not retry a machine that is gone.` |
+| 46 | Run outcome | ✅ `cancelled`, error names the device — not an exit code |
+| 47 | Mount afterwards | ✅ released (0), so the next start is not handed an EIO directory |
+
+Not solved: **resuming** where it left off. The tasks keep their state, so
+restarting the plan picks up the unfinished ones — but the interrupted turn is
+lost, and the agent may redo part of it. §12's "pause/resume gracefully" is still
+open; this is the honest half of it, which is stopping loudly.

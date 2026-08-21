@@ -629,3 +629,14 @@ jonggrang device register --server <host> --user jonggrang-agent --path /srv/pro
 
 The tunnel key is separate and already confined: it may forward its own reserved
 port and nothing else, with a forced command that refuses execution.
+
+**When the tunnel drops mid-run.** A device group is watched: every 15 seconds the
+server asks whether the reserved port is still listening, and two consecutive
+misses stop the run — one is not enough, since an `autossh` reconnect should not
+be fatal. The run ends `cancelled` with the device named, and the worktree mount is
+released, so the next start is not handed a directory that answers `EIO`. Without
+this the agent keeps retrying a machine that is gone, at LLM prices, while the run
+reports `running`.
+
+Install `autossh` on the device if you want drops to heal themselves —
+`jonggrang tunnel up` says which supervisor it used.

@@ -23,6 +23,11 @@ const sandboxGit = require('../../lib/sandbox-git');
 const tunnel = require('../../lib/tunnel');
 
 const LOG_TAIL_MAX = 200;
+// How often to ask whether a device is still reachable, and how many misses
+// before a run is stopped. 15s × 2 ≈ half a minute of grace, which covers an
+// autossh reconnect without letting an agent burn a turn on a dead mount.
+const DEVICE_WATCH_INTERVAL_MS = 15_000;
+const DEVICE_MISSES_BEFORE_STOP = 2;
 const GIT_MAXBUF = 1024 * 1024 * 64;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -861,6 +866,34 @@ module.exports = function(deps) {
         // Live progress: READ the worktree (source of truth) and emit to the UI.
         // No writes to main → no dual-writer revert (the "tasks disappear" bug).
         group.manifestSync = setInterval(() => emitFeatureProgress(project, group), 1500);
+
+        // Device runs need a watchdog. When the tunnel drops the mount answers
+        // EIO, and the agent — which now knows enough to say "the device has been
+        // unreachable" — sits there retrying a machine that is not coming back, at
+        // LLM prices, with the run reporting `running` forever. Measured.
+        //
+        // Two strikes, not one: a brief drop that autossh reconnects through
+        // should not kill a run that is otherwise fine.
+        if (ctx.mode === 'device') {
+            let misses = 0;
+            group.deviceWatch = setInterval(async () => {
+                const live = await tunnel.portListening(ctx.device.port);
+                if (live) { misses = 0; return; }
+                if (++misses < DEVICE_MISSES_BEFORE_STOP) {
+                    pushLog(group, `[jonggrang] ${ctx.device.label} unreachable (${misses}/${DEVICE_MISSES_BEFORE_STOP})`);
+                    return;
+                }
+                clearInterval(group.deviceWatch); group.deviceWatch = null;
+                group.status = 'cancelled';
+                group.error = `${ctx.device.label} went offline — the tunnel dropped mid-run`;
+                pushLog(group, `[jonggrang] ${group.error}. Stopping so the agent does not retry a machine that is gone.`);
+                emit(project.id, 'orchestration.group.log', { feature_id: group.featureId, stream: 'stderr', line: group.error });
+                try { group.child?.kill('SIGTERM'); } catch { /* already gone */ }
+                // Clear the stale mount so the next start is not handed a
+                // directory that answers EIO.
+                try { tunnel.unmountDevice(ctx.device, group.worktreePath); } catch { /* nothing to drop */ }
+            }, DEVICE_WATCH_INTERVAL_MS);
+        }
         let buf = '';
         const onData = (stream) => (data) => {
             buf += data.toString();
@@ -906,6 +939,12 @@ module.exports = function(deps) {
             group.ptyLive = false;
             group.finishedAt = new Date().toISOString();
             if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
+            if (group.deviceWatch) { clearInterval(group.deviceWatch); group.deviceWatch = null; }
+            // Nothing is using the worktree mount now, and a mount outliving its
+            // run is just a hostage to the tunnel's next hiccup.
+            if (ctx.mode === 'device') {
+                try { tunnel.unmountDevice(ctx.device, group.worktreePath); } catch { /* already gone */ }
+            }
             // Decision (b): one-time snapshot of the worktree's final progress → main
             // so the dashboard keeps the last state after the worktree is removed.
             snapshotFeatureToMain(project, ctx, group);
@@ -923,6 +962,21 @@ module.exports = function(deps) {
             } else {
                 group.status = group.status === 'cancelled' ? 'cancelled' : 'failed';
                 group.error = group.error || `worker exited with code ${code}`;
+                // "worker exited with code 1" is true and useless when the real
+                // story is that the developer's machine went away. The agent gets
+                // EIO on every file, gives up, and the user is left reading an
+                // exit code. Name the cause while we still can.
+                if (ctx.mode === 'device' && !group.error.includes('offline')) {
+                    tunnel.portListening(ctx.device.port).then((live) => {
+                        if (live) return;
+                        group.error = `${ctx.device.label} is offline — the tunnel dropped during this run (worker exited ${code})`;
+                        pushLog(group, `[jonggrang] ${group.error}`);
+                        emit(project.id, 'orchestration.group.failed', {
+                            feature_id: group.featureId, branch: group.branch, error: group.error,
+                        });
+                        persist(project, run);
+                    }).catch(() => { /* keep the exit-code message */ });
+                }
                 emit(project.id, 'orchestration.group.failed', {
                     feature_id: group.featureId, branch: group.branch, error: group.error,
                 });

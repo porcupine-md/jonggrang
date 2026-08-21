@@ -492,3 +492,32 @@ test('a snapshot with no live run reports interrupted, not running', () => {
   assert.match(src, /the dashboard restarted while this plan was running/,
     'and says why, so it does not read as a mystery');
 });
+
+// ── a tunnel that drops mid-run ─────────────────────────────────
+//
+// Measured before it was handled: the mount answers EIO, and the agent — which
+// now knows enough to say "the device has been unreachable across multiple
+// attempts" — sits there retrying a machine that is not coming back, at LLM
+// prices, with the run reporting `running`. When it finally gave up, the user was
+// told "worker exited with code 1".
+
+test('a device run is watched, with grace for a reconnect', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
+  assert.match(src, /const DEVICE_WATCH_INTERVAL_MS/);
+  assert.match(src, /DEVICE_MISSES_BEFORE_STOP = 2/, 'two strikes, so an autossh reconnect is not fatal');
+  assert.match(src, /group\.deviceWatch = setInterval/);
+  assert.match(src, /clearInterval\(group\.deviceWatch\)/, 'and it is cleared when the group ends');
+});
+
+test('a run that died with the device says so, not just its exit code', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
+  assert.match(src, /is offline — the tunnel dropped during this run/);
+  assert.match(src, /worker exited \$\{code\}/, 'the exit code is kept, not hidden');
+});
+
+test('the worktree mount is released when its run ends', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
+  const close = src.slice(src.indexOf("child.on('close'"));
+  assert.match(close, /tunnel\.unmountDevice\(ctx\.device, group\.worktreePath\)/,
+    'a mount outliving its run is a hostage to the next hiccup');
+});
