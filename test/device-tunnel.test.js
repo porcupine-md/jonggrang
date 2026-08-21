@@ -562,3 +562,35 @@ test('the log rotates itself, so it cannot fill a laptop', () => {
   assert.match(body, /4194304/, 'a size ceiling');
   assert.match(body, /tail -c 1048576/, 'and it keeps the tail rather than truncating to nothing');
 });
+
+// ── telling the next agent it inherited half a turn ─────────────
+//
+// The watchdog stops a run cleanly, but the interrupted turn is gone: whatever it
+// had half-done is on disk with no note saying so, and the next agent reads it as
+// deliberate. The note cannot be written when it happens — the device is
+// unreachable, which is the whole reason — so it is remembered on the server and
+// applied when the worktree is next reachable.
+
+test('the interruption marker is kept server-side, not under the device symlink', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
+  assert.match(src, /interruptionsPath = \(project\) => path\.join\(tunnel\.deviceBundleDir/,
+    'under .jonggrang it would be on the offline device — the first attempt wrote nowhere');
+  assert.match(src, /markDeviceInterruption\(project, group\.featureId, group\.error\)/);
+});
+
+test('the note reaches the worktree on the next start, and the queue is cleaned', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
+  assert.match(src, /if \(ctx\.mode === 'device'\) applyDeviceInterruption/);
+  const fn = src.slice(src.indexOf('function applyDeviceInterruption'));
+  assert.match(fn, /## Interrupted run/, 'progress.txt gets the note');
+  assert.match(fn, /verify the working tree/, 'and is told not to trust the leftovers');
+  assert.match(fn, /t\.status === 'in_progress'.*'pending'/s, 'a stranded task returns to the queue');
+  assert.match(fn, /delete all\[featureId\]/, 'and the marker is cleared once applied');
+});
+
+test('a watchdog cancel leaves the run itself terminal too', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
+  const watch = src.slice(src.indexOf('group.deviceWatch = setInterval'), src.indexOf('DEVICE_WATCH_INTERVAL_MS);'));
+  assert.match(watch, /if \(!runActive\(run\)\) run\.status = 'cancelled'/,
+    'otherwise the dashboard shows a run in progress with nothing in it');
+});

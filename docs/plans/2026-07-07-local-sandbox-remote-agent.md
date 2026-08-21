@@ -632,7 +632,31 @@ Three changes, and the grace period is the load-bearing one:
 | 46 | Run outcome | ✅ `cancelled`, error names the device — not an exit code |
 | 47 | Mount afterwards | ✅ released (0), so the next start is not handed an EIO directory |
 
-Not solved: **resuming** where it left off. The tasks keep their state, so
-restarting the plan picks up the unfinished ones — but the interrupted turn is
-lost, and the agent may redo part of it. §12's "pause/resume gracefully" is still
-open; this is the honest half of it, which is stopping loudly.
+### Resuming after one (§12's other half)
+
+Stopping loudly is not enough on its own: whatever the interrupted turn had
+half-done is on disk with nothing saying so, and the next agent reads it as
+deliberate. It cannot be told at the time — the device is unreachable, which is
+the whole reason — so the interruption is remembered **on the server** and applied
+when the worktree is next reachable.
+
+That location took two tries. The first version wrote the marker to
+`<project.path>/.jonggrang/.ephemeral/` — which for a device project is a symlink
+onto the device, i.e. exactly what is offline. It silently went nowhere. It now
+lives in the server-side bundle dir.
+
+On the next start the note is appended to the feature's `progress.txt` (on the
+device, now reachable) and any task stranded `in_progress` returns to `pending`, so
+the queue is honest about what still needs doing.
+
+| # | What | Result |
+|---|------|--------|
+| 48 | Marker on interruption | ✅ `{"machine-md-probe-…": {"at": "…", "reason": "anak10thn-mini went offline — the tunnel dropped mid-run"}}` on the server |
+| 49 | Applied on the next start | ✅ `## Interrupted run (…)` in `progress.txt` **on the laptop**: "The previous session ended mid-turn … verify the working tree against the task before assuming earlier work was deliberate." |
+| 50 | Marker cleared | ✅ `{}` — applied once, not every start |
+| 51 | Stranded task | ✅ returned to `pending` before the new run claimed it |
+
+Still not solved: the turn itself. The agent may redo work it had already done —
+it is now *told* to check, which is the difference between redoing carefully and
+redoing blind. Genuine mid-turn resume would need the agent's own transcript to
+survive, which is a different feature.

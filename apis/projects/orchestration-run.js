@@ -886,14 +886,25 @@ module.exports = function(deps) {
                 clearInterval(group.deviceWatch); group.deviceWatch = null;
                 group.status = 'cancelled';
                 group.error = `${ctx.device.label} went offline — the tunnel dropped mid-run`;
+                // The next agent needs to know its predecessor was cut off
+                // mid-turn, or it will trust half-finished work as deliberate.
+                // It cannot be told now — the device is gone — so remember it and
+                // write it into the worktree when the device is back.
+                markDeviceInterruption(project, group.featureId, group.error);
                 pushLog(group, `[jonggrang] ${group.error}. Stopping so the agent does not retry a machine that is gone.`);
                 emit(project.id, 'orchestration.group.log', { feature_id: group.featureId, stream: 'stderr', line: group.error });
                 try { group.child?.kill('SIGTERM'); } catch { /* already gone */ }
                 // Clear the stale mount so the next start is not handed a
                 // directory that answers EIO.
                 try { tunnel.unmountDevice(ctx.device, group.worktreePath); } catch { /* nothing to drop */ }
+                // The group is terminal; if it was the last one running, the run
+                // is too. Otherwise the dashboard shows a run in progress with
+                // nothing in it.
+                if (!runActive(run)) run.status = 'cancelled';
+                persist(project, run);
             }, DEVICE_WATCH_INTERVAL_MS);
         }
+
         let buf = '';
         const onData = (stream) => (data) => {
             buf += data.toString();
@@ -994,6 +1005,74 @@ module.exports = function(deps) {
     // Ensure worktree + register group in the run + spawn its worker.
     // `g` comes from lib.groupPlans (has featureId/branch/title/taskIds).
     // opts.workerArgs overrides the default all-tasks args (single task / resume).
+    // Interruptions are noted on the server because the device is, by definition,
+    // unreachable when one happens. `applyDeviceInterruption` is what actually
+    // tells the next agent, once the worktree is reachable again.
+    // In the server-side bundle dir, NOT under `.jonggrang` — for a device project
+    // that path is a symlink onto the device, which is exactly what is
+    // unreachable when an interruption happens. First attempt wrote the marker
+    // there and it silently went nowhere.
+    const interruptionsPath = (project) => path.join(tunnel.deviceBundleDir(project.path), 'interruptions.json');
+
+    function markDeviceInterruption(project, featureId, reason) {
+        try {
+            const p = interruptionsPath(project);
+            let all = {};
+            try { all = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { /* first one */ }
+            all[featureId] = { at: new Date().toISOString(), reason };
+            fs.mkdirSync(path.dirname(p), { recursive: true });
+            fs.writeFileSync(p, JSON.stringify(all, null, 2));
+        } catch (err) {
+            console.error('markDeviceInterruption:', err.message);
+        }
+    }
+
+    /**
+     * Tell the next agent that the previous run was cut off mid-turn, and clean up
+     * after it: a task left `in_progress` goes back to `pending` so the queue is
+     * honest about what still needs doing.
+     *
+     * Both writes land in the worktree, which is why this runs at START rather
+     * than when the interruption happened — that was the moment the device
+     * stopped being writable.
+     */
+    function applyDeviceInterruption(project, ctx, featureId) {
+        const p = interruptionsPath(project);
+        let all = {};
+        try { all = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return; }
+        const note = all[featureId];
+        if (!note) return;
+
+        const wt = ctx.hostWt(featureId);
+        try {
+            const progress = path.join(wt, '.jonggrang', '.output', 'features', featureId, 'progress.txt');
+            fs.mkdirSync(path.dirname(progress), { recursive: true });
+            fs.appendFileSync(progress, [
+                '',
+                `## Interrupted run (${note.at})`,
+                `The previous session ended mid-turn: ${note.reason}.`,
+                'Anything it had started may be half-finished — verify the working tree',
+                'against the task before assuming earlier work was deliberate.',
+                '',
+            ].join('\n'));
+        } catch (err) {
+            console.error('applyDeviceInterruption progress:', err.message);
+        }
+
+        try {
+            const tasksFile = path.join(wt, '.jonggrang', '.output', 'features', featureId, 'jonggrang-tasks.json');
+            const data = JSON.parse(fs.readFileSync(tasksFile, 'utf8'));
+            let touched = false;
+            for (const t of data.tasks || []) {
+                if (t.status === 'in_progress') { t.status = 'pending'; touched = true; }
+            }
+            if (touched) fs.writeFileSync(tasksFile, `${JSON.stringify(data, null, 2)}\n`);
+        } catch { /* no task file yet, or unreadable — the note is the important half */ }
+
+        delete all[featureId];
+        try { fs.writeFileSync(p, JSON.stringify(all, null, 2)); } catch { /* it will be re-applied, harmlessly */ }
+    }
+
     function startGroup(project, ctx, run, g, opts = {}) {
         const wt = ensureWorktree(project, ctx, g);
         // Pull the latest approved/appended task list from main into the worktree
@@ -1002,6 +1081,9 @@ module.exports = function(deps) {
         // …and the current project settings, which a long-lived worktree would
         // otherwise keep ignoring (see seedProjectConfig).
         seedProjectConfig(project, ctx, g.featureId);
+        // If a previous run on this feature was cut off by its device going away,
+        // this is the first moment the worktree can be told about it.
+        if (ctx.mode === 'device') applyDeviceInterruption(project, ctx, g.featureId);
         const group = {
             featureId: g.featureId, branch: wt.branch, title: g.title, taskIds: g.taskIds,
             status: 'running', worktreePath: wt.worktreePath, hostWorktreePath: wt.hostWorktreePath,
