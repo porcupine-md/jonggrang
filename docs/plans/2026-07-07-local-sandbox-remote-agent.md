@@ -573,8 +573,40 @@ touched.
 | 55 | Residue | ✅ 3 older agent entries revoked in one pass, 1 left |
 | 56 | The user's own keys | ✅ both untouched |
 
-Still open from §7's list: workspace scoping below the account level, and
-per-session ephemeral keys (rotation is the step toward them, not a substitute).
+### `[DECIDE-b]` — closed: Bash redirects to the device
+
+§5 left open whether Bash should run on the server against the mount, or redirect
+to the device. Built as **redirect**, and the reasons are now measured rather than
+predicted:
+
+- The device's own toolchain is what runs. `node -v` in a redirected Bash reports
+  the laptop's nvm build; the server has a different one. For a project whose
+  runtime is the developer's machine, that is the answer that matches reality.
+- Heavy I/O stays off the mount. Builds and tests read and write natively on the
+  device; the mount carries only what the agent's file tools touch.
+- The two agree on paths, which is what made the mount worth having at all (§17).
+
+Not measured: whether the *alternative* would actually have been too slow. §12
+worried about `node_modules` over SSHFS and that stress test was never run — the
+decision rests on keeping build I/O native, not on a benchmark of the option that
+was rejected.
+
+### §7 — what is left, and what is not worth building
+
+**Workspace scoping below the account level.** Confining the agent to one directory
+needs an OS facility (a chroot, `sandbox-exec`, bubblewrap) and differs per
+platform. The plan's own answer — a dedicated device account that owns only the
+projects it should reach — gets the same outcome with tools every OS already has,
+and registration recommends it out loud. Recommending closing this rather than
+building a platform matrix.
+
+**Per-session ephemeral keys.** These would shrink the window in which a leaked
+key file is useful. But the server must hold a long-lived key to install a session
+key in the first place, so a *compromised server* can always mint another — the
+threat this would address is narrower than it looks (a leaked backup, say), and the
+cost is a key exchange on every session. Rotation, which ships, covers the same
+ground on a human timescale. Recommending this stay open rather than be built
+speculatively.
 
 ## 21. Plan → approve → work on a device
 
