@@ -41,11 +41,19 @@ module.exports = function register(app, io, _ctx) {
 
   app.delete('/api/devices/:id', (req, res) => {
     try {
-      if (!tunnel.removeDevice(req.params.id)) {
+      const result = tunnel.removeDevice(req.params.id);
+      if (!result) {
         return res.status(404).json({ error: { code: 'DEVICE_NOT_FOUND', message: 'No such device' } });
       }
       io.emit('devices.changed', { removed: req.params.id });
-      res.json({ ok: true, authorized_keys: tunnel.authorizedKeysPath() });
+      res.json({
+        ok: true,
+        authorized_keys: tunnel.authorizedKeysPath(),
+        // The mounts this server let go of, and what only the developer can
+        // remove from their own machine.
+        unmounted: result.unmounted,
+        device_side: result.device_side,
+      });
     } catch (err) {
       res.status(500).json({ error: { code: 'DEVICES_ERROR', message: err.message } });
     }

@@ -63,10 +63,32 @@ test('reservePort skips ports already taken', () => {
 
 test('removing a device frees its port for the next one', () => {
   const doomed = tunnel.provisionDevice({ label: 'doomed', pubkey: KEY_B, localuser: 'bob' });
-  assert.equal(tunnel.removeDevice(doomed.device_id), true);
+  assert.equal(tunnel.removeDevice(doomed.device_id).removed, true);
   assert.equal(tunnel.removeDevice(doomed.device_id), false, 'removing twice is not an error the caller must handle');
   const next = tunnel.provisionDevice({ label: 'reuse', pubkey: KEY_B, localuser: 'bob' });
   assert.equal(next.port, doomed.port, 'the freed port is handed out again');
+});
+
+// Removing a device used to drop the registry entry and nothing else, leaving
+// this server holding mounts of a machine it no longer knows: EIO once the tunnel
+// goes, and the mount point occupied, so re-registering could not mount where it
+// did. What is on the developer's own machine is reported, never deleted.
+
+test('removing a device says what stays on the device itself', () => {
+  const d = tunnel.provisionDevice({ label: 'leftovers', pubkey: KEY_B, localuser: 'bob' });
+  const result = tunnel.removeDevice(d.device_id);
+  assert.deepEqual(result.unmounted, [], 'nothing was mounted, so nothing was released');
+  assert.match(result.device_side.worktrees, new RegExp(`/tmp/jonggrang-worktrees/${d.device_id}$`));
+  assert.match(result.device_side.registration, /device\.json/);
+  assert.match(result.device_side.authorized_key, /authorized_keys/);
+});
+
+test('deviceMountPoints matches by the port only that device uses', () => {
+  const d = tunnel.provisionDevice({ label: 'ports', pubkey: KEY_B, localuser: 'bob' });
+  // No sshfs is running for this invented port, so the answer must be empty
+  // rather than every mount on the machine.
+  assert.deepEqual(tunnel.deviceMountPoints({ ...d, port: 65432 }), []);
+  tunnel.removeDevice(d.device_id);
 });
 
 test('listDevices reports the registry without leaking tokens', () => {

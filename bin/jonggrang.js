@@ -3382,9 +3382,15 @@ function deviceList(tunnel, flags) {
 
 function deviceRemove(tunnel, id) {
   if (!id) { logError('device remove: a device id is required'); return 1; }
-  if (!tunnel.removeDevice(id)) { logWarn(`No such device: ${id}`); return 1; }
+  const result = tunnel.removeDevice(id);
+  if (!result) { logWarn(`No such device: ${id}`); return 1; }
   logSuccess(`Removed ${id}`);
+  for (const point of result.unmounted || []) logInfo(`Unmounted ${point}`);
   logInfo(`Its key stays in ${tunnel.authorizedKeysPath()} — remove that line by hand if the device is gone for good.`);
+  // Deleting files on somebody's own machine is not this command's business, so
+  // say where they are instead of guessing that they are unwanted.
+  const left = result.device_side || {};
+  logInfo(`On the device itself: worktrees under ${left.worktrees}, ${left.registration}, and ${left.authorized_key}.`);
   return 0;
 }
 

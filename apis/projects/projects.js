@@ -208,6 +208,26 @@ module.exports = function(deps) {
         }
         try { sandbox.removeProjectSshKey(project.id); } catch {}
 
+        // A device project's code is not ours to delete — it is the developer's
+        // machine — but the mount of it is this server's, and it outlived the
+        // project: left behind it answers EIO once the tunnel goes, and it keeps
+        // the path occupied against the next import of the same directory.
+        if (project.device?.enabled) {
+            try {
+                // Unless a sibling project points at the same directory on the
+                // same device — two projects share one mount, and pulling it out
+                // from under a run that is still using it is worse than leaving it.
+                const shared = webState.listProjects().some(p => p.id !== project.id
+                    && p.device?.enabled
+                    && p.device.device_id === project.device.device_id
+                    && p.device.workdir === project.device.workdir);
+                const device = tunnel.deviceFor(project.device.device_id);
+                if (device && !shared) tunnel.unmountDevice(device, project.device.workdir);
+            } catch (err) {
+                console.error('device unmount during project deletion:', err.message);
+            }
+        }
+
         webState.deleteProject(project.id);
         res.status(204).send();
     });

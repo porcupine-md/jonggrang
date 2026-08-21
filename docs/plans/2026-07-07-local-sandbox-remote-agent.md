@@ -798,3 +798,27 @@ so, once, naming what stopped working.
 | 58 | Bundle deleted, then a start | ✅ reinstalled, and the returned `--settings` path is a file that exists |
 | 59 | Bundle present but hand-edited | ✅ untouched |
 | 60 | Tasks with no MANIFEST | ✅ `No MANIFEST for parallel-probe-b — phase tracking, gate deferral and compact finalize are off for this run.` |
+
+## 26. Letting go of a device
+
+Removing a device dropped its registry entry and nothing else. The mounts stayed —
+of a machine the server no longer knew, so they answer EIO the moment the tunnel
+goes, and they keep the path occupied, which means re-registering the same device
+cannot mount where it did. Deleting a device *project* left its mount behind for
+the same reason.
+
+Both now release what is the server's own. What is on the developer's machine —
+worktrees, `~/.jonggrang/device.json`, the server's line in their
+`authorized_keys` — is not the server's to delete, so `device remove` names the
+three places instead of guessing they are unwanted.
+
+One guard: two projects can point at the same directory on the same device and
+share one mount, so deleting one of them does not unmount. Pulling a mount out
+from under a run that is still using it is worse than leaving it.
+
+| # | What | Result |
+|---|------|--------|
+| 61 | Delete a project sharing a device workdir | ✅ mount stays up (sibling still using it) |
+| 62 | Delete the last project on that workdir | ✅ mount released — 0 remaining |
+| 63 | `device remove` with a mount left over | ✅ `Unmounted /tmp/jg-device-jg2`, then named the three device-side leftovers |
+| 64 | Device-side cleanup, by hand as reported | ✅ server key gone from jg2's `authorized_keys` (5 → 4 lines), worktrees and registration removed |
