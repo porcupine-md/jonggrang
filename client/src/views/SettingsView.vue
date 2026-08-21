@@ -111,6 +111,37 @@
       <Button :disabled="sbxSaving" @click="saveSandbox" :icon="sbxSaving ? 'pi pi-spin pi-spinner' : 'pi pi-check'" :label="sbxSaving ? 'Saving…' : 'Save'" />
     </div>
 
+    <!-- Local devices (reverse tunnel) -->
+    <div class="settings-card">
+      <div class="card-title"><i class="pi pi-desktop" /> Local Devices</div>
+      <p class="hint">Machines that run their own code while the agent runs here, reached over a reverse SSH tunnel. Register from the machine itself — <code>jonggrang device register --server &lt;this-host&gt;</code> — then <code>jonggrang tunnel up</code>. Each device gets one reserved port on this server's loopback; <strong>online</strong> means that port is listening right now.</p>
+
+      <div v-if="devErr" class="error-text"><i class="pi pi-times-circle" /> {{ devErr }}</div>
+      <div v-else-if="!devices.length" class="hint">No devices registered yet.</div>
+
+      <div v-for="d in devices" :key="d.id" class="dev-row">
+        <span class="dev-dot" :class="d.online ? 'dev-dot--on' : 'dev-dot--off'"></span>
+        <div class="dev-main">
+          <div class="dev-label">{{ d.label }} <span class="dev-id">{{ d.id }}</span></div>
+          <div class="dev-meta">
+            port {{ d.port }} · {{ d.localuser || '?' }}<span v-if="d.workdir">:{{ d.workdir }}</span>
+            · {{ d.online ? 'tunnel up' : 'tunnel down' }}
+            <span v-if="d.last_seen"> · last seen {{ d.last_seen }}</span>
+          </div>
+        </div>
+        <Button severity="secondary" text icon="pi pi-trash" :disabled="devBusy" @click="removeDevice(d)" />
+      </div>
+
+      <div v-if="agentKey" class="dev-key">
+        <label class="ssh-label">This server's agent key — add it to a device's <code>~/.ssh/authorized_keys</code></label>
+        <div class="dev-key-body">{{ agentKey }}</div>
+      </div>
+
+      <div class="ssh-actions">
+        <Button severity="secondary" :disabled="devBusy" @click="loadDevices" :icon="devBusy ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'" label="Refresh" />
+      </div>
+    </div>
+
     <!-- Git SSH Key (global) -->
     <div class="settings-card">
       <div class="card-title"><i class="pi pi-key" /> Git SSH Key (global)</div>
@@ -243,6 +274,43 @@ import { useWorkspaceStore } from '../stores/workspace.js';
 import { useTheme } from '../composables/useTheme.js';
 
 const workspace = useWorkspaceStore();
+
+// ── Local devices (reverse tunnel) ──────────────────────────────
+const devices = ref([]);
+const agentKey = ref('');
+const devErr = ref('');
+const devBusy = ref(false);
+
+async function loadDevices() {
+  devBusy.value = true;
+  devErr.value = '';
+  try {
+    const res = await fetch('/api/devices');
+    if (!res.ok) throw new Error(`devices: HTTP ${res.status}`);
+    const data = await res.json();
+    devices.value = data.devices || [];
+    // 404 here just means no device has registered yet, which the empty list
+    // already says — don't turn it into an error the user has to read.
+    const keyRes = await fetch('/api/devices/agent-key');
+    agentKey.value = keyRes.ok ? (await keyRes.json()).pubkey : '';
+  } catch (err) {
+    devErr.value = err.message;
+  } finally {
+    devBusy.value = false;
+  }
+}
+
+async function removeDevice(d) {
+  devBusy.value = true;
+  try {
+    await fetch(`/api/devices/${encodeURIComponent(d.id)}`, { method: 'DELETE' });
+    await loadDevices();
+  } catch (err) {
+    devErr.value = err.message;
+  } finally {
+    devBusy.value = false;
+  }
+}
 const { mode: themeMode, setMode } = useTheme();
 
 const themeModes = [
@@ -386,6 +454,7 @@ async function saveIssueSources() {
 }
 
 onMounted(async () => {
+  loadDevices();
   await workspace.fetch();
   workspacePath.value = workspace.path;
   try {
@@ -612,6 +681,21 @@ async function saveWorkspace() {
 .ssh-status strong { color: var(--jg-text); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
 .ssh-path { font-family: monospace; font-size: 11px; color: var(--jg-text-faint); margin-left: 8px; }
 .ssh-fp { font-family: monospace; font-size: 10px; color: var(--jg-text-faint); margin-bottom: 8px; word-break: break-all; }
+.dev-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--jg-border); }
+.dev-row:last-of-type { border-bottom: none; }
+.dev-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dev-dot--on { background: var(--jg-green); }
+.dev-dot--off { background: var(--jg-text-faint); }
+.dev-main { flex: 1; min-width: 0; }
+.dev-label { font-size: 12px; color: var(--jg-text); }
+.dev-id { font-size: 10px; color: var(--jg-text-faint); font-family: monospace; margin-left: 6px; }
+.dev-meta { font-size: 10px; color: var(--jg-text-muted); font-family: monospace; }
+.dev-key { margin-top: 10px; }
+.dev-key-body {
+  font-family: monospace; font-size: 10px; color: var(--jg-text-dim);
+  background: var(--jg-hover); border: 1px solid var(--jg-border);
+  padding: 6px 8px; word-break: break-all;
+}
 .ssh-label { display: block; font-size: 11px; color: var(--jg-text-faint); margin: 8px 0 4px; }
 .ssh-input {
   width: 100%; box-sizing: border-box; resize: vertical;
