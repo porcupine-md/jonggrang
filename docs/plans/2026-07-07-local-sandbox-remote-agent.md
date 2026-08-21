@@ -306,15 +306,17 @@ Device `jg2` (`temet01bare190`, Ubuntu), server `sj` (`sandbox.jonggrang.dev`).
 ### Validation log — this laptop as a device, driving a real project (2026-08-21)
 
 Second device: the Mac (`anak10thn-mini.local`, Darwin 26.5.2), registered on the
-same server with `--path` pointing at a real checkout.
+same server with `--path` pointing at a throwaway project — `/tmp/jg-device-project`,
+a git repo with a `package.json` whose test prints the hostname it ran on.
 
 | # | What | Result |
 |---|------|--------|
 | 9 | Two devices, two ports | ✅ the Mac got 22001 while jg2 kept 22000; both `online` in the dashboard |
 | 10 | Server enters the laptop | ✅ from sj: `ssh -p 22001 -i device-agent.key anak10thn@localhost` → `anak10thn-mini.local / anak10thn / Darwin 26.5.2` |
-| 11 | Server finds the project from the registry | ✅ read `workdir` from `devices.json`, then `cd` + `git rev-parse` returned the checkout's real branch and HEAD |
-| 12 | **Server runs the project's tests ON the laptop** | ✅ `node test/device-tunnel.test.js` → `pass 19, fail 0`, executed by the laptop's own node, code never left it |
-| 13 | Server writes into the laptop | ✅ a file created through the tunnel was present on the Mac afterwards |
+| 11 | Re-register with a different `--path` | ✅ same device id, same port 22001, `workdir` updated in both `device.json` and the server registry |
+| 12 | Server finds the project from the registry | ✅ read `workdir` from `devices.json`, then `cd` + `git log` returned the repo's real HEAD |
+| 13 | **Server runs the project's tests ON the laptop** | ✅ `npm test` → `PASS sum() ok · ran on anak10thn-mini.local (Darwin 25.5.0)` — the test names its own host, and the code never left the laptop |
+| 14 | Server writes into the laptop | ✅ a file created through the tunnel was present on the Mac afterwards |
 
 ### Two more things the implementation found
 
