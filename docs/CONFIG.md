@@ -594,3 +594,12 @@ the paths do not, and a path read from one tool is invalid in the other.
 - A device project's agent is **claude-only** today: the redirect is a Claude Code
   `PreToolUse` hook, and the other backends' hook models are unverified (§12).
 - Heavy build/test I/O does not cross the mount — Bash still runs on the device.
+
+**The agent is told where its commands run.** It runs on the server and its Bash
+on the device, and it cannot see that. Left to guess it writes for its own
+platform: believing itself on Linux it produced GNU `sed -i 's/x/y/'` and got
+"invalid command code" from BSD sed on a Mac. So the spawn appends a system prompt
+naming the device, its platform (`uname -sm`, reported at registration and
+otherwise learned over the tunnel and remembered), the workdir, and that paths are
+shared — that last part matters, since an agent told only "your Bash runs
+elsewhere" starts defending against a path mismatch that no longer exists.

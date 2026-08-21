@@ -285,6 +285,12 @@ module.exports = function(deps) {
             }
             scope.hostCwd = project.device.workdir;
             args.push('--settings', path.join(scope.serverStateDir, '.claude', 'settings.json'));
+            // The agent cannot see that its Bash runs elsewhere, and guessing
+            // costs it: believing itself on Linux it writes GNU `sed -i` and gets
+            // "invalid command code" from BSD sed on a Mac. Tell it the truth.
+            const platform = tunnel.devicePlatform(project.device.device_id);
+            args.push('--append-system-prompt',
+                tunnel.devicePlatformPrompt(device, platform, project.device.workdir));
         }
 
         if (project.sandbox?.enabled) {

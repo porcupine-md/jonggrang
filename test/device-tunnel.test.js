@@ -282,3 +282,34 @@ test('mounting refuses to shadow a directory the server already uses', () => {
 test('mounting a device with no workdir is refused', () => {
   assert.throws(() => tunnel.mountDevice({ port: 1, localuser: 'me' }), /no workdir/);
 });
+
+// ── telling the agent where its commands run ─────────────────────
+//
+// The agent runs on the server and its Bash on the device, and it cannot see
+// that. Left to guess it writes for its own platform: believing itself on Linux
+// it produced `sed -i 's/x/y/'` and got "invalid command code" from BSD sed on a
+// Mac. Told the truth, it wrote `sed -i '' 's/x/y/'` and the file changed.
+
+test('the platform prompt names the device, its platform and the workdir', () => {
+  const p = tunnel.devicePlatformPrompt({ label: 'my-mac' }, 'Darwin arm64', '/tmp/app');
+  assert.match(p, /does not run on this host/);
+  assert.match(p, /"my-mac" \(Darwin arm64\)/);
+  assert.match(p, /\/tmp\/app/);
+  assert.match(p, /BSD utilities on Darwin/, 'concrete enough to change what it writes');
+  assert.match(p, /same paths, so paths are portable/, 'and that paths ARE shared, so it does not work around that too');
+});
+
+test('an unknown platform still says the commands run elsewhere', () => {
+  const p = tunnel.devicePlatformPrompt({ label: 'my-mac' }, null, '/tmp/app');
+  assert.match(p, /a different machine/);
+  assert.match(p, /does not run on this host/);
+});
+
+test('provisioning remembers the platform the device reported', () => {
+  const r = tunnel.provisionDevice({ label: 'plat', pubkey: KEY_A, localuser: 'me', platform: 'Darwin arm64' });
+  const listed = tunnel.readRegistry().devices[r.device_id];
+  assert.equal(listed.platform, 'Darwin arm64');
+  // Re-registering without one must not forget it.
+  tunnel.provisionDevice({ id: r.device_id, label: 'plat', pubkey: KEY_A, localuser: 'me' });
+  assert.equal(tunnel.readRegistry().devices[r.device_id].platform, 'Darwin arm64');
+});

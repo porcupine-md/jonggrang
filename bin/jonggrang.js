@@ -3179,7 +3179,7 @@ function parseFlags(args, valueFlags) {
   return { flags, positional };
 }
 
-const DEVICE_VALUE_FLAGS = new Set(['server', 'user', 'localuser', 'path', 'workdir', 'label', 'id', 'pubkey', 'ssh-opt', 'remote-jonggrang']);
+const DEVICE_VALUE_FLAGS = new Set(['server', 'user', 'localuser', 'path', 'workdir', 'label', 'id', 'pubkey', 'ssh-opt', 'remote-jonggrang', 'platform']);
 
 async function cmdDevice(args) {
   const tunnel = require('../lib/tunnel');
@@ -3226,6 +3226,7 @@ function deviceProvision(tunnel, flags) {
       pubkey,
       localuser: flags.localuser || flags.user || null,
       workdir: flags.workdir || flags.path || null,
+      platform: flags.platform || null,
     });
   } catch (err) {
     process.stderr.write(`device provision failed: ${err.message}\n`);
@@ -3259,6 +3260,7 @@ async function deviceRegister(tunnel, flags) {
   try {
     reg = tunnel.requestProvision({
       server, pubkey: key.pub, label, localuser, workdir,
+      platform: `${os.type()} ${os.arch() === 'arm64' ? 'arm64' : os.arch()}`,
       id: existing && existing.server === server ? existing.device_id : null,
       sshArgs: flags['ssh-opt'] ? ['-o', flags['ssh-opt']] : [],
       remoteBin: flags['remote-jonggrang'],

@@ -431,11 +431,31 @@ So the mount goes at the device's own absolute path, and the server refuses to
 mount over a non-empty directory of its own — a workdir that collides with a real
 server path fails by name instead of silently shadowing it.
 
-Two things still leak, both cosmetic rather than functional: `uname` in a
-redirected Bash reports the device's OS while the agent's own environment is the
-server's, and each redirected command used to end with "Connection to localhost
-closed." (now suppressed with `LogLevel=QUIET`). The agent can still notice if it
-looks; what it can no longer do is act on a path that does not exist.
+### 18. The OS gap is not cosmetic — the agent writes for the wrong platform
+
+`uname` in a redirected Bash reporting Darwin is not a leak: the command *does*
+run on the device, so that is the right answer. The gap is between that and the
+agent's knowledge of itself — it runs on a Linux server — and left to guess, it
+guesses wrong in a way that breaks work:
+
+| | What the agent wrote | Outcome |
+|---|---|---|
+| Before | `sed -i 's/\bok\b/fine/g' test.js` (GNU) | failed — "invalid command code", `-i` parsed BSD-style |
+| After | `sed -i '' 's/ok/fine/g' test.js` (BSD) | the file on the laptop actually changed |
+
+So the agent is told, via `--append-system-prompt`: its Bash executes on the named
+device and platform, its file tools reach those same files at the same paths, and
+shell commands must be written for the *device's* platform. The platform comes
+from the device at registration (`uname -sm`), and is learned over the tunnel and
+remembered for devices registered before that existed.
+
+Note the prompt says paths ARE shared. Told only "your Bash runs elsewhere", an
+agent starts defending against a path mismatch that no longer exists — the fix for
+one leak must not invent another.
+
+What remains is genuinely cosmetic: ssh's "Connection to localhost closed." line
+(suppressed with `LogLevel=QUIET`), and the fact that a determined agent can still
+tell the two hosts apart. Neither changes what it can do correctly.
 
 The hook is loaded with `--settings` pointing at the server-side bundle, because
 the project directory is now the *device's* — and per §4 the redirect hook must
