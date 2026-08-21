@@ -573,3 +573,10 @@ or authenticated. So:
   device, where a redirect would ssh a command to the machine already running it.
 - It is inert unless the spawn set `JONGGRANG_DEVICE_PORT/USER/WORKDIR/KEY`, so a
   copy anywhere else does nothing.
+
+> **Known limit.** The redirect moves *execution* to the device; the agent's
+> native file tools (`Read`, `Edit`, `Glob`) still act where the agent runs — on
+> the server. A real agent notices: asked to list files and run tests, it did
+> both on the device via Bash and then pointed out that its own working directory
+> "has no such files". Until the §5 mount lands, treat a device project as
+> Bash-only for agent work; the Terminal is unaffected.

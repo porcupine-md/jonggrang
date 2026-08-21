@@ -5,9 +5,11 @@
 > `lib/tunnel.js`, `jonggrang device` / `jonggrang tunnel`, `GET /api/devices`
 > and the Settings "Local Devices" card. A project can now live on a device
 > (`source.type: "device"`) and its **Terminal runs there** through the tunnel.
-> The **transparent Bash redirect** (§3) ships too, as a separate server-side
-> hook bundle. Still design only: the SSHFS mount (§5) and orchestration on a
-> device (P5).
+> The **Bash redirect** (§3) ships too, as a separate server-side hook bundle —
+> but see §16: it delivers execution on the device, *not* the "agent unaware"
+> premise, because the agent's native file tools still act on the server. The
+> SSHFS mount (§5) is what closes that, and is now the blocking gap. Orchestration
+> on a device (P5) is still design only.
 > Decisions captured from discussion 2026-07-07. Open decisions marked **[DECIDE]**.
 >
 > See §15 for what the implementation changed about this design.
@@ -373,12 +375,43 @@ device env, so a stray copy does nothing.
 | 23 | The server injects the env and the hook is loaded | ✅ measured from the agent process the dashboard spawned: cwd `…/workspace/laptop-probe` (**on the server**), `JONGGRANG_DEVICE_PORT=22001`, `USER=anak10thn`, `WORKDIR=/tmp/jg-device-project`, `KEY=…/device-agent.key`, and that project's `.claude/settings.json` registers the hook |
 | 24 | Terminal vs agent boundary | ✅ the device branch in `spawnPty` is scoped to `terminal` sessions, so the agent stays on the server — the device needs no agent installed |
 
-**Not proven end-to-end:** a real `claude` on the server invoking the hook. The
-server's `claude` is not logged in, and login is interactive. Everything on both
-sides of that one link is measured above; the `updatedInput` mechanism itself was
-proven with a real claude in §14 entry (a).
+| 25 | **A real claude on the server, redirected** | ✅ asked to run `hostname && pwd && node -v` in Bash, it reported `anak10thn-mini.local` / `/tmp/jg-device-project` / `v24.13.1` — the laptop, through the tunnel, from one ordinary Bash call |
+| 26 | An agent-shaped task | ✅ "list the files, run the test suite" → `package.json`, `sum.js`, `test.js` and **PASS**, all on the laptop |
 
-Not covered here: the SSHFS mount for native file tools (§5) — with the redirect
-in place, file ops still act where the agent runs, so this is the next real gap;
-worktrees and the work loop on a device (P5); hardening the server→device
-direction (§7). §12's `[DECIDE-b]` is untouched.
+### 16. The redirect alone does NOT make the agent unaware — §5 is load-bearing
+
+Entry 26 came back with something the design did not anticipate. Unprompted, the
+agent added:
+
+> Note: Bash ran in a different sandbox (`/tmp/jg-device-project`, host
+> `anak10thn-mini.local`, Darwin) — not my stated Linux working dir, which has no
+> such files — so this result reflects that remote host, not the local project path.
+
+Confirmed by asking it to use only its native file tools: `Read` on `test.js`
+answered **"File does not exist."** while Bash had just listed and executed that
+same file. The two halves of the agent see two different machines:
+
+| Agent tool | Sees |
+|---|---|
+| Bash (redirected) | the device — the project, and a passing test suite |
+| Read / Glob / Edit (native) | the server — an empty state directory |
+
+So §3's redirect delivers **execution** on the device, not the *"agent tak sadar"*
+premise of §3's own heading. What it produces on its own is a split view, and a
+capable agent notices, says so, and may route around it — the exact opposite of
+transparency.
+
+That makes §5's MOUNT decision **required for the premise to hold**, not a
+preference between two workable options: the file tools have to land on the same
+files Bash does. §5's "Alt — no mount, everything via Bash" reads differently in
+this light too — it is consistent, but only if native file tools are actually
+denied, which is what §14 entry (a2) tested.
+
+**[DECIDE-b]** gains a data point as well: with Bash redirected and files on a
+mount, the two would agree; with Bash on the server against the mount, they also
+agree but every build pays SSHFS I/O. Either is coherent; the current state
+(redirect without mount) is not.
+
+Not covered here: the SSHFS mount (§5) — now the blocking gap, not a nicety —
+worktrees and the work loop on a device (P5), and hardening the server→device
+direction (§7).
