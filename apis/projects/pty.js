@@ -302,7 +302,7 @@ module.exports = function(deps) {
                 return res.status(500).json({ error: 'DEVICE_MOUNT_FAILED', message: err.message });
             }
             scope.hostCwd = project.device.workdir;
-            args.push('--settings', path.join(scope.serverStateDir, '.claude', 'settings.json'));
+            args.push('--settings', tunnel.deviceSettingsPath(scope.serverStateDir));
             // The agent cannot see that its Bash runs elsewhere, and guessing
             // costs it: believing itself on Linux it writes GNU `sed -i` and gets
             // "invalid command code" from BSD sed on a Mac. Tell it the truth.

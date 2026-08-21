@@ -625,7 +625,12 @@ module.exports = function(deps) {
         if (ctx.mode === 'device') {
             Object.assign(deviceEnv, tunnel.deviceRedirectEnv(ctx.device, group.worktreePath));
             deviceEnv.JONGGRANG_DEVICE_PROMPT = tunnel.devicePlatformPrompt(
-                ctx.device, tunnel.devicePlatform(ctx.device_id || project.device.device_id), group.worktreePath);
+                ctx.device, tunnel.devicePlatform(project.device.device_id), group.worktreePath);
+            // The redirect hook comes from the server-side bundle, not from the
+            // worktree's .claude — that one is seeded from the project and gets
+            // rewritten by `init`, which silently stopped the redirect and ran the
+            // agent's commands on the server.
+            deviceEnv.JONGGRANG_DEVICE_SETTINGS = tunnel.deviceSettingsPath(project.path);
         }
 
         return spawn('node', [nodeCli, ...workerArgs], {
