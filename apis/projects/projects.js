@@ -2,6 +2,7 @@
 
 const { Router } = require('express');
 const sandbox = require('../../lib/sandbox');
+const tunnel = require('../../lib/tunnel');
 const lib = require('../../lib/jonggrang');
 
 module.exports = function(deps) {
@@ -67,8 +68,18 @@ module.exports = function(deps) {
         if (!name || !source) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'name and source required' } });
         }
-        if (!['git', 'local', 'fresh'].includes(source.type)) {
-            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'source.type must be git|local|fresh' } });
+        if (!['git', 'local', 'fresh', 'device'].includes(source.type)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'source.type must be git|local|fresh|device' } });
+        }
+        // A device project's code lives on the developer's machine and is never
+        // copied here; the server only needs to know which device and where.
+        if (source.type === 'device') {
+            if (!source.device_id || !source.path) {
+                return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'a device source needs device_id and path' } });
+            }
+            if (!tunnel.deviceFor(source.device_id)) {
+                return res.status(404).json({ error: { code: 'DEVICE_NOT_FOUND', message: `No registered device ${source.device_id}` } });
+            }
         }
 
         const path = deps.path;
@@ -99,11 +110,20 @@ module.exports = function(deps) {
 
         const id = webState.generateId('proj');
         const now = new Date().toISOString();
+        // The server-side path holds jonggrang's own state (plans, tasks). For a
+        // device project the CODE is elsewhere — device.workdir — and execution
+        // goes through the tunnel. Two locations on purpose: agent brain here,
+        // source of truth on the device.
+        const devicePatch = source.type === 'device'
+            ? { device: { enabled: true, device_id: source.device_id, workdir: source.path } }
+            : {};
+
         webState.createProject({
             id,
             name,
             path: targetPath,
             source,
+            ...devicePatch,
             init_status: 'importing',
             lanes: { main: { id: 'main', path: targetPath, branch: 'main', is_main: true } },
             created_at: now,
@@ -123,6 +143,10 @@ module.exports = function(deps) {
                 } else if (source.type === 'fresh') {
                     fs.mkdirSync(targetPath, { recursive: true });
                     if (source.git_init !== false) await runGitInit(targetPath);
+                } else if (source.type === 'device') {
+                    // Nothing to fetch: the code stays on the device. This
+                    // directory only ever holds jonggrang's state for it.
+                    fs.mkdirSync(targetPath, { recursive: true });
                 }
 
                 const detected = webState.detectStack(targetPath);

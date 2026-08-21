@@ -5,6 +5,7 @@ const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
 const sandbox = require('../../lib/sandbox');
+const tunnel = require('../../lib/tunnel');
 const lib = require('../../lib/jonggrang');
 
 module.exports = function(deps) {
@@ -26,6 +27,9 @@ module.exports = function(deps) {
                 session: base,
                 hostCwd: project.path,
                 containerCwd: project.sandbox?.enabled ? sandbox.getContainerPath(project) : null,
+                // A device project's files are not here at all — its cwd is a
+                // path on the developer's machine, reached through the tunnel.
+                deviceCwd: project.device?.enabled ? project.device.workdir : null,
             };
         }
         const hostWt = path.join(sandbox.projectWorktreeDir(project.id), featureId);
@@ -143,6 +147,14 @@ module.exports = function(deps) {
             const execArgs = sandbox.buildExecArgs(containerName, scope.containerCwd, cmd, args, secretVars);
             cmd = 'docker';
             args = execArgs;
+        } else if (project.device?.enabled) {
+            // Third execution context (the plan's §9): not here, not a container,
+            // but the developer's machine at the far end of its reverse tunnel.
+            const device = tunnel.deviceFor(project.device.device_id);
+            if (!device) throw new Error(`device ${project.device.device_id} is no longer registered`);
+            args = tunnel.buildSshExecArgs(device, scope.deviceCwd, cmd, args, secretVars);
+            cmd = 'ssh';
+            tunnel.touchDevice(project.device.device_id);
         }
 
         const ptyProcess = pty.spawn(cmd, args, {
@@ -258,6 +270,19 @@ module.exports = function(deps) {
         if (project.sandbox?.enabled) {
             const running = await sandbox.isRunning(project.id);
             if (!running) return res.status(503).json({ error: 'SANDBOX_NOT_RUNNING', message: 'Docker sandbox is not running. Start it first.' });
+        }
+
+        // A device project is only reachable while its tunnel is up. Saying so
+        // beats an ssh that hangs and then fails with a connection refused.
+        if (project.device?.enabled) {
+            const device = tunnel.deviceFor(project.device.device_id);
+            if (!device) return res.status(409).json({ error: 'DEVICE_NOT_REGISTERED', message: 'This project\'s device is no longer registered.' });
+            if (!await tunnel.portListening(device.port)) {
+                return res.status(503).json({
+                    error: 'DEVICE_TUNNEL_DOWN',
+                    message: `No tunnel from ${device.label}. Run \`jonggrang tunnel up\` on that machine.`,
+                });
+            }
         }
 
         try {
