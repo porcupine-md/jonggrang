@@ -470,6 +470,51 @@ test('reinstalling the bundle is idempotent and self-contained', () => {
   assert.equal(fs.readFileSync(tunnel.deviceSettingsPath(dir), 'utf8'), first, 'no accumulation');
 });
 
+// ── a missing bundle must not become a silent server-side run ────
+//
+// Projects imported before the bundle moved into `.jonggrang-device/` still carry
+// `device.enabled`. Handing `--settings` a path to a file that is not there does
+// not fail — it drops the hook, and the agent's commands run on the server
+// against a project whose code is on the device.
+
+test('ensureDeviceHooks installs a bundle that is not there', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-heal-'));
+  assert.ok(!fs.existsSync(path.join(dir, '.jonggrang-device')), 'starts with nothing');
+  const settings = tunnel.ensureDeviceHooks(dir);
+  assert.equal(settings, tunnel.deviceSettingsPath(dir));
+  assert.ok(fs.existsSync(settings), 'the path it returns is a file that exists');
+  assert.ok(fs.existsSync(path.join(dir, '.jonggrang-device', 'redirect-bash.sh')));
+});
+
+test('ensureDeviceHooks leaves an existing bundle alone', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-heal2-'));
+  tunnel.ensureDeviceHooks(dir);
+  const hookPath = path.join(dir, '.jonggrang-device', 'redirect-bash.sh');
+  fs.writeFileSync(hookPath, '# edited by hand\n');
+  tunnel.ensureDeviceHooks(dir);
+  assert.equal(fs.readFileSync(hookPath, 'utf8'), '# edited by hand\n', 'present means untouched');
+});
+
+test('ensureDeviceHooks restores a bundle whose hook was deleted', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-heal3-'));
+  tunnel.ensureDeviceHooks(dir);
+  fs.rmSync(path.join(dir, '.jonggrang-device', 'redirect-bash.sh'));
+  tunnel.ensureDeviceHooks(dir);
+  assert.ok(fs.existsSync(path.join(dir, '.jonggrang-device', 'redirect-bash.sh')), 'settings alone is not enough');
+});
+
+// ── the redirected command must not stop at a pager ──────────────
+//
+// The remote shell is interactive (a version manager lives in the rc file), and
+// interactive means a tty, and a tty makes git page. The agent then reads half a
+// screen and spends a turn working out why.
+
+test('the redirect disables the pager on the device', () => {
+  const hook = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'device', 'redirect-bash.sh'), 'utf8');
+  assert.match(hook, /GIT_PAGER=cat/);
+  assert.match(hook, /PAGER=cat/);
+});
+
 // ── a run that outlived its dashboard ────────────────────────────
 //
 // The run snapshot is written while a group runs. Restart the dashboard and the

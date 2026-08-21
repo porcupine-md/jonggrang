@@ -721,3 +721,80 @@ Still not solved: the turn itself. The agent may redo work it had already done �
 it is now *told* to check, which is the difference between redoing carefully and
 redoing blind. Genuine mid-turn resume would need the agent's own transcript to
 survive, which is a different feature.
+## 24. Two plans, one `task-001` — the resolver picked the wrong plan
+
+Running several plans on one device is the case P5 was for, and it is where this
+surfaced. Task numbering restarts at `001` in every plan, so a worktree running
+`compact-probe` ran `jonggrang task update task-001 --status in_progress` and
+updated **`machine-md-probe`'s** task instead. No error. The record came back with
+another plan's title and this plan's `files: ["C.md"]` stitched into it.
+
+`findTaskFeature` already had the machinery — an explicit `--feature`, and an
+`AMBIGUOUS_TASK_ID` error for the rest. Neither fired. With two or more matches it
+consults `resolveActiveFeature` first, which answers with the most recently updated
+*running* manifest, and the other plan was running. The ambiguity error is
+unreachable whenever a plan is live — which, in parallel mode, is always.
+
+The existing tests passed because their fixtures had no manifest, so the guess
+returned null and the error path ran. The test for the trap now writes a live
+manifest, and asserts the wrong answer that follows from it.
+
+The fix has to work in a place an environment variable cannot reach: the agent runs
+on the server, but its Bash is redirected, so `jonggrang task …` executes **on the
+device**, in a fresh login shell, with none of the server's environment. So the run
+records the plan it is executing in the worktree itself —
+`.jonggrang/.ephemeral/active-feature` — and the worktree is the one thing both
+sides already agree on. The server-side worker writes it through the mount; the
+device-side CLI reads it from local disk. Resolution order is now explicit
+`--feature`, then `JONGGRANG_FEATURE_ID`, then that file, then the old guess.
+
+The agent that hit this also left a note in its own feature memory, and it was
+right twice: `jonggrang bug add --feature <id>` answered *"Multiple features found.
+Use --feature <featureId>"* — the global option loop parses `--feature` into
+`WORK_FEATURE_ID` before dispatch, so `cmdBug` never received the flag it was
+asking for. `bug list --feature <other>` silently listed the wrong plan. Both now
+read the captured value, then the recorded feature.
+
+| # | What | Result |
+|---|------|--------|
+| 52 | Reproduce, 3 plans sharing `task-001` | ✅ `task show task-001` → `machine-md-probe-mt2zr0vn` (wrong plan, no error) |
+| 53 | With the recorded feature | ✅ → `compact-probe`, and explicit `--feature` still overrides |
+| 54 | Worker records it, unprompted | ✅ `active-feature` = `add-dmd-hostname-mt3ijqfq` in the worktree **on the laptop** |
+| 55 | `bug list --feature <other plan>` | ✅ was: this plan's bugs → now: that plan's ("no bugs reported") |
+| 56 | `bug add --feature <id>`, non-interactive | ✅ was: "Multiple features found" → now: `Reported bug-001 in machine-md-probe` |
+
+One caveat worth keeping in view: a feature directory that has tasks but no
+`MANIFEST.yaml` (hand-built scaffolding, not something `approve` produces) makes the
+worktree work loop resolve no feature at all — phase tracking, compact finalize and
+the recorded feature all quietly do nothing. Two of the probe features in §22 were
+built that way, which is why their runs left no manifest trail. The runs themselves
+were honest about the device; the bookkeeping simply had nowhere to go.
+
+## 25. Three smaller things the same runs turned up
+
+**The pager.** The redirect runs an interactive shell on purpose — a version
+manager lives in the rc file, and zsh reads `.zshrc` only when interactive — which
+means a tty, and a tty makes git page its output. The agent got half a screen and a
+pager waiting for a keypress it has no way to send, worked out what was happening,
+and spent a turn on it. Twice, in two different runs. The remote command now
+exports `GIT_PAGER=cat PAGER=cat`; nothing on that end is read by a human.
+
+**A bundle that was not there.** `laptop-probe` was imported before the redirect
+bundle moved into `.jonggrang-device/`, so it carries `device.enabled` and no
+bundle. Handing `--settings` a path to a missing file does not fail — Claude Code
+carries on without the hook, and the agent's commands run on the server against a
+project whose code is on the device. `ensureDeviceHooks` now installs the bundle
+when it is absent, at both places that point `--settings` at it. It leaves an
+existing bundle alone, including one edited by hand.
+
+**A run with nowhere to write.** A feature directory with tasks but no
+`MANIFEST.yaml` made the worktree work loop resolve no feature at all — phase
+tracking, gate deferral and compact finalize each quietly did nothing. It now says
+so, once, naming what stopped working.
+
+| # | What | Result |
+|---|------|--------|
+| 57 | Redirected `git log` | ✅ no pager; the hook exports `GIT_PAGER=cat PAGER=cat` before the interactive shell |
+| 58 | Bundle deleted, then a start | ✅ reinstalled, and the returned `--settings` path is a file that exists |
+| 59 | Bundle present but hand-edited | ✅ untouched |
+| 60 | Tasks with no MANIFEST | ✅ `No MANIFEST for parallel-probe-b — phase tracking, gate deferral and compact finalize are off for this run.` |

@@ -40,8 +40,11 @@ esac
 #
 # jq's @sh does the quoting: the command keeps its own shell syntax inside one
 # argument, and a quote in it cannot end the string early.
+# The interactive shell above needs a tty (-tt below), and a tty makes git page
+# its output — the agent gets half a screen and a pager waiting for a keypress it
+# cannot send, then spends a turn discovering why. Nothing here is read by a human.
 REMOTE=$(jq -rn --arg wd "$WORKDIR" --arg c "$COMMAND" \
-  '"cd " + ($wd|@sh) + " || exit 1; exec \"$SHELL\" -lic " + ($c|@sh)')
+  '"cd " + ($wd|@sh) + " || exit 1; export GIT_PAGER=cat PAGER=cat; exec \"$SHELL\" -lic " + ($c|@sh)')
 
 REWRITTEN=$(jq -rn --arg r "$REMOTE" --arg p "$PORT" --arg u "$USER_AT" --arg k "$KEY" \
   '"ssh -tt -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
