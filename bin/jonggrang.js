@@ -3152,6 +3152,221 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
 // WEB DASHBOARD
 // ============================================================
 
+// ============================================================
+// DEVICES + REVERSE TUNNEL (local sandbox)
+// ============================================================
+//
+// The agent runs on a jonggrang server; the code stays on the developer's
+// machine; a reverse ssh tunnel lets the server reach back in. P0 (registration)
+// and P1 (tunnel lifecycle) of docs/plans/2026-07-07-local-sandbox-remote-agent.md.
+//
+//   on the DEVICE   jonggrang device register --server <sshhost>
+//                   jonggrang tunnel up | status | down
+//   on the SERVER   jonggrang device provision …   (run for you, over ssh)
+//                   jonggrang device list | remove <id>
+
+function parseFlags(args, valueFlags) {
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith('--')) {
+      const name = a.slice(2);
+      if (valueFlags.has(name)) flags[name] = args[++i];
+      else flags[name] = true;
+    } else positional.push(a);
+  }
+  return { flags, positional };
+}
+
+const DEVICE_VALUE_FLAGS = new Set(['server', 'user', 'localuser', 'path', 'workdir', 'label', 'id', 'pubkey', 'ssh-opt']);
+
+function cmdDevice(args) {
+  const tunnel = require('../lib/tunnel');
+  const sub = args[0];
+  const { flags } = parseFlags(args.slice(1), DEVICE_VALUE_FLAGS);
+
+  switch (sub) {
+    case 'register': return deviceRegister(tunnel, flags);
+    case 'provision': return deviceProvision(tunnel, flags);
+    case 'list': return deviceList(tunnel, flags);
+    case 'remove': return deviceRemove(tunnel, args[1]);
+    default:
+      console.log(`Usage:
+  On your machine (the device):
+    jonggrang device register --server <sshhost> [--user <localuser>] [--path <dir>] [--label <name>]
+    jonggrang tunnel up | status | down
+
+  On the jonggrang server:
+    jonggrang device list [--json]
+    jonggrang device remove <device-id>
+    jonggrang device provision --label <l> --localuser <u> --pubkey <key>|--pubkey-stdin [--json]
+`);
+      return sub ? 1 : 0;
+  }
+}
+
+// Run ON THE SERVER, normally by `device register` over ssh. Prints one JSON
+// line the device parses, so anything human-facing goes to stderr.
+function deviceProvision(tunnel, flags) {
+  let pubkey = flags.pubkey;
+  if (flags['pubkey-stdin']) {
+    try { pubkey = fs.readFileSync(0, 'utf8').trim(); } catch { pubkey = ''; }
+  }
+  if (!pubkey) {
+    process.stderr.write('device provision: --pubkey <key> or --pubkey-stdin is required\n');
+    return 1;
+  }
+  let result;
+  try {
+    result = tunnel.provisionDevice({
+      id: flags.id || null,
+      label: flags.label || null,
+      pubkey,
+      localuser: flags.localuser || flags.user || null,
+      workdir: flags.workdir || flags.path || null,
+    });
+  } catch (err) {
+    process.stderr.write(`device provision failed: ${err.message}\n`);
+    return 1;
+  }
+  if (flags.json) console.log(JSON.stringify(result));
+  else {
+    logSuccess(`Device ${result.device_id} provisioned on port ${result.port}`);
+    console.log(`\nAdd this to the device's ~/.ssh/authorized_keys:\n\n${result.server_pubkey}\n`);
+  }
+  return 0;
+}
+
+// Run ON THE DEVICE. Provisions on the server over ssh, then authorizes the
+// server's key here so the agent can come back in.
+function deviceRegister(tunnel, flags) {
+  const server = flags.server;
+  if (!server) { logError('device register: --server <sshhost> is required'); return 1; }
+
+  const localuser = flags.user || flags.localuser || os.userInfo().username;
+  const workdir = flags.path || flags.workdir || process.cwd();
+  const label = flags.label || os.hostname();
+  const existing = tunnel.readDeviceConfig();
+
+  logHeader('Register this machine as a jonggrang device');
+
+  const key = tunnel.ensureDeviceKey();
+  logInfo(`Tunnel key: ${key.path}${key.generated ? ' (generated)' : ''}`);
+
+  let reg;
+  try {
+    reg = tunnel.requestProvision({
+      server, pubkey: key.pub, label, localuser, workdir,
+      id: existing && existing.server === server ? existing.device_id : null,
+      sshArgs: flags['ssh-opt'] ? ['-o', flags['ssh-opt']] : [],
+    });
+  } catch (err) {
+    logError(err.message);
+    logInfo('The server needs jonggrang on its PATH for the ssh user you connect as.');
+    return 1;
+  }
+  logSuccess(`Server reserved port ${reg.port} for ${reg.device_id}`);
+
+  // Inbound trust: the agent enters through the tunnel as this user.
+  const added = tunnel.addAuthorizedKey(reg.server_pubkey);
+  logInfo(added
+    ? `Server key added to ${tunnel.authorizedKeysPath()}`
+    : `Server key already present in ${tunnel.authorizedKeysPath()}`);
+
+  tunnel.writeDeviceConfig({
+    device_id: reg.device_id,
+    server,
+    port: reg.port,
+    token: reg.token,
+    localuser,
+    workdir,
+    label,
+    created_at: existing?.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  logSuccess(`Saved ${tunnel.deviceConfigPath()}`);
+
+  if (process.platform === 'darwin') {
+    const remote = require('child_process').spawnSync('systemsetup', ['-getremotelogin'], { encoding: 'utf8' });
+    const on = /On/i.test(String(remote.stdout || ''));
+    if (!on) logWarn('macOS Remote Login looks OFF — the tunnel needs sshd here: sudo systemsetup -setremotelogin on');
+  }
+
+  console.log('');
+  logInfo('Next: jonggrang tunnel up');
+  return 0;
+}
+
+function deviceList(tunnel, flags) {
+  const devices = tunnel.listDevices();
+  if (flags.json) { console.log(JSON.stringify({ devices }, null, 2)); return 0; }
+  if (!devices.length) {
+    logInfo('No devices registered on this server.');
+    const own = tunnel.readDeviceConfig();
+    if (own) logInfo(`This machine is registered as a device on ${own.server} (port ${own.port}).`);
+    return 0;
+  }
+  logHeader(`Devices (${devices.length})`);
+  for (const d of devices) {
+    console.log(`  ${d.id}`);
+    console.log(`    label     ${d.label}`);
+    console.log(`    port      ${d.port}`);
+    console.log(`    user@dir  ${d.localuser || '?'}:${d.workdir || '?'}`);
+    console.log(`    last seen ${d.last_seen || 'never'}`);
+  }
+  return 0;
+}
+
+function deviceRemove(tunnel, id) {
+  if (!id) { logError('device remove: a device id is required'); return 1; }
+  if (!tunnel.removeDevice(id)) { logWarn(`No such device: ${id}`); return 1; }
+  logSuccess(`Removed ${id}`);
+  logInfo(`Its key stays in ${tunnel.authorizedKeysPath()} — remove that line by hand if the device is gone for good.`);
+  return 0;
+}
+
+function cmdTunnel(args) {
+  const tunnel = require('../lib/tunnel');
+  const cfg = tunnel.readDeviceConfig();
+  const sub = args[0] || 'status';
+
+  if (sub !== 'status' && !cfg) {
+    logError('This machine is not registered yet — run: jonggrang device register --server <sshhost>');
+    return 1;
+  }
+
+  switch (sub) {
+    case 'up': {
+      const res = tunnel.tunnelUp(cfg);
+      if (!res.started) { logInfo(`Tunnel already running (pid ${res.pid}).`); return 0; }
+      logSuccess(`Tunnel up: ${cfg.server} loopback :${cfg.port} → this machine's sshd (pid ${res.pid}, ${res.cmd})`);
+      if (res.cmd === 'ssh') logInfo('Install autossh for automatic reconnection.');
+      return 0;
+    }
+    case 'down': {
+      const res = tunnel.tunnelDown();
+      if (res.stopped) logSuccess(`Tunnel stopped (pid ${res.pid}).`);
+      else logInfo('No tunnel was running.');
+      return 0;
+    }
+    case 'status': {
+      const st = tunnel.tunnelStatus(cfg);
+      if (!st.configured) { logWarn('Not registered — run: jonggrang device register --server <sshhost>'); return 1; }
+      logHeader('Tunnel');
+      console.log(`  device     ${cfg.device_id}`);
+      console.log(`  server     ${cfg.server}`);
+      console.log(`  port       ${cfg.port} (on the server's loopback)`);
+      console.log(`  state      ${st.running ? `running (pid ${st.pid})` : 'stopped'}`);
+      console.log(`  supervisor ${st.supervisor}`);
+      return st.running ? 0 : 1;
+    }
+    default:
+      console.log('Usage: jonggrang tunnel up | status | down');
+      return 1;
+  }
+}
+
 function cmdWebTunnel(args) {
   const { spawnSync } = require('child_process');
 
@@ -5260,6 +5475,16 @@ async function main() {
 
   if (command === 'design') {
     cmdDesign(rest);
+    return;
+  }
+
+  if (command === 'device') {
+    process.exitCode = cmdDevice(rest) || 0;
+    return;
+  }
+
+  if (command === 'tunnel') {
+    process.exitCode = cmdTunnel(rest) || 0;
     return;
   }
 
