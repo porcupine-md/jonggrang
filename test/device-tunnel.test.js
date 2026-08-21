@@ -91,7 +91,12 @@ test('a device key is authorized once, restricted to its own port', () => {
   const forA = lines.filter(l => tunnel.keyBody(l) === tunnel.keyBody(KEY_A));
   assert.equal(forA.length, 1, 'the same key must not be authorized twice');
   assert.match(forA[0], /^restrict,port-forwarding,permitlisten="localhost:\d+"/,
-    'a device key opens its tunnel and nothing else — no shell');
+    'the key is confined to forwarding its own port');
+  // `restrict` disables the pty and forwardings but still RUNS `ssh host <cmd>`
+  // — measured against a real sshd, the device key got a shell. Only a forced
+  // command refuses execution, and `ssh -N` never reaches it.
+  assert.match(forA[0], /command="\/bin\/false/,
+    'a forced command is what actually refuses execution');
 });
 
 test('re-adding the same key with different options does not duplicate it', () => {
