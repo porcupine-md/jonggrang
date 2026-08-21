@@ -302,7 +302,14 @@ Example:
 
 Task board state file used by the **work loop**. Tasks and progress are **per-feature**, colocated with the feature's `plan.md` and `MANIFEST.yaml`. There is no global/root tasks file — each feature owns its own `jonggrang-tasks.json`.
 
-Task IDs are **globally unique** across all features (so `jonggrang task done task-005` resolves to one task without a `--feature` flag). The CLI scans all feature files via `getAllTasks()` to continue numbering and resolve task-id commands.
+Task IDs are numbered **per feature**, each plan starting again at `task-001`, so a bare id can exist in several plans at once. Task-id commands (`show`, `update`, `done`, `block`, `remove`) resolve it in this order:
+
+1. an explicit `--feature <feature-id>`;
+2. `JONGGRANG_FEATURE_ID`, if set;
+3. the feature recorded in `.jonggrang/.ephemeral/active-feature` — written by a run so the agent's own `jonggrang task …` calls hit the plan being executed, and read from the worktree, which is the one thing the server and a device both see;
+4. the most recently updated plan with a live `MANIFEST.yaml` — a guess, and the reason the three above exist.
+
+An id unique across all plans resolves on its own, as it always did.
 
 ```json
 {

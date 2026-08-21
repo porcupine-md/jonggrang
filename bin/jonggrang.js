@@ -822,7 +822,14 @@ async function cmdWork(descriptionParts = []) {
         // Phase 8 = Implement — running for the duration of the work loop.
         if (m.active_phases.includes(8)) orchestration.startPhase(mPath, 8);
         workManifest = orchestration.readManifest(mPath);
+      } else {
+        // Tasks without a MANIFEST — not something `approve` produces, but
+        // hand-built state reaches this. Say what silently stops working rather
+        // than running a pipeline whose bookkeeping goes nowhere.
+        logWarn(`No MANIFEST for ${fid} — phase tracking, gate deferral and compact finalize are off for this run.`);
       }
+    } else {
+      logWarn('Could not resolve which plan this worktree is running — phase tracking is off for this run.');
     }
   } else if (!WORKTREE_MODE) {
     if (WORK_FEATURE_ID) {
@@ -903,6 +910,11 @@ async function cmdWork(descriptionParts = []) {
       orchestration.startPhase(workManifestPath, 8);
     workManifest = orchestration.readManifest(workManifestPath);
   }
+
+  // Tell every later `jonggrang task ...` call — including the agent's own, and
+  // on a device project those run over ssh — which plan this run is executing.
+  // Per-feature numbering makes a bare task-001 ambiguous otherwise.
+  if (workFeatureId) lib.writeScopedFeature(PROJECT_ROOT, workFeatureId);
 
   logHeader('JONGGRANG Work Loop');
   logInfo(`Tool: ${TOOL}`);
@@ -2483,13 +2495,18 @@ async function cmdBug(args) {
   let sub = 'add';
   if (['list', 'convert'].includes(subArgs[0])) sub = subArgs.shift();
 
-  // --feature <featureId> override
+  // --feature <featureId> override. The global option loop runs BEFORE this and
+  // consumes `--feature <id>` into WORK_FEATURE_ID, so the flag never arrives in
+  // subArgs — `bug add --feature X` used to answer "Multiple features found. Use
+  // --feature <featureId>", asking for the flag it had already eaten. Read both,
+  // and fall back to the feature the current run recorded.
   let forcedFeatureId = null;
   const featureIdx = subArgs.indexOf('--feature');
   if (featureIdx !== -1) {
     forcedFeatureId = subArgs[featureIdx + 1];
     subArgs.splice(featureIdx, 2);
   }
+  if (!forcedFeatureId) forcedFeatureId = WORK_FEATURE_ID || lib.readScopedFeature(PROJECT_ROOT) || null;
 
   const features = listFeatures(jonggrangDir);
   if (features.length === 0) {
@@ -4536,7 +4553,7 @@ function resolveFeatureId(flags, taskId) {
       throw e;
     }
   }
-  if (!fid) fid = lib.resolveActiveFeature(PROJECT_ROOT);
+  if (!fid) fid = lib.readScopedFeature(PROJECT_ROOT) || lib.resolveActiveFeature(PROJECT_ROOT);
   if (!fid) throw new Error('No active feature found. Run `jonggrang plan` + `jonggrang approve` first, or pass --feature <id>.');
   return fid;
 }
@@ -4803,6 +4820,12 @@ Add/Update flags:
   --skill <skill>            Skill name
   --blocked-by <id,id,...>   Comma-separated dependency task IDs
   --files <path,path,...>    Comma-separated file paths
+
+Feature scope:
+  --feature <feature-id>     Target a specific plan. Task numbering restarts at
+                             001 per plan, so a bare task-001 can exist in
+                             several; this picks one. Without it, the plan the
+                             current run is executing wins, then the active plan.
 
 Import flags:
   --input '<array>'          JSON array of task objects (inline string)
