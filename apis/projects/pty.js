@@ -150,6 +150,14 @@ module.exports = function(deps) {
         } else if (project.device?.enabled) {
             // Third execution context (the plan's §9): not here, not a container,
             // but the developer's machine at the far end of its reverse tunnel.
+            //
+            // NOTE — this applies to every spawnPty caller: terminal, agent and
+            // discuss. For the Terminal that is exactly right. For the AGENT it
+            // is a decision the plan has not made: §2/§3 put the agent on the
+            // SERVER and redirect only its Bash, whereas this runs the agent CLI
+            // on the device — which also means that machine needs the CLI
+            // installed and logged in. Left as-is deliberately rather than
+            // guessed at; resolving it is P2's transparent-redirect work.
             const device = tunnel.deviceFor(project.device.device_id);
             if (!device) throw new Error(`device ${project.device.device_id} is no longer registered`);
             args = tunnel.buildSshExecArgs(device, scope.deviceCwd, cmd, args, secretVars);
