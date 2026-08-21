@@ -267,6 +267,13 @@ module.exports = function(deps) {
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
 
         const { tool, cols = 80, rows = 24, feature_id } = req.body || {};
+        // Mount first: a device project's config is read through a symlink onto the
+        // mount, so reading the tool before mounting reports the fallback. It named
+        // `jonggrang` for a project set to `opencode` — right refusal, wrong reason.
+        if (project.device?.enabled) {
+            const d = tunnel.deviceFor(project.device.device_id);
+            if (d) { try { tunnel.mountDevice(d, project.device.workdir); } catch (err) { console.error('device project mount:', err.message); } }
+        }
         const resolvedTool = tool || readProjectTool(project);
         const { cmd, args } = resolveAgentCommand(resolvedTool, project.sandbox?.enabled);
         const scope = resolveScope(project, 'agent', feature_id);
@@ -302,7 +309,7 @@ module.exports = function(deps) {
                 return res.status(500).json({ error: 'DEVICE_MOUNT_FAILED', message: err.message });
             }
             scope.hostCwd = project.device.workdir;
-            args.push('--settings', tunnel.deviceSettingsPath(scope.serverStateDir));
+            args.push('--settings', tunnel.ensureDeviceHooks(scope.serverStateDir));
             // The agent cannot see that its Bash runs elsewhere, and guessing
             // costs it: believing itself on Linux it writes GNU `sed -i` and gets
             // "invalid command code" from BSD sed on a Mac. Tell it the truth.

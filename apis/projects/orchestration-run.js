@@ -94,6 +94,30 @@ module.exports = function(deps) {
     }
 
     /**
+     * A device project's agent runs on the server with its Bash redirected to the
+     * device — and that redirect is a Claude Code `PreToolUse` hook. Another
+     * backend gets no redirect, so its commands would run HERE while its file
+     * tools act on the device: the split view, silently, for whichever backend the
+     * project happens to be set to. The agent route already refused this; the work
+     * loop did not, and started `opencode run` on the server.
+     *
+     * Answers the request and returns true when it has.
+     */
+    function refusedForDeviceTool(project, res) {
+        if (!project.device?.enabled) return false;
+        const configFile = path.join(project.path, '.jonggrang', 'jonggrang.json');
+        const tool = lib.readConfig(configFile, 'tool', 'claude');
+        if (tool === 'claude') return false;
+        res.status(400).json({
+            error: {
+                code: 'DEVICE_TOOL_UNSUPPORTED',
+                message: `A device project runs its agent here with Bash redirected to the device, which today is claude-only (this project is set to ${tool}).`,
+            },
+        });
+        return true;
+    }
+
+    /**
      * A device project's state is read through `project.path/.jonggrang`, a symlink
      * onto the mount — so it has to be mounted BEFORE anything reads it, not when
      * execution starts.
@@ -716,7 +740,7 @@ module.exports = function(deps) {
             // worktree's .claude — that one is seeded from the project and gets
             // rewritten by `init`, which silently stopped the redirect and ran the
             // agent's commands on the server.
-            deviceEnv.JONGGRANG_DEVICE_SETTINGS = tunnel.deviceSettingsPath(project.path);
+            deviceEnv.JONGGRANG_DEVICE_SETTINGS = tunnel.ensureDeviceHooks(project.path);
         }
 
         return spawn('node', [nodeCli, ...workerArgs], {
@@ -1239,6 +1263,7 @@ module.exports = function(deps) {
         }
 
         mountIfDevice(project);
+        if (refusedForDeviceTool(project, res)) return;
 
         let groups;
         try {
@@ -1279,6 +1304,7 @@ module.exports = function(deps) {
         }
 
         mountIfDevice(project);
+        if (refusedForDeviceTool(project, res)) return;
 
         const info = planGroupInfo(project, fid);
         if (!info) return res.status(404).json({ error: { code: 'PLAN_NOT_FOUND', message: 'Plan not found' } });
