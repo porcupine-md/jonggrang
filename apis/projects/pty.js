@@ -129,6 +129,18 @@ module.exports = function(deps) {
         };
     }
 
+    // Drop a device project's mount once nothing is using it. Terminal sessions
+    // do not need it (they run ON the device), so only the agent's departure
+    // matters — and only when no agent session is left.
+    function releaseDeviceMount(project) {
+        if (!project.device?.enabled) return;
+        const stillRunning = [...activePtySessions.keys()]
+            .some(k => k.startsWith(`${project.id}:`) && !k.includes(':terminal'));
+        if (stillRunning) return;
+        const device = tunnel.deviceFor(project.device.device_id);
+        if (device) tunnel.unmountDevice(device, project.device.workdir);
+    }
+
     function spawnPty(project, scope, cmd, args, cols, rows) {
         const { session } = scope;
         const key = `${project.id}:${session}`;
@@ -201,6 +213,9 @@ module.exports = function(deps) {
 
         ptyProcess.onExit(({ exitCode }) => {
             activePtySessions.delete(key);
+            // The mount exists for the agent session; when that ends it is just a
+            // hostage to the tunnel's next hiccup.
+            if (!session.startsWith('terminal')) releaseDeviceMount(project);
             io.to(`project:${project.id}`).emit('pty.exit', {
                 project_id: project.id,
                 session,
@@ -273,6 +288,9 @@ module.exports = function(deps) {
             const device = tunnel.deviceFor(project.device.device_id);
             if (!device) return res.status(409).json({ error: 'DEVICE_NOT_REGISTERED', message: 'This project\'s device is no longer registered.' });
             if (!await tunnel.portListening(device.port)) {
+                // Clear the mount the dead tunnel left behind. Left in place it
+                // answers EIO, and the next start would inherit it.
+                tunnel.unmountDevice(device, project.device.workdir);
                 return res.status(503).json({
                     error: 'DEVICE_TUNNEL_DOWN',
                     message: `No tunnel from ${device.label}. Run \`jonggrang tunnel up\` on that machine.`,
@@ -310,6 +328,7 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
         stopSession(project, 'agent', (req.body || {}).feature_id);
+        releaseDeviceMount(project);
         res.json({ ok: true });
     });
 

@@ -313,3 +313,29 @@ test('provisioning remembers the platform the device reported', () => {
   tunnel.provisionDevice({ id: r.device_id, label: 'plat', pubkey: KEY_A, localuser: 'me' });
   assert.equal(tunnel.readRegistry().devices[r.device_id].platform, 'Darwin arm64');
 });
+
+// ── mount lifecycle ─────────────────────────────────────────────
+//
+// A mount whose tunnel died stays registered and answers EIO on every access.
+// For an agent that is worse than no mount: instead of "the laptop is offline" it
+// gets Input/output error on every file and starts diagnosing a broken
+// filesystem. Measured on the real thing before this was fixed.
+
+test('health is a separate question from presence', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-health-'));
+  assert.equal(tunnel.mountHealthy(dir), true, 'a readable directory is healthy');
+  assert.equal(tunnel.mountHealthy(path.join(dir, 'nope')), false, 'an unreadable one is not');
+  assert.equal(tunnel.isMounted(dir), false, 'and neither is a mount at all');
+});
+
+test('unmounting is attempted lazily too, since a dead mount will not release cleanly', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tunnel.js'), 'utf8');
+  assert.match(src, /'fusermount', '-uz'/, 'lazy fusermount, or the corpse is unremovable');
+  assert.match(src, /'umount', '-l'/);
+});
+
+test('a stale mount is replaced rather than trusted', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tunnel.js'), 'utf8');
+  assert.match(src, /if \(mountHealthy\(mountPoint\)\) return \{ mountPoint, mounted: false, reused: true \}/);
+  assert.match(src, /is mounted but unusable/, 'and a mount that cannot be cleared fails loudly');
+});
