@@ -557,3 +557,19 @@ plain `ssh host cmd` never reads.
 
 Starting a terminal while the device's tunnel is down answers
 `503 DEVICE_TUNNEL_DOWN` naming the machine, rather than hanging on ssh.
+
+### The agent stays on the server; its commands go to the device
+
+That boundary is the point of the feature — the device needs no agent installed
+or authenticated. So:
+
+- `spawnPty`'s device branch is scoped to **terminal** sessions.
+- For **agent** sessions the CLI runs on the server, and
+  `hooks/device/redirect-bash.sh` rewrites each Bash tool call into an ssh
+  through the device's tunnel (Claude Code's `PreToolUse` `updatedInput`, so the
+  agent never learns the difference).
+- That hook is a **server-side bundle**, installed into the server's copy of a
+  device project at import — never by `jonggrang init`, which also lands on the
+  device, where a redirect would ssh a command to the machine already running it.
+- It is inert unless the spawn set `JONGGRANG_DEVICE_PORT/USER/WORKDIR/KEY`, so a
+  copy anywhere else does nothing.

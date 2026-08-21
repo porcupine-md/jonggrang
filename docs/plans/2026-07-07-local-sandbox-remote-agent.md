@@ -5,8 +5,9 @@
 > `lib/tunnel.js`, `jonggrang device` / `jonggrang tunnel`, `GET /api/devices`
 > and the Settings "Local Devices" card. A project can now live on a device
 > (`source.type: "device"`) and its **Terminal runs there** through the tunnel.
-> Still design only: the transparent Bash redirect for agents (§3), the SSHFS
-> mount (§5), and orchestration on a device (P5).
+> The **transparent Bash redirect** (§3) ships too, as a separate server-side
+> hook bundle. Still design only: the SSHFS mount (§5) and orchestration on a
+> device (P5).
 > Decisions captured from discussion 2026-07-07. Open decisions marked **[DECIDE]**.
 >
 > See §15 for what the implementation changed about this design.
@@ -356,7 +357,28 @@ path**: the transport runs commands through the device's *interactive* login
 shell, so `.zshrc` — and the version manager in it — is loaded. That is why entry
 17 finds node at all.
 
-Not covered here: the transparent Bash **redirect** for an agent running on the
-server (§3 — this transport is explicit, not yet hooked into a tool's Bash), the
-SSHFS mount for native file tools (§5), worktrees and the work loop on a device
-(P5). §12's `[DECIDE-b]` is untouched.
+### Validation log — the Bash redirect (2026-08-21, §3)
+
+`hooks/device/redirect-bash.sh` is a **separate server-side bundle** (§4): it is
+installed into the server's copy of a device project at import, never by
+`jonggrang init`, which also lands on the device where a redirect would ssh a
+command to the machine already running it. It is inert unless the spawn set the
+device env, so a stray copy does nothing.
+
+| # | What | Result |
+|---|------|--------|
+| 20 | Inert without the device env | ✅ no output, exit 0 — the command is left alone |
+| 21 | Rewrite shape | ✅ `updatedInput.command` becomes an ssh to the device's port with the agent key, running `cd <workdir> \|\| exit 1; exec "$SHELL" -lic '<cmd>'` |
+| 22 | **The rewritten command actually runs on the device** | ✅ executed from the server: `node -v` → `v24.13.1`, `npm test` → `PASS · ran on anak10thn-mini.local`, and a command containing a quote (`echo "done's"`) survived intact |
+| 23 | The server injects the env and the hook is loaded | ✅ measured from the agent process the dashboard spawned: cwd `…/workspace/laptop-probe` (**on the server**), `JONGGRANG_DEVICE_PORT=22001`, `USER=anak10thn`, `WORKDIR=/tmp/jg-device-project`, `KEY=…/device-agent.key`, and that project's `.claude/settings.json` registers the hook |
+| 24 | Terminal vs agent boundary | ✅ the device branch in `spawnPty` is scoped to `terminal` sessions, so the agent stays on the server — the device needs no agent installed |
+
+**Not proven end-to-end:** a real `claude` on the server invoking the hook. The
+server's `claude` is not logged in, and login is interactive. Everything on both
+sides of that one link is measured above; the `updatedInput` mechanism itself was
+proven with a real claude in §14 entry (a).
+
+Not covered here: the SSHFS mount for native file tools (§5) — with the redirect
+in place, file ops still act where the agent runs, so this is the next real gap;
+worktrees and the work loop on a device (P5); hardening the server→device
+direction (§7). §12's `[DECIDE-b]` is untouched.

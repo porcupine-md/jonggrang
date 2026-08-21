@@ -165,10 +165,21 @@ module.exports = function(deps) {
             tunnel.touchDevice(project.device.device_id);
         }
 
+        // A device project's AGENT runs here, and its Bash is redirected to the
+        // device by the hook in this project's server-side bundle. The hook is
+        // dumb by design: everything it needs to reach the device arrives as env,
+        // so it does nothing anywhere that env is absent.
+        const deviceEnv = (project.device?.enabled && !scope.session.startsWith('terminal'))
+            ? (() => {
+                const d = tunnel.deviceFor(project.device.device_id);
+                return d ? tunnel.deviceRedirectEnv(d, project.device.workdir) : {};
+            })()
+            : {};
+
         const ptyProcess = pty.spawn(cmd, args, {
             name: 'xterm-256color',
             cwd: scope.hostCwd,
-            env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', ...secretVars },
+            env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', ...secretVars, ...deviceEnv },
             cols: cols || 80,
             rows: rows || 24,
         });

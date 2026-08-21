@@ -145,8 +145,12 @@ module.exports = function(deps) {
                     if (source.git_init !== false) await runGitInit(targetPath);
                 } else if (source.type === 'device') {
                     // Nothing to fetch: the code stays on the device. This
-                    // directory only ever holds jonggrang's state for it.
+                    // directory only ever holds jonggrang's state for it — plus
+                    // the server-side redirect bundle, which sends the agent's
+                    // Bash to the device instead of running it here.
                     fs.mkdirSync(targetPath, { recursive: true });
+                    emit('prepare', 'Installing the device redirect hook...');
+                    tunnel.installDeviceHooks(targetPath, deps.JONGGRANG_HOME);
                 }
 
                 const detected = webState.detectStack(targetPath);
