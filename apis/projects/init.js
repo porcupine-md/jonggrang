@@ -30,7 +30,11 @@ module.exports = function(deps) {
             '--name', project.name,
             '--tool', tool,
             '--autonomy', autonomy,
-            '--state', fs.existsSync(path.join(project.path, '.git')) ? 'existing' : 'new',
+            // For a device project the repo is on the device; project.path holds
+            // only the redirect bundle and a link to the device's state, so ask
+            // the device side.
+            '--state', fs.existsSync(path.join(project.device?.enabled ? project.device.workdir : project.path, '.git'))
+                ? 'existing' : 'new',
         ];
 
         if (sandbox?.enabled) {

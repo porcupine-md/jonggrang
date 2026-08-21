@@ -400,3 +400,41 @@ test('registering as your own account warns what that grants', () => {
   assert.match(src, /~\/\.ssh included/, 'concretely, not vaguely');
   assert.match(src, /re-register with --user/, 'and it names the way out');
 });
+
+// ── project state lives with the code ────────────────────────────
+//
+// jonggrang reads project state through project.path in twenty-odd places. For a
+// device project that state belongs with the code, so `<project.path>/.jonggrang`
+// is a symlink onto the mount. Every existing read then lands on the device, and
+// the agent — whose cwd is the device path — sees the same directory.
+
+test('linking points server-side state at the device', () => {
+  const server = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-srv-'));
+  const device = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-dev-'));
+  const r = tunnel.linkProjectState({ path: server }, device);
+  assert.equal(r.created, true);
+  assert.equal(fs.readlinkSync(path.join(server, '.jonggrang')), path.join(device, '.jonggrang'));
+
+  // A write through the link lands on the "device" side.
+  fs.writeFileSync(path.join(server, '.jonggrang', 'probe.txt'), 'x');
+  assert.equal(fs.existsSync(path.join(device, '.jonggrang', 'probe.txt')), true);
+
+  // Idempotent.
+  assert.equal(tunnel.linkProjectState({ path: server }, device).created, false);
+});
+
+test('linking refuses to discard server-side state that already exists', () => {
+  const server = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-srv2-'));
+  const device = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-dev2-'));
+  fs.mkdirSync(path.join(server, '.jonggrang'), { recursive: true });
+  fs.writeFileSync(path.join(server, '.jonggrang', 'plan.md'), 'existing work');
+  assert.throws(() => tunnel.linkProjectState({ path: server }, device),
+    /holds server-side state/, 'moving it silently would be worse than saying so');
+});
+
+test('an empty state directory is replaced by the link without complaint', () => {
+  const server = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-srv3-'));
+  const device = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-dev3-'));
+  fs.mkdirSync(path.join(server, '.jonggrang'), { recursive: true });
+  assert.equal(tunnel.linkProjectState({ path: server }, device).created, true);
+});

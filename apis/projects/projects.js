@@ -151,14 +151,25 @@ module.exports = function(deps) {
                     fs.mkdirSync(targetPath, { recursive: true });
                     emit('prepare', 'Installing the device redirect hook...');
                     tunnel.installDeviceHooks(targetPath, deps.JONGGRANG_HOME);
+                    // Point this side's .jonggrang at the device's, so plans and
+                    // tasks live with the code they describe. The link may dangle
+                    // until the tunnel is up — that reads as "not there yet",
+                    // which is true.
+                    emit('prepare', 'Linking project state to the device...');
+                    try {
+                        const device = tunnel.deviceFor(source.device_id);
+                        if (device) tunnel.mountDevice(device, source.path);
+                    } catch { /* the first spawn will mount it */ }
+                    tunnel.linkProjectState({ path: targetPath }, source.path);
                 }
 
                 const detected = webState.detectStack(targetPath);
-                // A device project has nothing to initialise here — its code is
-                // on the device, and `jonggrang init` belongs there, not against
-                // the empty state dir this side. Reporting `imported` would ask
-                // the user to fix something that is not wrong.
-                webState.updateProject(id, { init_status: source.type === 'device' ? 'ready' : 'imported' });
+                // A device project needs initialising like any other — just on the
+                // device side, where its state lives. Marking it `ready` on import
+                // (an earlier shortcut of mine) skipped that, and the planner then
+                // refused with "Project not initialized" against an empty
+                // directory. `imported` is the truth; Initialize runs in the mount.
+                webState.updateProject(id, { init_status: 'imported' });
                 io.to(`project:${id}`).emit('import.done', { project_id: id, detected });
                 startProjectWatcher(webState.getProject(id));
             } catch (err) {

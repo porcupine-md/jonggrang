@@ -527,3 +527,33 @@ dedicated device user that owns only the projects it should reach
 
 Still open from §7's list: workspace scoping below the account level, per-session
 ephemeral keys, key rotation, and an audit log.
+
+## 21. Plan → approve → work on a device
+
+`spawnForProject` — the one door plan, approve and init all go through — gains the
+device branch: it runs the CLI here with **cwd on the mount**, plus the redirect
+env and the platform sentence. Without that the planner read an empty directory
+and wrote a plan about nothing.
+
+Then two things had to be true that were not:
+
+1. **Project state has to live with the code.** jonggrang reads state through
+   `project.path` in twenty-odd places. Rather than thread a second path through
+   all of them, `<project.path>/.jonggrang` is a symlink onto the mount: every
+   existing read lands on the device, and the agent — whose cwd is the device path
+   — sees the same directory by its own name. Only `.jonggrang` is linked; the
+   redirect bundle stays server-side, per §4. A dangling link (device unmounted)
+   reads as ENOENT, which is the honest answer.
+2. **A device project needs initialising.** An earlier shortcut of mine marked
+   device imports `ready` on the theory that there was nothing to initialise on
+   this side — but the *device* side needs it, and the planner refused with
+   "Project not initialized" against an empty directory. `imported` is the truth;
+   Initialize now runs in the mount, and `--state existing|new` is decided from
+   the device's `.git`, not the server's.
+
+| # | What | Result |
+|---|------|--------|
+| 40 | Initialize | ✅ `jonggrang.json` (tool claude), skills and lib written **on the laptop** |
+| 41 | `plan` | ✅ the planner ran on the server against the mount and wrote its draft on the laptop, frontmatter and all: `feature: machine-md-probe`, `work_type: SMALL` |
+| 42 | `approve` | ✅ decomposed into three tasks, on the laptop |
+| 43 | Run | ✅ worktree cut on the device, seeded (`AGENTS.md`, `CLAUDE.md`, `hooks`), work loop started |
