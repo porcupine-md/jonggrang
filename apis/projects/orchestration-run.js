@@ -539,10 +539,34 @@ module.exports = function(deps) {
         }
     }
 
+    /**
+     * A snapshot records what was true when it was written. If the dashboard was
+     * restarted (or crashed) while a group was running, its worker died with it —
+     * but the file still says `running`, forever. That is not just cosmetic: the
+     * already-running guard then refuses to start the plan again, so a plan whose
+     * run was interrupted can never be resumed.
+     *
+     * There is no live run for this project, so nothing in the snapshot can still
+     * be running. Say so.
+     */
+    function reconcileSnapshot(snap) {
+        if (!snap) return snap;
+        let touched = false;
+        for (const g of snap.groups || []) {
+            if (g.status === 'running' || g.status === 'queued') {
+                g.status = 'interrupted';
+                g.error = g.error || 'the dashboard restarted while this plan was running';
+                touched = true;
+            }
+        }
+        if (touched && snap.status === 'running') snap.status = 'interrupted';
+        return snap;
+    }
+
     function currentRunView(project) {
         const live = activeRuns.get(project.id);
         if (live) return serializeRun(live);
-        return readSnapshot(project);
+        return reconcileSnapshot(readSnapshot(project));
     }
     deps.orchestrationRunView = currentRunView; // used by the subscribe snapshot
 
@@ -579,6 +603,20 @@ module.exports = function(deps) {
             run.mode = mode;
         }
         return run;
+    }
+
+    /**
+     * Running means a process is alive, not that a field says so. A worker that
+     * died with its parent leaves `status: running` behind, and trusting that
+     * locks the plan out of being started again.
+     */
+    function groupIsLive(project, fid) {
+        const g = activeRuns.get(project.id)?.groups?.[fid];
+        if (!g) return false;
+        if (g.status !== 'running' && g.status !== 'queued') return false;
+        const pid = g.child?.pid;
+        if (!pid) return g.status === 'queued';
+        try { process.kill(pid, 0); return true; } catch { return false; }
     }
 
     // Spawn one worktree worker for a plan, in the right context.
@@ -1017,8 +1055,7 @@ module.exports = function(deps) {
         if (deps.activeWork?.has(project.id)) {
             return res.status(409).json({ error: { code: 'PROCESS_ALREADY_RUNNING', message: 'A work process is already running' } });
         }
-        const existing = activeRuns.get(project.id)?.groups?.[fid];
-        if (existing && (existing.status === 'running' || existing.status === 'queued')) {
+        if (groupIsLive(project, fid)) {
             return res.status(409).json({ error: { code: 'GROUP_ALREADY_RUNNING', message: 'This plan is already running' } });
         }
 
@@ -1056,8 +1093,7 @@ module.exports = function(deps) {
         if (deps.activeWork?.has(project.id)) {
             return res.status(409).json({ error: { code: 'PROCESS_ALREADY_RUNNING', message: 'A work process is already running' } });
         }
-        const existing = activeRuns.get(project.id)?.groups?.[fid];
-        if (existing && (existing.status === 'running' || existing.status === 'queued')) {
+        if (groupIsLive(project, fid)) {
             return res.status(409).json({ error: { code: 'GROUP_ALREADY_RUNNING', message: 'This plan is already running' } });
         }
 

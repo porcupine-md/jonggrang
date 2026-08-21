@@ -469,3 +469,26 @@ test('reinstalling the bundle is idempotent and self-contained', () => {
   tunnel.installDeviceHooks(dir, home);
   assert.equal(fs.readFileSync(tunnel.deviceSettingsPath(dir), 'utf8'), first, 'no accumulation');
 });
+
+// ── a run that outlived its dashboard ────────────────────────────
+//
+// The run snapshot is written while a group runs. Restart the dashboard and the
+// worker dies with it — but the file still says `running`, and the already-running
+// guard then refuses to start that plan again. A plan whose run was interrupted
+// could never be resumed. Hit for real: "This plan is already running" with no
+// worker process anywhere.
+
+test('the already-running guard checks a live process, not a stored status', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
+  assert.match(src, /function groupIsLive/);
+  assert.match(src, /process\.kill\(pid, 0\)/, 'liveness is asked of the OS');
+  assert.ok(!/existing\.status === 'running' \|\| existing\.status === 'queued'/.test(src),
+    'the status-only guard is gone');
+});
+
+test('a snapshot with no live run reports interrupted, not running', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
+  assert.match(src, /function reconcileSnapshot/);
+  assert.match(src, /the dashboard restarted while this plan was running/,
+    'and says why, so it does not read as a mystery');
+});
