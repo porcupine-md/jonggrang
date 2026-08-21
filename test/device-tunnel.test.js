@@ -142,6 +142,31 @@ test('autossh is used for reconnection when available', () => {
   assert.ok(args.includes('-R'));
 });
 
+// Without this the server-side permitlisten restriction is decoration: ssh would
+// authenticate with whatever other key the server accepts.
+test('the tunnel offers only the registered key', () => {
+  const { args } = tunnel.tunnelArgv({ server: 'sj', port: 22042, key_path: '/home/me/.jonggrang/device.key' }, { useAutossh: false });
+  assert.equal(args[args.indexOf('-i') + 1], '/home/me/.jonggrang/device.key');
+  assert.ok(args.includes('IdentitiesOnly=yes'), 'no other identity may be tried');
+});
+
+test('the device key is dedicated, never the personal ssh key', () => {
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-dev-key-'));
+  const prev = process.env.HOME;
+  process.env.HOME = fresh;
+  try {
+    // A personal key exists and must NOT be picked: the server restricts the
+    // registered key to port-forwarding only.
+    fs.mkdirSync(path.join(fresh, '.ssh'), { recursive: true });
+    fs.writeFileSync(path.join(fresh, '.ssh', 'id_ed25519'), 'x');
+    fs.writeFileSync(path.join(fresh, '.ssh', 'id_ed25519.pub'), KEY_A);
+    const key = tunnel.ensureDeviceKey();
+    assert.match(key.path, /\.jonggrang\/device\.key$/);
+    assert.equal(key.generated, true);
+    assert.notEqual(tunnel.keyBody(key.pub), tunnel.keyBody(KEY_A), 'not the personal key');
+  } finally { process.env.HOME = prev; }
+});
+
 test('a custom local sshd port is honoured', () => {
   const { args } = tunnel.tunnelArgv({ server: 'sj', port: 22042, local_ssh_port: 2222 }, { useAutossh: false });
   assert.equal(args[args.indexOf('-R') + 1], '22042:localhost:2222');

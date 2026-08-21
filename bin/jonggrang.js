@@ -3280,6 +3280,7 @@ function deviceRegister(tunnel, flags) {
     device_id: reg.device_id,
     server,
     port: reg.port,
+    key_path: key.path,
     token: reg.token,
     localuser,
     workdir,
