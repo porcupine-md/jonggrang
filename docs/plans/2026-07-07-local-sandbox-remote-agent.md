@@ -557,3 +557,27 @@ Then two things had to be true that were not:
 | 41 | `plan` | ✅ the planner ran on the server against the mount and wrote its draft on the laptop, frontmatter and all: `feature: machine-md-probe`, `work_type: SMALL` |
 | 42 | `approve` | ✅ decomposed into three tasks, on the laptop |
 | 43 | Run | ✅ worktree cut on the device, seeded (`AGENTS.md`, `CLAUDE.md`, `hooks`), work loop started |
+| 44 | **The agent worked on the laptop** | ✅ `MACHINE.md` records `anak10thn-mini.local` and macOS 26.5.2 — and it committed on the device (`docs: add MACHINE.md…`), git and all |
+
+### 22. The redirect can be switched off by something else entirely
+
+The first run of that plan produced a `MACHINE.md` naming `0952f6ec654a` and
+`Linux x86_64` — the **server**. Nothing in the tunnel, the mount or the hook was
+broken; the hook simply was not there any more.
+
+The bundle had been merged into the project's `.claude/settings.json`, and
+`jonggrang init --force` writes that file. Initialising a device project — which
+§21 had just made mandatory — silently removed the redirect. The worktree then
+seeded the overwritten settings, so the work loop's agent ran its commands here.
+The same path would also have carried the bundle onto the device via the seed,
+which §4 forbids.
+
+The bundle now lives in `.jonggrang-device/` and reaches the agent only through
+`--settings`: directly from the pty path, and via `JONGGRANG_DEVICE_SETTINGS` from
+the work loop, since `runAgent` builds its own argv. Nothing else owns that file,
+so nothing else can overwrite it.
+
+Worth keeping: this was caught by reading the **artefact**, not the log. The run
+reported success both times. The second run's agent even flagged it unprompted —
+"the prior progress.txt recorded Linux/x86_64 … but that was clearly a different
+host" — which is a better regression test than anything asserted here.
