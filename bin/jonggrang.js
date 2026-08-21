@@ -3272,11 +3272,20 @@ async function deviceRegister(tunnel, flags) {
   }
   logSuccess(`Server reserved port ${reg.port} for ${reg.device_id}`);
 
-  // Inbound trust: the agent enters through the tunnel as this user.
-  const added = tunnel.addAuthorizedKey(reg.server_pubkey);
-  logInfo(added
-    ? `Server key added to ${tunnel.authorizedKeysPath()}`
-    : `Server key already present in ${tunnel.authorizedKeysPath()}`);
+  // Inbound trust: the agent enters through the tunnel as this user. set, not
+  // add, so a device registered before the restrictions existed picks them up.
+  const entry = tunnel.agentKeyEntry(reg.server_pubkey);
+  const { replaced } = tunnel.setAuthorizedKey(entry);
+  logInfo(`Server key ${replaced ? 'updated in' : 'added to'} ${tunnel.authorizedKeysPath()} (restrict,pty)`);
+
+  // Say plainly what was granted. The server can run commands as this user —
+  // that IS the feature — but the user does not have to be the developer's own.
+  if (localuser === os.userInfo().username) {
+    logWarn(`The server can now run commands on this machine as ${localuser} — your own account.`);
+    logInfo('That includes reading anything you can read, ~/.ssh included.');
+    logInfo('To narrow it: create a dedicated account that owns only your projects,');
+    logInfo(`then re-register with --user <that-account>. See docs/CONFIG.md.`);
+  }
 
   tunnel.writeDeviceConfig({
     device_id: reg.device_id,

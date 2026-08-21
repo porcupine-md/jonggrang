@@ -516,7 +516,7 @@ Registration provisions both directions, and they are deliberately different key
 | Direction | Key | Authorized where | Allowed to |
 |---|---|---|---|
 | device → server (open the tunnel) | `~/.jonggrang/device.key` (dedicated, generated) | server's `authorized_keys` | forward its own port — nothing else |
-| server → device (agent enters) | `~/.jonggrang/web/ssh/device-agent.key` | device's `authorized_keys` | full access as `localuser` (MVP; see §7 of the design) |
+| server → device (agent enters) | `~/.jonggrang/web/ssh/device-agent.key` | device's `authorized_keys` | run commands as `localuser` — `restrict,pty`, so no port/agent/X11 forwarding |
 
 The device key is authorized as
 `restrict,port-forwarding,permitlisten="localhost:<port>",command="/bin/false"`.
@@ -603,3 +603,29 @@ naming the device, its platform (`uname -sm`, reported at registration and
 otherwise learned over the tunnel and remembered), the workdir, and that paths are
 shared — that last part matters, since an agent told only "your Bash runs
 elsewhere" starts defending against a path mismatch that no longer exists.
+
+### What the server can do on your device, and how to narrow it
+
+The server runs the agent's commands on your machine — that is the feature, and
+it cannot be removed. Everything *around* it is removed: the server's key is
+authorized `restrict,pty`, which keeps command execution and a pty (the Terminal
+needs one) while refusing port forwarding, agent forwarding, X11 and user-rc. So a
+compromised server can run commands as that user; it cannot additionally use your
+laptop as a jump host or reach your ssh-agent. Verified — a local forward through
+the device is refused with `administratively prohibited`.
+
+What remains is the account. Register as your own user and the server can read
+whatever you can, `~/.ssh` included — `device register` says so out loud. To
+narrow it, give the agent an account that owns only your projects:
+
+```bash
+# on the device, once (needs admin)
+sudo useradd -m -s /bin/bash jonggrang-agent          # macOS: create via System Settings
+sudo chown -R jonggrang-agent /srv/projects/my-app    # only what it should reach
+
+# then register as that account
+jonggrang device register --server <host> --user jonggrang-agent --path /srv/projects/my-app
+```
+
+The tunnel key is separate and already confined: it may forward its own reserved
+port and nothing else, with a forced command that refuses execution.

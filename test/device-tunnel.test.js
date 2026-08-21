@@ -370,3 +370,33 @@ test('a plan worktree on a device gets its own path per feature', () => {
   assert.equal(tunnel.deviceWorktreePath(d, 'feat-x'), '/tmp/jonggrang-worktrees/my_mac/feat-x');
   assert.notEqual(tunnel.deviceWorktreePath(d, 'feat-x'), tunnel.deviceWorktreePath(d, 'feat-y'));
 });
+
+// ── §7: what the server's key may do on the device ───────────────
+
+test('the server key keeps exec and a pty, and loses the rest', () => {
+  const entry = tunnel.agentKeyEntry(KEY_A);
+  assert.match(entry, /^restrict,pty /, 'restrict drops forwardings and user-rc; pty is added back for the Terminal');
+  assert.equal(tunnel.keyBody(entry), tunnel.keyBody(KEY_A));
+});
+
+test('setAuthorizedKey replaces an entry, so old options do not survive', () => {
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-ak-'));
+  const prev = process.env.HOME;
+  process.env.HOME = fresh;
+  try {
+    tunnel.setAuthorizedKey(KEY_A);                                  // unrestricted, as before
+    const upgraded = tunnel.setAuthorizedKey(tunnel.agentKeyEntry(KEY_A));
+    assert.equal(upgraded.replaced, true);
+    const lines = fs.readFileSync(tunnel.authorizedKeysPath(), 'utf8').split('\n').filter(Boolean);
+    const mine = lines.filter(l => tunnel.keyBody(l) === tunnel.keyBody(KEY_A));
+    assert.equal(mine.length, 1, 'one entry, not two');
+    assert.match(mine[0], /^restrict,pty /, 'and it is the restricted one');
+  } finally { process.env.HOME = prev; }
+});
+
+test('registering as your own account warns what that grants', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'jonggrang.js'), 'utf8');
+  assert.match(src, /run commands on this machine as \$\{localuser\} — your own account/);
+  assert.match(src, /~\/\.ssh included/, 'concretely, not vaguely');
+  assert.match(src, /re-register with --user/, 'and it names the way out');
+});

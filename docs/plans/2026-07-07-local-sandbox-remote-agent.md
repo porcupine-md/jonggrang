@@ -467,8 +467,6 @@ agree but every build pays SSHFS I/O. Either is coherent; the current state
 (redirect without mount) is not.
 
 Not covered here: the SSHFS mount (§5) — now the blocking gap, not a nicety —
-hardening the server→device direction (§7).
-
 ## 19. P5 — worktrees and the work loop on a device
 
 `buildCtx` gains a third mode beside host and container. The repository is on the
@@ -503,3 +501,29 @@ behind it. There are now two shapes: `-tt … -lic` for the agent and the Termin
 | 34 | **The work loop ran** | ✅ `mode: device`, one task, `All tasks completed! 1 / 1` |
 | 35 | **The agent worked on the laptop** | ✅ it created `WHERE.md` containing `anak10thn-mini.local` / `Darwin` — the laptop naming itself |
 | 36 | The commit is code-only | ✅ `docs: add WHERE.md…` with `WHERE.md | 2 ++` and nothing else; the seeded scaffold stayed out |
+
+## 20. §7 — what was hardened, and what cannot be
+
+§7 deferred this entirely ("full access as that user. No hardening yet"). Most of
+it can be taken back without touching the feature:
+
+The server's key on the device is now authorized `restrict,pty` — execution and a
+pty (the Terminal needs one) stay; port forwarding, agent forwarding, X11 and
+user-rc go. Registration *replaces* the entry rather than leaving an existing one
+alone, so a device registered before this picks it up.
+
+| # | What | Result |
+|---|------|--------|
+| 37 | Commands from the server | ✅ still work — `hostname` → the laptop |
+| 38 | A pty | ✅ `/dev/ttys008` — the Terminal is unaffected |
+| 39 | **The laptop as a jump host** | ✅ refused: `channel 2: open failed: administratively prohibited` |
+
+What cannot be removed is the grant itself: running the agent's commands there IS
+the feature. So `device register` now says out loud what registering as your own
+account means — the server can read anything you can, `~/.ssh` included — and
+points at the answer, which is an account rather than an option string: a
+dedicated device user that owns only the projects it should reach
+(`--user jonggrang-agent`). The recipe is in docs/CONFIG.md.
+
+Still open from §7's list: workspace scoping below the account level, per-session
+ephemeral keys, key rotation, and an audit log.
