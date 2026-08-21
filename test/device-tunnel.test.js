@@ -652,3 +652,48 @@ test('removeAuthorizedKey revokes by key material', () => {
     assert.equal(tunnel.removeAuthorizedKey(KEY_A), false, 'removing twice is not an error');
   } finally { process.env.HOME = prev; }
 });
+
+// ── paths must not be derived from things that change ───────────
+//
+// The worktree path was keyed by device label. Re-registering without --label
+// defaults to the hostname, so `anak10thn-mini` became `anak10thn-mini.local`,
+// every existing worktree path moved, and the mount failed with "No such file or
+// directory" — three error messages away from the cause, because a swallowed
+// mount error surfaced later as an empty task list, then a missing worktree
+// registry, then git complaining a branch already existed.
+
+test('a worktree path is keyed by device id, not by its label', () => {
+  const a = tunnel.deviceWorktreePath({ id: 'dev_x_1', label: 'my-mac' }, 'feat');
+  const b = tunnel.deviceWorktreePath({ id: 'dev_x_1', label: 'my-mac.local' }, 'feat');
+  assert.equal(a, b, 'renaming the device must not move its worktrees');
+  assert.match(a, /jonggrang-worktrees\/dev_x_1\/feat$/);
+});
+
+test('deviceFor hands back the id the paths depend on', () => {
+  const r = tunnel.provisionDevice({ label: 'ided', pubkey: KEY_A, localuser: 'me' });
+  const d = tunnel.deviceFor(r.device_id);
+  assert.equal(d.id, r.device_id, 'the registry is keyed by id, so the entry must carry it');
+  assert.match(tunnel.deviceWorktreePath(d, 'feat'), new RegExp(`/${r.device_id}/feat$`));
+});
+
+test('mounting waits for the mount to answer, not for sshfs to fork', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tunnel.js'), 'utf8');
+  assert.match(src, /mountHealthy\(mountPoint, 2\)/, 'polled after the sshfs call');
+  assert.match(src, /was mounted but never became readable/, 'and it gives up loudly');
+});
+
+test('a worktree is adopted when its branch is still checked out', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
+  assert.match(src, /hasBranch\n?\s*\? \['worktree', 'add', wt, branch\]/,
+    'insisting on -b kills a re-run of any plan whose branch survived');
+});
+
+test('a device project is mounted before its state is read', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
+  assert.match(src, /function mountIfDevice/);
+  const start = src.slice(src.indexOf("orchestration/groups/:featureId/start"));
+  const mountAt = start.indexOf('mountIfDevice(project)');
+  const readAt = start.indexOf('lib.groupPlansAll(project.path)');
+  assert.ok(mountAt >= 0 && mountAt < readAt,
+    'reading the task list through the symlink before mounting reports "no pending tasks"');
+});

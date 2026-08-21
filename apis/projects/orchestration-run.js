@@ -93,6 +93,25 @@ module.exports = function(deps) {
         return project;
     }
 
+    /**
+     * A device project's state is read through `project.path/.jonggrang`, a symlink
+     * onto the mount — so it has to be mounted BEFORE anything reads it, not when
+     * execution starts.
+     *
+     * This was three separate mysteries before it was one cause: a task list that
+     * read empty ("No pending tasks for this plan"), a worktree registry that read
+     * empty (so a resumed run tried to create a worktree that already existed), and
+     * a git error about a branch that "already exists". All of them were the
+     * project simply not being mounted yet.
+     */
+    function mountIfDevice(project) {
+        if (!project.device?.enabled) return;
+        const device = tunnel.deviceFor(project.device.device_id);
+        if (!device) return;
+        try { tunnel.mountDevice(device, project.device.workdir); }
+        catch (err) { console.error('device project mount:', err.message); }
+    }
+
     // ── execution context (host vs sandbox container) ─────────────
 
     function buildCtx(project) {
@@ -118,6 +137,14 @@ module.exports = function(deps) {
         if (project.device?.enabled) {
             const device = tunnel.deviceFor(project.device.device_id);
             if (!device) throw new Error(`device ${project.device.device_id} is no longer registered`);
+            // Mount the PROJECT, not just the worktree. jonggrang's own state —
+            // including the worktree registry — is read through
+            // `project.path/.jonggrang`, which is a symlink onto this mount. With
+            // it down the registry reads empty, a resumed run concludes its
+            // worktree is gone, and tries to create one that already exists:
+            // three error messages away from "the project is not mounted".
+            try { tunnel.mountDevice(device, project.device.workdir); }
+            catch (err) { console.error('device project mount:', err.message); }
             return {
                 mode: 'device',
                 device,
@@ -223,7 +250,18 @@ module.exports = function(deps) {
         try { fs.mkdirSync(path.dirname(ctx.hostWt(g.featureId)), { recursive: true }); } catch {}
         const startRef = resolveStartRef(ctx, g.base);
         const baseSha = gitSync(ctx, ctx.root, ['rev-parse', startRef]).trim();
-        gitSync(ctx, ctx.root, ['worktree', 'add', '-b', branch, wt, startRef]);
+        // Adopt the branch if it is still there rather than insisting on -b.
+        // The `branch -D` above is best-effort and refuses while the branch is
+        // checked out somewhere — which is the normal state when a plan is being
+        // re-run — and then `add -b` fails outright with "a branch named … already
+        // exists" and takes the whole run with it.
+        const hasBranch = (() => {
+            try { gitSync(ctx, ctx.root, ['rev-parse', '--verify', `refs/heads/${branch}`]); return true; }
+            catch { return false; }
+        })();
+        gitSync(ctx, ctx.root, hasBranch
+            ? ['worktree', 'add', wt, branch]
+            : ['worktree', 'add', '-b', branch, wt, startRef]);
         // Device: git made the worktree on the developer's machine. Mount it here,
         // at the same path, so the orchestrator and the agent can work in it.
         if (ctx.mode === 'device') tunnel.mountDevice(ctx.device, wt);
@@ -359,7 +397,12 @@ module.exports = function(deps) {
         // A run resumed after a tunnel drop otherwise reads as "no worktree" and
         // would try to create one that already exists.
         if (ctx.mode === 'device') {
-            try { tunnel.mountDevice(ctx.device, ctx.wt(info.featureId)); } catch { /* not there yet */ }
+            // Report a failure here rather than swallowing it. A silent one turns
+            // "the mount did not come up" into three unrelated-looking errors
+            // further down: an empty task list, a missing worktree registry, and
+            // finally git complaining that a branch already exists.
+            try { tunnel.mountDevice(ctx.device, ctx.wt(info.featureId)); }
+            catch (err) { console.error(`device worktree mount (${info.featureId}):`, err.message); }
         }
         if (meta && fs.existsSync(path.join(hostWt, '.git'))) {
             return {
@@ -1195,6 +1238,8 @@ module.exports = function(deps) {
             return res.status(409).json({ error: { code: 'GROUP_ALREADY_RUNNING', message: 'This plan is already running' } });
         }
 
+        mountIfDevice(project);
+
         let groups;
         try {
             groups = lib.groupPlansAll(project.path);
@@ -1232,6 +1277,8 @@ module.exports = function(deps) {
         if (groupIsLive(project, fid)) {
             return res.status(409).json({ error: { code: 'GROUP_ALREADY_RUNNING', message: 'This plan is already running' } });
         }
+
+        mountIfDevice(project);
 
         const info = planGroupInfo(project, fid);
         if (!info) return res.status(404).json({ error: { code: 'PLAN_NOT_FOUND', message: 'Plan not found' } });
