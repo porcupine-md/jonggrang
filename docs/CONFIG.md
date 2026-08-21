@@ -398,6 +398,7 @@ Persistent orchestration state for a feature run. Located at:
 | `JONGGRANG_PROJECT_ROOT` | Explicit project root for hook resolution | `process.cwd()` |
 | `JONGGRANG_DESIGN_HOME` | Design-template store location (see [DESIGN.md](DESIGN.md)) | `~/.jonggrang/design` |
 | `JONGGRANG_AGENT_IMAGE` | Agent image for the Design studio sandbox container | `ghcr.io/porcupine-md/jonggrang-agent:dev` |
+| `JONGGRANG_REMOTE_BIN` | Command that runs jonggrang **on the server** during `device register` (a non-interactive ssh session may not have it on PATH) | `jonggrang` |
 | `JONGGRANG_HOOKS_DIR` | Path to hooks/ directory | auto-resolved |
 | `JONGGRANG_COMPACTION_THRESHOLD` | Override block threshold (0-1) | 0.85 |
 | `JONGGRANG_WEB_PORT` | `jonggrang web` dashboard port (also `--port`) | `7777` |
@@ -474,3 +475,56 @@ Endpoints (all global): `GET/PUT /api/storage/config`, `POST /api/storage/test`,
 An upload returns a shareable link: the `publicUrl` base when set, else a 7-day presigned
 GET URL. **Plan mode** inserts the link into the description textbox; the **Design studio**
 types it into the running TUI.
+
+---
+
+## Local-sandbox devices
+
+The agent runs on a jonggrang **server**; the code stays on the developer's
+**device**; a reverse SSH tunnel lets the server reach back in. See
+[the design](plans/2026-07-07-local-sandbox-remote-agent.md). Two state files,
+one per side.
+
+### `~/.jonggrang/device.json` — on the device
+
+Written by `jonggrang device register`. Not secret-free: the token identifies
+this device to its server.
+
+```jsonc
+{
+  "device_id": "dev_my-laptop_a1b2c3",
+  "server": "ibnu@jonggrang.example",   // ssh destination, as you would type it
+  "port": 22000,                        // reserved on the SERVER's loopback
+  "token": "…",
+  "key_path": "/home/me/.jonggrang/device.key",  // the key the tunnel must use
+  "localuser": "me",                    // who the agent enters as
+  "workdir": "/home/me/app",
+  "label": "my-laptop"
+}
+```
+
+### `~/.jonggrang/web/devices.json` — on the server
+
+The registry. One reserved port per device, in `22000-22999`; a device keeps its
+port and token across re-registration, so nothing the device was told goes stale.
+`GET /api/devices` returns this **without tokens**, plus live tunnel state.
+
+### The two keys
+
+Registration provisions both directions, and they are deliberately different keys:
+
+| Direction | Key | Authorized where | Allowed to |
+|---|---|---|---|
+| device → server (open the tunnel) | `~/.jonggrang/device.key` (dedicated, generated) | server's `authorized_keys` | forward its own port — nothing else |
+| server → device (agent enters) | `~/.jonggrang/web/ssh/device-agent.key` | device's `authorized_keys` | full access as `localuser` (MVP; see §7 of the design) |
+
+The device key is authorized as
+`restrict,port-forwarding,permitlisten="localhost:<port>",command="/bin/false"`.
+Both halves are load-bearing and were verified against a real sshd: `permitlisten`
+refuses any other port, and the forced `command` refuses execution — `restrict`
+alone still runs `ssh server <cmd>`. `ssh -N` never asks for a session, so the
+forced command does not interfere with the tunnel.
+
+It has to be a *dedicated* key: if it were the developer's own, either sshd
+matches their unrestricted entry first and the restriction does nothing, or they
+lose their own shell on the server.

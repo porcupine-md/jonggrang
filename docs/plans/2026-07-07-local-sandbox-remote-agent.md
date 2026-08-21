@@ -1,7 +1,12 @@
 # Local Sandbox — Remote Agent, Local Execution via Reverse SSH Tunnel
 
-> Status: **DESIGN / DISCUSSION** (not yet implemented). Feature #TBD.
+> Status: **P0 + P1 IMPLEMENTED** (2026-08-21) — registration, two-way key exchange
+> and the tunnel lifecycle ship in `lib/tunnel.js`, `jonggrang device` /
+> `jonggrang tunnel`, `GET /api/devices` and the Settings "Local Devices" card.
+> P2+ (the agent transport) is still design only.
 > Decisions captured from discussion 2026-07-07. Open decisions marked **[DECIDE]**.
+>
+> See §15 for what the implementation changed about this design.
 
 ## 1. Goal
 
@@ -252,3 +257,51 @@ local device. **Every core mechanism was proven with real commands.**
 - **Hook context**: the mounted `.claude` carries the *local* project hooks; the remote-redirect hook (if used for bash per §5(ii)) must be a *separate, server-side* bundle (§4) — never merged into the mounted local hooks.
 - **SSHFS perf** was fine for small multi-file Node work; heavy `node_modules`/build I/O still to be stress-tested (§12).
 - PoC artifacts on the Mac: `/tmp/localsandbox/` (`.claude/`, `connect.sh`, `mount-on-sj.sh`).
+
+## 15. What the implementation changed (2026-08-21, P0 + P1)
+
+Built as `lib/tunnel.js` + `jonggrang device register|provision|list|remove` +
+`jonggrang tunnel up|status|down` + `GET /api/devices` and a Settings card.
+Three things this design did not say, each forced by running it:
+
+1. **Registration goes over SSH, not HTTP.** §8 wrote it as a server endpoint,
+   but the dashboard listens on loopback (or the docker bridge) and is not
+   reachable from the device — while device→server SSH must work anyway or the
+   tunnel cannot be opened at all. `device register` therefore runs
+   `jonggrang device provision` on the server over ssh, which prints one JSON
+   line. `--remote-jonggrang` names the binary, because a non-interactive ssh
+   session does not always have it on PATH.
+
+2. **The tunnel key must be dedicated, and the tunnel must use it.** §6 says the
+   device's key is accepted by the server; it does not say *which* key. Plain
+   `ssh -R` authenticates with whatever the server accepts, so the restriction
+   attached to the registered key applied to nothing. The tunnel now passes
+   `-i <key> -o IdentitiesOnly=yes`, and the key is always a generated
+   `~/.jonggrang/device.key` — reusing the developer's own key cannot work,
+   since either sshd matches their unrestricted entry first (no restriction) or
+   they lose their shell on the server.
+
+3. **`restrict` does not refuse execution.** §7 defers hardening, so the inbound
+   entry was written as `restrict,port-forwarding,permitlisten="localhost:<port>"`
+   — one option string, no reason not to. Measured against a real sshd, that key
+   could still run `ssh server whoami`: `restrict` drops the pty and the
+   forwardings, not command execution. A forced `command="/bin/false"` is what
+   refuses it, and `ssh -N` never asks for a session so the tunnel is unaffected.
+
+### Validation log — P0/P1 on two real machines (2026-08-21)
+
+Device `jg2` (`temet01bare190`, Ubuntu), server `sj` (`sandbox.jonggrang.dev`).
+
+| # | What | Result |
+|---|------|--------|
+| 1 | `device register --server ibnu@sandbox.jonggrang.dev` from the device | ✅ generated `~/.jonggrang/device.key`, server reserved port 22000 for `dev_jg2-e2e_ddd069`, server agent key added to the device's `authorized_keys`, `device.json` written |
+| 2 | Re-register | ✅ same device id, **same port and token** — nothing the device was told went stale |
+| 3 | `tunnel up` + `tunnel status` | ✅ `ssh -R 22000:localhost:22`, pidfile, status reports running (`supervisor: ssh`, autossh absent) |
+| 4 | Server enters the device through the tunnel | ✅ from `sj`: `ssh -p 22000 -i device-agent.key bs000470@localhost hostname` → **`temet01bare190.neometal.id`** |
+| 5 | Device key confined to its port | ✅ binding `-R 22999` refused: `remote port forwarding failed for listen port 22999` |
+| 6 | Device key refused a shell | ❌ then ✅ — `restrict` alone returned `ibnu`; with the forced command the same attempt exits 1 with no output, and the tunnel still works |
+| 7 | Dashboard | ✅ `GET /api/devices` → `online: true`; the Settings card shows the device, its port, `localuser:workdir`, and the server agent key to authorize |
+| 8 | Live state, not a stored flag | ✅ `tunnel down` on the device → Refresh → dot grey, "tunnel down". The server derives it by probing the reserved loopback port |
+
+Not covered here (P2+): the Bash redirect, the SSHFS mount, `spawnForProject`'s
+device branch, worktrees on the device. §12's `[DECIDE-b]` is untouched.
