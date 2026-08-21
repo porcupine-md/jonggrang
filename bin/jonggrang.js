@@ -3188,6 +3188,7 @@ async function cmdDevice(args) {
 
   switch (sub) {
     case 'register': return deviceRegister(tunnel, flags);
+    case 'rotate': return deviceRegister(tunnel, { ...flags, rotate: true });
     case 'provision': return deviceProvision(tunnel, flags);
     case 'list': return deviceList(tunnel, flags);
     case 'remove': return deviceRemove(tunnel, args[1]);
@@ -3195,6 +3196,7 @@ async function cmdDevice(args) {
       console.log(`Usage:
   On your machine (the device):
     jonggrang device register --server <sshhost> [--user <localuser>] [--path <dir>] [--label <name>]
+    jonggrang device rotate                        # new server key for this device; the old one stops working
                               [--remote-jonggrang <cmd>]  # if the server's jonggrang is not on the ssh PATH
     jonggrang tunnel up | status | down
 
@@ -3227,6 +3229,7 @@ function deviceProvision(tunnel, flags) {
       localuser: flags.localuser || flags.user || null,
       workdir: flags.workdir || flags.path || null,
       platform: flags.platform || null,
+      rotate: Boolean(flags.rotate),
     });
   } catch (err) {
     process.stderr.write(`device provision failed: ${err.message}\n`);
@@ -3243,15 +3246,22 @@ function deviceProvision(tunnel, flags) {
 // Run ON THE DEVICE. Provisions on the server over ssh, then authorizes the
 // server's key here so the agent can come back in.
 async function deviceRegister(tunnel, flags) {
-  const server = flags.server;
-  if (!server) { logError('device register: --server <sshhost> is required'); return 1; }
+  // Rotation is registration with a new key: same port, same token, same
+  // everything the device was told — only what the server proves itself with
+  // changes. So it reuses this path rather than duplicating it.
+  const rotating = Boolean(flags.rotate);
+  const server = flags.server || (rotating ? tunnel.readDeviceConfig()?.server : null);
+  if (!server) {
+    logError(`device ${rotating ? 'rotate' : 'register'}: --server <sshhost> is required`);
+    return 1;
+  }
 
   const localuser = flags.user || flags.localuser || os.userInfo().username;
   const workdir = flags.path || flags.workdir || process.cwd();
   const label = flags.label || os.hostname();
   const existing = tunnel.readDeviceConfig();
 
-  logHeader('Register this machine as a jonggrang device');
+  logHeader(rotating ? 'Rotate this device\'s server key' : 'Register this machine as a jonggrang device');
 
   const key = tunnel.ensureDeviceKey();
   logInfo(`Tunnel key: ${key.path}${key.generated ? ' (generated)' : ''}`);
@@ -3262,6 +3272,7 @@ async function deviceRegister(tunnel, flags) {
       server, pubkey: key.pub, label, localuser, workdir,
       platform: `${os.type()} ${os.arch() === 'arm64' ? 'arm64' : os.arch()}`,
       id: existing && existing.server === server ? existing.device_id : null,
+      rotate: Boolean(flags.rotate),
       sshArgs: flags['ssh-opt'] ? ['-o', flags['ssh-opt']] : [],
       remoteBin: flags['remote-jonggrang'],
     });
@@ -3276,9 +3287,24 @@ async function deviceRegister(tunnel, flags) {
   // add, so a device registered before the restrictions existed picks them up.
   // Record what the server runs here, on this machine, before it runs.
   const wrapper = tunnel.installAuditShell(JONGGRANG_HOME);
+
+  // Revoke the key this machine was trusting before installing the new one.
+  // Without this a rotation only ADDS a key: the old one keeps working, and the
+  // rotation is theatre. Only when the server actually handed us a different key.
   const entry = tunnel.agentKeyEntry(reg.server_pubkey, wrapper);
   const { replaced } = tunnel.setAuthorizedKey(entry);
+
+  // Then drop every OTHER jonggrang agent key. Revoking only the key we recorded
+  // misses the ones installed before this machine kept a record — and a rotation
+  // that leaves the old key working is theatre. Scoped to our own comment, so a
+  // key the user added by hand is never touched.
+  const revoked = tunnel.revokeOtherAgentKeys(reg.server_pubkey);
   logInfo(`Server key ${replaced ? 'updated in' : 'added to'} ${tunnel.authorizedKeysPath()} (restrict,pty + audit)`);
+  if (revoked > 0) {
+    logSuccess(`Revoked ${revoked} older jonggrang server key${revoked === 1 ? '' : 's'} — ${revoked === 1 ? 'it' : 'they'} no longer work here.`);
+  } else if (reg.rotated) {
+    logInfo('No older server keys were present to revoke.');
+  }
   logInfo(`Everything the server runs here is logged to ${tunnel.auditLogPath()}`);
 
   // Say plainly what was granted. The server can run commands as this user —
@@ -3299,6 +3325,8 @@ async function deviceRegister(tunnel, flags) {
     localuser,
     workdir,
     label,
+    // Remembered so a later rotation knows what to revoke.
+    server_pubkey: reg.server_pubkey,
     created_at: existing?.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString(),
   });

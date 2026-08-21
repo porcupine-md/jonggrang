@@ -646,6 +646,22 @@ a log the server can rewrite. It rotates itself above 4MB, keeping the tail. And
 it is **visibility, not restriction** — the server can still run anything; a
 dedicated account is what narrows that.
 
+### Rotating the server's key
+
+```bash
+jonggrang device rotate     # on the device; --server is remembered
+```
+
+The server generates a fresh key **for this device**, the device authorizes it and
+**revokes every older jonggrang agent key** — so the previous one stops working,
+which is the only thing that makes a rotation worth doing. Keys you added by hand
+are never touched; the match is on jonggrang's own key comment.
+
+Each device has its own key from the first rotation onwards (a device registered
+earlier keeps using the shared one until then). That is what makes rotation safe:
+with a single key for every device, rotating one would silently lock out all the
+rest.
+
 **When the tunnel drops mid-run.** A device group is watched: every 15 seconds the
 server asks whether the reserved port is still listening, and two consecutive
 misses stop the run — one is not enough, since an `autossh` reconnect should not

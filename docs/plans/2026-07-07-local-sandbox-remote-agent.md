@@ -544,8 +544,37 @@ command for the server's key; it appends the command and then runs it unchanged.
 It rotates itself above 4MB (keeping the tail), so it cannot quietly fill a
 laptop. And it is visibility, not restriction: the server can still run anything.
 
-Still open from §7's list: workspace scoping below the account level, per-session
-ephemeral keys, and key rotation.
+### Key rotation (§7)
+
+`jonggrang device rotate` on the device. Two things had to be true first:
+
+**Per-device keys.** There was one server key for every device, which made
+rotation a footgun: replacing it would silently lock out every other registered
+machine. A device now gets its own from the first rotation onwards; one registered
+earlier keeps using the shared key until then, so nothing breaks by upgrading.
+
+**Revocation, which took two attempts** — both caught by testing the *old* key
+instead of trusting the success message:
+
+1. The new key was appended and the old one kept working, while the CLI reported
+   "the previous server key no longer works". It did.
+2. Revoking the recorded key missed the ones installed before this machine kept a
+   record. The original shared key still opened a session.
+
+So a rotation now drops **every** jonggrang agent key but the one it installs,
+matched on jonggrang's own key comment, and keys the user added by hand are never
+touched.
+
+| # | What | Result |
+|---|------|--------|
+| 52 | Rotate | ✅ per-device key generated, recorded with a timestamp |
+| 53 | Old key | ✅ `Permission denied (publickey…)` — genuinely dead |
+| 54 | New key | ✅ `anak10thn-mini.local` |
+| 55 | Residue | ✅ 3 older agent entries revoked in one pass, 1 left |
+| 56 | The user's own keys | ✅ both untouched |
+
+Still open from §7's list: workspace scoping below the account level, and
+per-session ephemeral keys (rotation is the step toward them, not a substitute).
 
 ## 21. Plan → approve → work on a device
 

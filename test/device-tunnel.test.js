@@ -594,3 +594,61 @@ test('a watchdog cancel leaves the run itself terminal too', () => {
   assert.match(watch, /if \(!runActive\(run\)\) run\.status = 'cancelled'/,
     'otherwise the dashboard shows a run in progress with nothing in it');
 });
+
+// ── key rotation ────────────────────────────────────────────────
+//
+// Two attempts, both caught by testing the OLD key rather than trusting the
+// success message. First: a new key was appended and the old one kept working
+// while the CLI reported it revoked. Second: revoking by record missed keys
+// installed before this machine kept a record — the original shared key still
+// opened a session.
+
+test('a device gets its own server key, so rotating one cannot lock out others', () => {
+  const r = tunnel.provisionDevice({ label: 'rot', pubkey: KEY_A, localuser: 'me' });
+  assert.equal(tunnel.serverKeyFor(tunnel.deviceFor(r.device_id)), tunnel.serverKeyPath(),
+    'until it rotates, it keeps using the shared key — existing registrations are unaffected');
+
+  const fresh = tunnel.rotateDeviceKey(r.device_id);
+  const after = tunnel.deviceFor(r.device_id);
+  assert.match(after.agent_key, new RegExp(`device-agent-${r.device_id}\\.key$`));
+  assert.equal(tunnel.serverKeyFor(after), fresh.path);
+  assert.ok(after.agent_key_rotated_at, 'and when');
+});
+
+test('rotating one device leaves another device alone', () => {
+  const a = tunnel.provisionDevice({ label: 'rot-a', pubkey: KEY_A, localuser: 'me' });
+  const b = tunnel.provisionDevice({ label: 'rot-b', pubkey: KEY_B, localuser: 'you' });
+  tunnel.rotateDeviceKey(a.device_id);
+  assert.notEqual(tunnel.serverKeyFor(tunnel.deviceFor(a.device_id)), tunnel.serverKeyFor(tunnel.deviceFor(b.device_id)));
+});
+
+test('revoking drops every jonggrang agent key but the one kept', () => {
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-revoke-'));
+  const prev = process.env.HOME;
+  process.env.HOME = fresh;
+  try {
+    const mine = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMINE ${tunnel.AGENT_KEY_COMMENT}-new`;
+    // Two older agent keys, and a key the user added by hand.
+    tunnel.addAuthorizedKey(`ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOLD1 ${tunnel.AGENT_KEY_COMMENT}`);
+    tunnel.addAuthorizedKey(`ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOLD2 ${tunnel.AGENT_KEY_COMMENT}-dev_x`);
+    tunnel.addAuthorizedKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPERSONAL me@laptop');
+    tunnel.addAuthorizedKey(mine);
+
+    assert.equal(tunnel.revokeOtherAgentKeys(mine), 2, 'both older agent keys go');
+    const lines = fs.readFileSync(tunnel.authorizedKeysPath(), 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 2, 'the kept agent key and the personal one remain');
+    assert.ok(lines.some(l => l.includes('me@laptop')), "a key the user added by hand is never touched");
+    assert.ok(lines.some(l => tunnel.keyBody(l) === tunnel.keyBody(mine)));
+  } finally { process.env.HOME = prev; }
+});
+
+test('removeAuthorizedKey revokes by key material', () => {
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-revoke2-'));
+  const prev = process.env.HOME;
+  process.env.HOME = fresh;
+  try {
+    tunnel.addAuthorizedKey(KEY_A);
+    assert.equal(tunnel.removeAuthorizedKey(KEY_A), true);
+    assert.equal(tunnel.removeAuthorizedKey(KEY_A), false, 'removing twice is not an error');
+  } finally { process.env.HOME = prev; }
+});
