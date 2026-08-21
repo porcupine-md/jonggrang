@@ -147,17 +147,17 @@ module.exports = function(deps) {
             const execArgs = sandbox.buildExecArgs(containerName, scope.containerCwd, cmd, args, secretVars);
             cmd = 'docker';
             args = execArgs;
-        } else if (project.device?.enabled) {
+        } else if (project.device?.enabled && scope.session.startsWith('terminal')) {
             // Third execution context (the plan's §9): not here, not a container,
             // but the developer's machine at the far end of its reverse tunnel.
             //
-            // NOTE — this applies to every spawnPty caller: terminal, agent and
-            // discuss. For the Terminal that is exactly right. For the AGENT it
-            // is a decision the plan has not made: §2/§3 put the agent on the
-            // SERVER and redirect only its Bash, whereas this runs the agent CLI
-            // on the device — which also means that machine needs the CLI
-            // installed and logged in. Left as-is deliberately rather than
-            // guessed at; resolving it is P2's transparent-redirect work.
+            // TERMINAL ONLY, and that boundary is the whole design. The agent
+            // runs HERE, on the server, where it is installed and authenticated
+            // once (§2) — the device needs no agent at all. What crosses the
+            // tunnel is the agent's *commands*, via the redirect hook (§3), not
+            // the agent itself. Sending the agent CLI to the device would also
+            // quietly require it installed and logged in there, which is exactly
+            // the per-machine setup this feature exists to avoid.
             const device = tunnel.deviceFor(project.device.device_id);
             if (!device) throw new Error(`device ${project.device.device_id} is no longer registered`);
             args = tunnel.buildSshExecArgs(device, scope.deviceCwd, cmd, args, secretVars);
