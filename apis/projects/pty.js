@@ -44,6 +44,14 @@ module.exports = function(deps) {
                 ? `${sandbox.WORKTREE_MOUNT}/${featureId}`
                 : null,
             hostWt,
+            // The worktree itself lives on the device (§5 of the local-sandbox
+            // plan), but jonggrang's own state for the project — the redirect
+            // bundle and its settings — stays server-side, so the agent's
+            // --settings must point there in Work Mode too. Without it,
+            // ensureDeviceHooks got undefined and the route 500'd before the
+            // redirect could be installed (the split view, silently).
+            deviceCwd: project.device?.enabled ? project.device.workdir : null,
+            serverStateDir: project.path,
         };
     }
 
