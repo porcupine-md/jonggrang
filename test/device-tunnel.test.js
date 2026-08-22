@@ -350,12 +350,14 @@ test('health is a separate question from presence', () => {
   assert.equal(tunnel.isMounted(dir), false, 'and neither is a mount at all');
 });
 
+// presence-check: needs a real sshfs mount to exercise — asserts the lazy flags exist.
 test('unmounting is attempted lazily too, since a dead mount will not release cleanly', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tunnel.js'), 'utf8');
   assert.match(src, /'fusermount', '-uz'/, 'lazy fusermount, or the corpse is unremovable');
   assert.match(src, /'umount', '-l'/);
 });
 
+// presence-check: needs a real sshfs mount to exercise — asserts the replacement guard exists.
 test('a stale mount is replaced rather than trusted', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tunnel.js'), 'utf8');
   assert.match(src, /if \(mountHealthy\(mountPoint\)\) return \{ mountPoint, mounted: false, reused: true \}/);
@@ -381,10 +383,26 @@ test('the agent and terminal path keeps the pty and the interactive shell', () =
   assert.match(args[args.length - 1], /exec "\$SHELL" -lic /);
 });
 
-test('deviceExec is bounded, so one stuck command cannot take the server', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tunnel.js'), 'utf8');
-  assert.match(src, /timeout: timeoutSec \* 1000/);
-  assert.match(src, /interactive: false/, 'and it uses the non-interactive shape');
+test('deviceExec is bounded, so one stuck command cannot take the server', async (t) => {
+  const probe = require('child_process').spawnSync('ssh', ['-V'], { encoding: 'utf8' });
+  if (probe.status !== 0) { t.skip('no ssh client on this machine'); return; }
+  // A port that accepts and never answers: ssh connects, waits for the SSH
+  // version banner that never comes, and deviceExec must give up rather than
+  // hang the synchronous dashboard call behind it.
+  const srv = net.createServer(() => {});
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  try {
+    const started = Date.now();
+    assert.throws(
+      () => tunnel.deviceExec({ label: 'stuck', port, localuser: 'me' }, '/tmp', 'true', [], { timeoutSec: 1 }),
+      /ssh to stuck failed/,
+      'a command that never returns must time out, not take the server'
+    );
+    assert.ok(Date.now() - started < 10000, `bounded: returned in ${Date.now() - started}ms, not minutes`);
+  } finally {
+    await new Promise(r => srv.close(r));
+  }
 });
 
 test('a plan worktree on a device gets its own path per feature', () => {
@@ -416,6 +434,7 @@ test('setAuthorizedKey replaces an entry, so old options do not survive', () => 
   } finally { process.env.HOME = prev; }
 });
 
+// presence-check: CLI UX text — asserting the warning is spoken, not the flow.
 test('registering as your own account warns what that grants', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'jonggrang.js'), 'utf8');
   assert.match(src, /run commands on this machine as \$\{localuser\} — your own account/);
@@ -531,6 +550,7 @@ test('ensureDeviceHooks restores a bundle whose hook was deleted', () => {
 // interactive means a tty, and a tty makes git page. The agent then reads half a
 // screen and spends a turn working out why.
 
+// presence-check: a shell hook — asserts the pager is disabled, not a live git run.
 test('the redirect disables the pager on the device', () => {
   const hook = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'device', 'redirect-bash.sh'), 'utf8');
   assert.match(hook, /GIT_PAGER=cat/);
@@ -546,6 +566,8 @@ test('the redirect disables the pager on the device', () => {
 // worker process anywhere.
 
 test('the already-running guard checks a live process, not a stored status', () => {
+  // presence-check: the liveness behaviour itself is tested behaviourally in
+  // test/orchestration-device-liveness.test.js (groupIsLive against a real pid).
   const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
   assert.match(src, /function groupIsLive/);
   assert.match(src, /process\.kill\(pid, 0\)/, 'liveness is asked of the OS');
@@ -554,6 +576,8 @@ test('the already-running guard checks a live process, not a stored status', () 
 });
 
 test('a snapshot with no live run reports interrupted, not running', () => {
+  // presence-check: reconcileSnapshot itself is tested behaviourally in
+  // test/orchestration-device-liveness.test.js.
   const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
   assert.match(src, /function reconcileSnapshot/);
   assert.match(src, /the dashboard restarted while this plan was running/,
@@ -568,6 +592,7 @@ test('a snapshot with no live run reports interrupted, not running', () => {
 // prices, with the run reporting `running`. When it finally gave up, the user was
 // told "worker exited with code 1".
 
+// presence-check: the watchdog loop lives inside a running worker — asserts the wiring exists.
 test('a device run is watched, with grace for a reconnect', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
   assert.match(src, /const DEVICE_WATCH_INTERVAL_MS/);
@@ -576,12 +601,14 @@ test('a device run is watched, with grace for a reconnect', () => {
   assert.match(src, /clearInterval\(group\.deviceWatch\)/, 'and it is cleared when the group ends');
 });
 
+// presence-check: runs a real worker to hit — asserts the annotation exists in the source.
 test('a run that died with the device says so, not just its exit code', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
   assert.match(src, /is offline — the tunnel dropped during this run/);
   assert.match(src, /worker exited \$\{code\}/, 'the exit code is kept, not hidden');
 });
 
+// presence-check: needs a live run whose child exits — asserts the close handler unmounts.
 test('the worktree mount is released when its run ends', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
   const close = src.slice(src.indexOf("child.on('close'"));
@@ -624,6 +651,7 @@ test('installing the wrapper puts it on the device, executable', () => {
   } finally { process.env.HOME = prev; }
 });
 
+// presence-check: a shell hook — asserts the rotation ceiling, not an actual 4MB log.
 test('the log rotates itself, so it cannot fill a laptop', () => {
   const body = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'device', 'audit-shell.sh'), 'utf8');
   assert.match(body, /4194304/, 'a size ceiling');
@@ -638,6 +666,7 @@ test('the log rotates itself, so it cannot fill a laptop', () => {
 // unreachable, which is the whole reason — so it is remembered on the server and
 // applied when the worktree is next reachable.
 
+// presence-check: the marker path/behaviour is also exercised by pty release tests; this pins the location.
 test('the interruption marker is kept server-side, not under the device symlink', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
   assert.match(src, /interruptionsPath = \(project\) => path\.join\(tunnel\.deviceBundleDir/,
@@ -645,6 +674,7 @@ test('the interruption marker is kept server-side, not under the device symlink'
   assert.match(src, /markDeviceInterruption\(project, group\.featureId, group\.error\)/);
 });
 
+// presence-check: applyDeviceInterruption runs against a reachable worktree — asserts it is wired.
 test('the note reaches the worktree on the next start, and the queue is cleaned', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
   assert.match(src, /if \(ctx\.mode === 'device'\) applyDeviceInterruption/);
@@ -655,6 +685,7 @@ test('the note reaches the worktree on the next start, and the queue is cleaned'
   assert.match(fn, /delete all\[featureId\]/, 'and the marker is cleared once applied');
 });
 
+// presence-check: watchdog cancel runs inside a live group — asserts the terminal-state line exists.
 test('a watchdog cancel leaves the run itself terminal too', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
   const watch = src.slice(src.indexOf('group.deviceWatch = setInterval'), src.indexOf('DEVICE_WATCH_INTERVAL_MS);'));
@@ -743,18 +774,21 @@ test('deviceFor hands back the id the paths depend on', () => {
   assert.match(tunnel.deviceWorktreePath(d, 'feat'), new RegExp(`/${r.device_id}/feat$`));
 });
 
+// presence-check: needs a real sshfs mount to exercise — asserts mountDevice polls after sshfs.
 test('mounting waits for the mount to answer, not for sshfs to fork', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tunnel.js'), 'utf8');
   assert.match(src, /mountHealthy\(mountPoint, 2\)/, 'polled after the sshfs call');
   assert.match(src, /was mounted but never became readable/, 'and it gives up loudly');
 });
 
+// presence-check: needs git + a real worktree — asserts worktree add adopts instead of -b.
 test('a worktree is adopted when its branch is still checked out', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
   assert.match(src, /hasBranch\n?\s*\? \['worktree', 'add', wt, branch\]/,
     'insisting on -b kills a re-run of any plan whose branch survived');
 });
 
+// presence-check: mount-before-read ordering in the start route — pty agent-start covers mount, this pins order.
 test('a device project is mounted before its state is read', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'apis', 'projects', 'orchestration-run.js'), 'utf8');
   assert.match(src, /function mountIfDevice/);

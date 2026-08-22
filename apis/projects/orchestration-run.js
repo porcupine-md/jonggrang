@@ -1485,6 +1485,11 @@ module.exports = function(deps) {
         }
     });
 
+    // Internal behaviours that unit tests exercise directly — same pattern as
+    // `deps.orchestrationRunView` above and `module.exports.ptyRelay` below.
+    // See test/orchestration-device-liveness.test.js.
+    deps.orchestrationRunTest = { reconcileSnapshot, groupIsLive, runActive };
+
     return router;
 };
 
