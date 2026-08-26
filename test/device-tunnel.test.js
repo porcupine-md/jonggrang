@@ -24,10 +24,19 @@ const tunnel = require('../lib/tunnel');
 const KEY_A = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA alice@mac';
 const KEY_B = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB bob@mac';
 
+// A device's key is how the server tells it apart, and it refuses to register the
+// same one twice — so a test that provisions more than one device asks for a key
+// of its own rather than reusing KEY_A or KEY_B.
+let keySeq = 0;
+function freshKey(comment = 'test@mac') {
+  const filler = String(keySeq++).padStart(4, '0');
+  return `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${filler}CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC ${comment}`;
+}
+
 // ── the registry ─────────────────────────────────────────────────
 
 test('provisioning reserves a port, a token, and an agent key', () => {
-  const r = tunnel.provisionDevice({ label: 'alice mac', pubkey: KEY_A, localuser: 'alice', workdir: '/Users/alice/app' });
+  const r = tunnel.provisionDevice({ label: 'alice mac', pubkey: freshKey(), localuser: 'alice', workdir: '/Users/alice/app' });
   assert.match(r.device_id, /^dev_alice-mac_[0-9a-f]{6}$/);
   assert.ok(r.port >= tunnel.PORT_MIN && r.port <= tunnel.PORT_MAX, 'port is inside the reserved range');
   assert.match(r.token, /^[0-9a-f]{48}$/);
@@ -35,8 +44,9 @@ test('provisioning reserves a port, a token, and an agent key', () => {
 });
 
 test('re-registering the same device keeps its port and token', () => {
-  const first = tunnel.provisionDevice({ label: 'stable', pubkey: KEY_A, localuser: 'alice' });
-  const again = tunnel.provisionDevice({ id: first.device_id, label: 'stable renamed', pubkey: KEY_A, localuser: 'alice' });
+  const key = freshKey('stable@mac');
+  const first = tunnel.provisionDevice({ label: 'stable', pubkey: key, localuser: 'alice' });
+  const again = tunnel.provisionDevice({ id: first.device_id, label: 'stable renamed', pubkey: key, localuser: 'alice' });
   assert.equal(again.device_id, first.device_id);
   assert.equal(again.port, first.port, 'the port a device was told to use must not move under it');
   assert.equal(again.token, first.token);
@@ -44,8 +54,8 @@ test('re-registering the same device keeps its port and token', () => {
 });
 
 test('a second device gets a different port', () => {
-  const a = tunnel.provisionDevice({ label: 'one', pubkey: KEY_A, localuser: 'alice' });
-  const b = tunnel.provisionDevice({ label: 'two', pubkey: KEY_B, localuser: 'bob' });
+  const a = tunnel.provisionDevice({ label: 'one', pubkey: freshKey(), localuser: 'alice' });
+  const b = tunnel.provisionDevice({ label: 'two', pubkey: freshKey(), localuser: 'bob' });
   assert.notEqual(a.port, b.port);
 });
 
@@ -62,10 +72,10 @@ test('reservePort skips ports already taken', () => {
 });
 
 test('removing a device frees its port for the next one', () => {
-  const doomed = tunnel.provisionDevice({ label: 'doomed', pubkey: KEY_B, localuser: 'bob' });
+  const doomed = tunnel.provisionDevice({ label: 'doomed', pubkey: freshKey(), localuser: 'bob' });
   assert.equal(tunnel.removeDevice(doomed.device_id).removed, true);
   assert.equal(tunnel.removeDevice(doomed.device_id), false, 'removing twice is not an error the caller must handle');
-  const next = tunnel.provisionDevice({ label: 'reuse', pubkey: KEY_B, localuser: 'bob' });
+  const next = tunnel.provisionDevice({ label: 'reuse', pubkey: freshKey(), localuser: 'bob' });
   assert.equal(next.port, doomed.port, 'the freed port is handed out again');
 });
 
@@ -75,7 +85,7 @@ test('removing a device frees its port for the next one', () => {
 // did. What is on the developer's own machine is reported, never deleted.
 
 test('removing a device says what stays on the device itself', () => {
-  const d = tunnel.provisionDevice({ label: 'leftovers', pubkey: KEY_B, localuser: 'bob' });
+  const d = tunnel.provisionDevice({ label: 'leftovers', pubkey: freshKey(), localuser: 'bob' });
   const result = tunnel.removeDevice(d.device_id);
   assert.deepEqual(result.unmounted, [], 'nothing was mounted, so nothing was released');
   assert.match(result.device_side.worktrees, new RegExp(`/tmp/jonggrang-worktrees/${d.device_id}$`));
@@ -84,7 +94,7 @@ test('removing a device says what stays on the device itself', () => {
 });
 
 test('deviceMountPoints matches by the port only that device uses', () => {
-  const d = tunnel.provisionDevice({ label: 'ports', pubkey: KEY_B, localuser: 'bob' });
+  const d = tunnel.provisionDevice({ label: 'ports', pubkey: freshKey(), localuser: 'bob' });
   // No sshfs is running for this invented port, so the answer must be empty
   // rather than every mount on the machine.
   assert.deepEqual(tunnel.deviceMountPoints({ ...d, port: 65432 }), []);
@@ -108,9 +118,11 @@ test('provisioning refuses anything that is not a public key', () => {
 // ── authorized_keys, both directions ─────────────────────────────
 
 test('a device key is authorized once, restricted to its own port', () => {
+  const key = freshKey('authz@mac');
+  tunnel.provisionDevice({ label: 'authz', pubkey: key, localuser: 'me' });
   const p = tunnel.authorizedKeysPath();
   const lines = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean);
-  const forA = lines.filter(l => tunnel.keyBody(l) === tunnel.keyBody(KEY_A));
+  const forA = lines.filter(l => tunnel.keyBody(l) === tunnel.keyBody(key));
   assert.equal(forA.length, 1, 'the same key must not be authorized twice');
   assert.match(forA[0], /^restrict,port-forwarding,permitlisten="localhost:\d+"/,
     'the key is confined to forwarding its own port');
@@ -122,8 +134,10 @@ test('a device key is authorized once, restricted to its own port', () => {
 });
 
 test('re-adding the same key with different options does not duplicate it', () => {
+  const key = freshKey('dup@mac');
+  tunnel.addAuthorizedKey(`restrict,permitlisten="localhost:9998" ${key}`);
   const before = fs.readFileSync(tunnel.authorizedKeysPath(), 'utf8').split('\n').filter(Boolean).length;
-  assert.equal(tunnel.addAuthorizedKey(`restrict,permitlisten="localhost:9999" ${KEY_A}`), false);
+  assert.equal(tunnel.addAuthorizedKey(`restrict,permitlisten="localhost:9999" ${key}`), false);
   const after = fs.readFileSync(tunnel.authorizedKeysPath(), 'utf8').split('\n').filter(Boolean).length;
   assert.equal(after, before);
 });
@@ -328,11 +342,12 @@ test('an unknown platform still says the commands run elsewhere', () => {
 });
 
 test('provisioning remembers the platform the device reported', () => {
-  const r = tunnel.provisionDevice({ label: 'plat', pubkey: KEY_A, localuser: 'me', platform: 'Darwin arm64' });
+  const key = freshKey('plat@mac');
+  const r = tunnel.provisionDevice({ label: 'plat', pubkey: key, localuser: 'me', platform: 'Darwin arm64' });
   const listed = tunnel.readRegistry().devices[r.device_id];
   assert.equal(listed.platform, 'Darwin arm64');
   // Re-registering without one must not forget it.
-  tunnel.provisionDevice({ id: r.device_id, label: 'plat', pubkey: KEY_A, localuser: 'me' });
+  tunnel.provisionDevice({ id: r.device_id, label: 'plat', pubkey: key, localuser: 'me' });
   assert.equal(tunnel.readRegistry().devices[r.device_id].platform, 'Darwin arm64');
 });
 
@@ -478,6 +493,61 @@ test('an empty state directory is replaced by the link without complaint', () =>
   const device = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-dev3-'));
   fs.mkdirSync(path.join(server, '.jonggrang'), { recursive: true });
   assert.equal(tunnel.linkProjectState({ path: server }, device).created, true);
+});
+
+// ── what a paste box is allowed to put in authorized_keys ────────
+//
+// The entry builders used to append `pubkey.trim()` verbatim. A key with a newline
+// in it became TWO lines: the first carrying the restrictions, the second carrying
+// whatever came after — an unrestricted key, if that is what was pasted. It needed
+// a shell here to reach; a form field needs only a paste.
+
+test('a key with a second line cannot become a second authorized_keys entry', () => {
+  const evil = `${KEY_B}\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEVILEVILEVILEVILEVILEVILEVILEVILEVILEVI attacker`;
+  for (const entry of [tunnel.tunnelKeyEntry(evil, 22001), tunnel.agentKeyEntry(evil, '/bin/true')]) {
+    assert.equal(entry.split('\n').length, 1, 'one entry is one line');
+    assert.equal(entry.includes('attacker'), false, 'the smuggled key is not carried along');
+  }
+});
+
+test('the entry keeps the key and drops the comment it arrived with', () => {
+  const entry = tunnel.tunnelKeyEntry(`${KEY_B} someone@somewhere`, 22005);
+  assert.match(entry, /permitlisten="localhost:22005"/);
+  assert.equal(entry.includes('someone@somewhere'), false, 'a comment is the user\'s text, and nothing needs it');
+});
+
+test('the entry builders refuse something that is not a key at all', () => {
+  assert.throws(() => tunnel.tunnelKeyEntry('hello', 22001), /not an ssh public key/);
+  assert.throws(() => tunnel.agentKeyEntry('hello', '/bin/true'), /not an ssh public key/);
+});
+
+test('assertSingleLine is the floor under any future writer', () => {
+  assert.throws(() => tunnel.assertSingleLine('a\nb'), /cannot span lines/);
+  assert.throws(() => tunnel.assertSingleLine('a\rb'), /cannot span lines/);
+  assert.doesNotThrow(() => tunnel.assertSingleLine('one line'));
+});
+
+test('validatePubkey says what is wrong, not just that something is', () => {
+  assert.match(tunnel.validatePubkey('').error, /Paste the device/);
+  assert.match(tunnel.validatePubkey('   ').error, /Paste the device/);
+  assert.match(tunnel.validatePubkey('-----BEGIN OPENSSH PRIVATE KEY-----').error, /PRIVATE key/);
+  assert.match(tunnel.validatePubkey(`${KEY_B}\n${KEY_B}`).error, /one key, not 2/);
+  assert.match(tunnel.validatePubkey('ssh-ed25519').error, /Not an ssh public key/);
+  assert.match(tunnel.validatePubkey('hello there').error, /Not an ssh public key/);
+});
+
+test('validatePubkey returns type and base64 only', () => {
+  const { body, error } = tunnel.validatePubkey(`  ${KEY_B} me@mac  `);
+  assert.equal(error, undefined);
+  assert.equal(body.split(' ').length, 2);
+  assert.equal(body, KEY_B.split(' ').slice(0, 2).join(' '));
+});
+
+test('keyFingerprint is the SHA256 form ssh itself prints', () => {
+  const fp = tunnel.keyFingerprint(KEY_B);
+  assert.match(fp, /^SHA256:[A-Za-z0-9+/]{43}$/, 'no padding, like ssh-keygen -l');
+  assert.equal(fp, tunnel.keyFingerprint(`${KEY_B} a-different-comment`), 'the comment is not part of the key');
+  assert.equal(tunnel.keyFingerprint('not a key'), '');
 });
 
 // ── the redirect bundle must be nobody else's file ───────────────
@@ -702,7 +772,7 @@ test('a watchdog cancel leaves the run itself terminal too', () => {
 // opened a session.
 
 test('a device gets its own server key, so rotating one cannot lock out others', () => {
-  const r = tunnel.provisionDevice({ label: 'rot', pubkey: KEY_A, localuser: 'me' });
+  const r = tunnel.provisionDevice({ label: 'rot', pubkey: freshKey(), localuser: 'me' });
   assert.equal(tunnel.serverKeyFor(tunnel.deviceFor(r.device_id)), tunnel.serverKeyPath(),
     'until it rotates, it keeps using the shared key — existing registrations are unaffected');
 
@@ -714,8 +784,8 @@ test('a device gets its own server key, so rotating one cannot lock out others',
 });
 
 test('rotating one device leaves another device alone', () => {
-  const a = tunnel.provisionDevice({ label: 'rot-a', pubkey: KEY_A, localuser: 'me' });
-  const b = tunnel.provisionDevice({ label: 'rot-b', pubkey: KEY_B, localuser: 'you' });
+  const a = tunnel.provisionDevice({ label: 'rot-a', pubkey: freshKey(), localuser: 'me' });
+  const b = tunnel.provisionDevice({ label: 'rot-b', pubkey: freshKey(), localuser: 'you' });
   tunnel.rotateDeviceKey(a.device_id);
   assert.notEqual(tunnel.serverKeyFor(tunnel.deviceFor(a.device_id)), tunnel.serverKeyFor(tunnel.deviceFor(b.device_id)));
 });
@@ -768,7 +838,7 @@ test('a worktree path is keyed by device id, not by its label', () => {
 });
 
 test('deviceFor hands back the id the paths depend on', () => {
-  const r = tunnel.provisionDevice({ label: 'ided', pubkey: KEY_A, localuser: 'me' });
+  const r = tunnel.provisionDevice({ label: 'ided', pubkey: freshKey(), localuser: 'me' });
   const d = tunnel.deviceFor(r.device_id);
   assert.equal(d.id, r.device_id, 'the registry is keyed by id, so the entry must carry it');
   assert.match(tunnel.deviceWorktreePath(d, 'feat'), new RegExp(`/${r.device_id}/feat$`));
