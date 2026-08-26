@@ -510,6 +510,64 @@ this device to its server.
 }
 ```
 
+### Registering: over ssh, or by pasting a key
+
+Two routes to the same registry entry.
+
+**From the device, over ssh** — `jonggrang device register --server <sshhost>`. It
+runs `jonggrang device provision` on the server over ssh and finishes locally. It
+needs an ssh credential on the server *and* jonggrang on that host's
+non-interactive PATH (hence `--remote-jonggrang <path>` when it is not).
+
+**From the dashboard, by pasting the device's public key** — needs neither. The
+tunnel is opened with the *device's* key, so a credential on the server was never
+required for the tunnel itself, only for the registration call:
+
+```bash
+jonggrang device key            # on the device: prints its tunnel public key
+```
+
+Paste that into **Settings → Devices → Add device**, give it a name, the account
+the agent should enter as, and how that machine reaches this server over ssh. The
+dashboard reserves a port and hands back one code:
+
+```bash
+jonggrang device adopt jg1_…    # on the device: trusts the server's key, saves device.json
+jonggrang tunnel up
+```
+
+The code is base64url JSON — server, device id, port, token, and the server's
+public key. Not a secret; it is what the device needs in order to let that server
+back in. `device adopt` prints the key's fingerprint before trusting it, and the
+wizard shows the same fingerprint, so the two can be compared.
+
+`POST /api/devices` is the endpoint behind the wizard:
+
+```jsonc
+POST /api/devices
+{
+  "pubkey": "ssh-ed25519 AAAAC3Nz… you@your-machine",
+  "label": "my-laptop",
+  "localuser": "me",                  // required: who the agent enters as
+  "workdir": "/Users/me/app",         // optional default project directory
+  "ssh_host": "me@jonggrang.example"  // how the DEVICE reaches this server
+}
+→ 201 { device_id, port, code, command, server_pubkey, server_fingerprint, device_fingerprint }
+```
+
+What it will not accept, each with a message rather than a file write: more than
+one key (`authorized_keys` is line-based, so a second line would be a second key —
+and until this was closed, an unrestricted one), a private key, anything that is
+not a key, or a missing account.
+
+**One key, one device.** The restriction that confines a device to its own port
+lives on its `authorized_keys` line, and that file is keyed by the key — so a
+second device sharing a key would get no line of its own and be refused by
+`permitlisten` later, or land on the first device's port. Registering a key that
+another device already has answers `409 PUBKEY_IN_USE` and names the device that
+has it. Re-registering the *same* device with its own key is fine, and keeps its
+port and token.
+
 ### `~/.jonggrang/web/devices.json` — on the server
 
 The registry. One reserved port per device, in `22000-22999`; a device keeps its

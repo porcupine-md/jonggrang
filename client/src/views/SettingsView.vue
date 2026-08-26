@@ -114,7 +114,7 @@
     <!-- Local devices (reverse tunnel) -->
     <div class="settings-card">
       <div class="card-title"><i class="pi pi-desktop" /> Local Devices</div>
-      <p class="hint">Machines that run their own code while the agent runs here, reached over a reverse SSH tunnel. Register from the machine itself — <code>jonggrang device register --server &lt;this-host&gt;</code> — then <code>jonggrang tunnel up</code>. Each device gets one reserved port on this server's loopback; <strong>online</strong> means that port is listening right now.</p>
+      <p class="hint">Machines that run their own code while the agent runs here, reached over a reverse SSH tunnel. Add one below — you paste the machine's public key and it needs no login on this server — or, from a machine that already has ssh here, run <code>jonggrang device register --server &lt;this-host&gt;</code>. Either way it ends with <code>jonggrang tunnel up</code>. Each device gets one reserved port on this server's loopback; <strong>online</strong> means that port is listening right now.</p>
 
       <div v-if="devErr" class="error-text"><i class="pi pi-times-circle" /> {{ devErr }}</div>
       <div v-else-if="!devices.length" class="hint">No devices registered yet.</div>
@@ -138,8 +138,16 @@
       </div>
 
       <div class="ssh-actions">
+        <Button :disabled="devBusy" icon="pi pi-plus" label="Add device" @click="showDeviceWizard = true" />
         <Button severity="secondary" :disabled="devBusy" @click="loadDevices" :icon="devBusy ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'" label="Refresh" />
       </div>
+
+      <DeviceWizard
+        :visible="showDeviceWizard"
+        :ssh-host-default="sshHostDefault"
+        @registered="loadDevices"
+        @close="showDeviceWizard = false"
+      />
     </div>
 
     <!-- Git SSH Key (global) -->
@@ -270,6 +278,7 @@ import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import SelectButton from 'primevue/selectbutton';
 import ProviderIcon from '../components/ProviderIcon.vue';
+import DeviceWizard from '../components/app/DeviceWizard.vue';
 import { useWorkspaceStore } from '../stores/workspace.js';
 import { useTheme } from '../composables/useTheme.js';
 
@@ -277,6 +286,10 @@ const workspace = useWorkspaceStore();
 
 // ── Local devices (reverse tunnel) ──────────────────────────────
 const devices = ref([]);
+const showDeviceWizard = ref(false);
+// What this server guesses a device would put in `ssh -R … <host>`. A guess is all
+// it can be — this host cannot know which of its names resolves from a laptop.
+const sshHostDefault = ref('');
 const agentKey = ref('');
 const devErr = ref('');
 const devBusy = ref(false);
@@ -289,6 +302,7 @@ async function loadDevices() {
     if (!res.ok) throw new Error(`devices: HTTP ${res.status}`);
     const data = await res.json();
     devices.value = data.devices || [];
+    sshHostDefault.value = data.ssh_host_default || '';
     // 404 here just means no device has registered yet, which the empty list
     // already says — don't turn it into an error the user has to read.
     const keyRes = await fetch('/api/devices/agent-key');

@@ -3196,7 +3196,7 @@ function parseFlags(args, valueFlags) {
   return { flags, positional };
 }
 
-const DEVICE_VALUE_FLAGS = new Set(['server', 'user', 'localuser', 'path', 'workdir', 'label', 'id', 'pubkey', 'ssh-opt', 'remote-jonggrang', 'platform']);
+const DEVICE_VALUE_FLAGS = new Set(['server', 'user', 'localuser', 'path', 'workdir', 'label', 'id', 'pubkey', 'ssh-opt', 'remote-jonggrang', 'platform', 'port', 'token', 'server-key']);
 
 async function cmdDevice(args) {
   const tunnel = require('../lib/tunnel');
@@ -3206,6 +3206,8 @@ async function cmdDevice(args) {
   switch (sub) {
     case 'register': return deviceRegister(tunnel, flags);
     case 'rotate': return deviceRegister(tunnel, { ...flags, rotate: true });
+    case 'key': return deviceKey(tunnel, flags);
+    case 'adopt': return deviceAdopt(tunnel, flags, args[1]);
     case 'provision': return deviceProvision(tunnel, flags);
     case 'list': return deviceList(tunnel, flags);
     case 'remove': return deviceRemove(tunnel, args[1]);
@@ -3216,6 +3218,10 @@ async function cmdDevice(args) {
     jonggrang device rotate                        # new server key for this device; the old one stops working
                               [--remote-jonggrang <cmd>]  # if the server's jonggrang is not on the ssh PATH
     jonggrang tunnel up | status | down
+
+  Without ssh from here to the server — pair with the dashboard instead:
+    jonggrang device key                           # print this machine's key, paste it into Settings → Devices
+    jonggrang device adopt <code>                  # finish with the code the wizard gives back
 
   On the jonggrang server:
     jonggrang device list [--json]
@@ -3299,7 +3305,19 @@ async function deviceRegister(tunnel, flags) {
     return 1;
   }
   logSuccess(`Server reserved port ${reg.port} for ${reg.device_id}`);
+  return trustServerAndSave(tunnel, { server, reg, localuser, workdir, label, existing, keyPath: key.path });
+}
 
+/**
+ * The half of registration that happens ON THE DEVICE: trust the server's key,
+ * revoke the one it replaces, and remember what we were told.
+ *
+ * `device register` reaches here after asking the server over ssh. `device adopt`
+ * reaches here with the same answer, carried by hand from the dashboard — the ssh
+ * call is the only difference between them, so everything after it is shared and
+ * cannot drift apart.
+ */
+async function trustServerAndSave(tunnel, { server, reg, localuser, workdir, label, existing, keyPath }) {
   // Inbound trust: the agent enters through the tunnel as this user. set, not
   // add, so a device registered before the restrictions existed picks them up.
   // Record what the server runs here, on this machine, before it runs.
@@ -3333,11 +3351,14 @@ async function deviceRegister(tunnel, flags) {
     logInfo(`then re-register with --user <that-account>. See docs/CONFIG.md.`);
   }
 
+  logInfo(`Server key fingerprint: ${tunnel.keyFingerprint(reg.server_pubkey)}`);
+  logInfo(`Compare it with what ${server} shows before trusting it.`);
+
   tunnel.writeDeviceConfig({
     device_id: reg.device_id,
     server,
     port: reg.port,
-    key_path: key.path,
+    key_path: keyPath,
     token: reg.token,
     localuser,
     workdir,
@@ -3358,6 +3379,110 @@ async function deviceRegister(tunnel, flags) {
   console.log('');
   logInfo('Next: jonggrang tunnel up');
   return 0;
+}
+
+// Run ON THE DEVICE. Prints this machine's tunnel key, making it on first use.
+// One line on stdout so it can be piped, copied, or pasted into the dashboard —
+// which is the whole point: the wizard needs this key and cannot come and get it.
+function deviceKey(tunnel, flags) {
+  const key = tunnel.ensureDeviceKey();
+  if (flags.json) {
+    console.log(JSON.stringify({ path: key.path, pubkey: key.pub, fingerprint: tunnel.keyFingerprint(key.pub) }));
+    return 0;
+  }
+  console.log(key.pub);
+  if (process.stdout.isTTY) {
+    process.stderr.write(`\n${tunnel.keyFingerprint(key.pub)}\nPaste the line above into the dashboard: Settings → Devices → Add device.\n`);
+  }
+  return 0;
+}
+
+/**
+ * Run ON THE DEVICE, to finish what the dashboard started.
+ *
+ * `device register` needs ssh from here to the server, and jonggrang on that
+ * host's non-interactive PATH — two things that are often not true on a laptop
+ * behind a NAT with a server it only reaches through a browser. The wizard does
+ * the server half in the browser and hands back one code; this consumes it.
+ *
+ * The code is not a secret handed to a stranger: it names the server, the port it
+ * reserved, and the key it will come back in with. Which is exactly why this
+ * prints that key's fingerprint — the user is trusting a key, and should see it.
+ */
+async function deviceAdopt(tunnel, flags, positional) {
+  const code = positional && !positional.startsWith('--') ? positional : null;
+  let payload = null;
+
+  if (code) {
+    payload = decodeAdoptCode(code);
+    if (!payload) {
+      logError('device adopt: that code is not readable — copy the whole thing from the dashboard.');
+      return 1;
+    }
+  } else {
+    payload = {
+      server: flags.server,
+      device_id: flags.id,
+      port: flags.port,
+      token: flags.token,
+      server_pubkey: flags['server-key'],
+      localuser: flags.user || flags.localuser,
+      workdir: flags.path || flags.workdir,
+      label: flags.label,
+    };
+  }
+
+  const missing = ['server', 'device_id', 'port', 'token', 'server_pubkey'].filter(k => !payload[k]);
+  if (missing.length) {
+    logError(`device adopt: the code is missing ${missing.join(', ')}`);
+    logInfo('Get it from the dashboard: Settings → Devices → Add device.');
+    return 1;
+  }
+  if (!tunnel.validatePubkey(payload.server_pubkey).body) {
+    logError(`device adopt: ${tunnel.validatePubkey(payload.server_pubkey).error}`);
+    return 1;
+  }
+
+  const localuser = payload.localuser || os.userInfo().username;
+  const workdir = payload.workdir || process.cwd();
+  const label = payload.label || os.hostname();
+  const existing = tunnel.readDeviceConfig();
+
+  logHeader('Finish registering this machine as a jonggrang device');
+
+  // The key this machine will use to open the tunnel. The server already has its
+  // public half — that is what was pasted into the wizard — so this must find the
+  // same key, not make a new one.
+  const key = tunnel.ensureDeviceKey();
+  logInfo(`Tunnel key: ${key.path} (${tunnel.keyFingerprint(key.pub)})`);
+  logInfo(`The server was given this key's public half; if it was a different one, the tunnel will be refused.`);
+
+  return trustServerAndSave(tunnel, {
+    server: payload.server,
+    reg: {
+      device_id: payload.device_id,
+      port: Number(payload.port),
+      token: payload.token,
+      server_pubkey: payload.server_pubkey,
+    },
+    localuser, workdir, label, existing, keyPath: key.path,
+  });
+}
+
+/**
+ * The wizard's code is base64url JSON behind a version tag: one thing to copy,
+ * and nothing to mistype into a half-registration. Tagged so a future format can
+ * be told apart from this one instead of being mis-parsed as it.
+ */
+function decodeAdoptCode(code) {
+  const raw = String(code).trim();
+  const body = raw.startsWith('jg1_') ? raw.slice(4) : null;
+  if (!body) return null;
+  try {
+    const json = Buffer.from(body.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    const parsed = JSON.parse(json);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch { return null; }
 }
 
 function deviceList(tunnel, flags) {
