@@ -3336,7 +3336,7 @@ async function trustServerAndSave(tunnel, { server, reg, localuser, workdir, lab
   const revoked = tunnel.revokeOtherAgentKeys(reg.server_pubkey);
   logInfo(`Server key ${replaced ? 'updated in' : 'added to'} ${tunnel.authorizedKeysPath()} (restrict,pty + audit)`);
   if (revoked > 0) {
-    logSuccess(`Revoked ${revoked} older jonggrang server key${revoked === 1 ? '' : 's'} — ${revoked === 1 ? 'it' : 'they'} no longer work here.`);
+    logSuccess(`Revoked ${revoked} older jonggrang server key${revoked === 1 ? '' : 's'} — ${revoked === 1 ? 'it no longer works' : 'they no longer work'} here.`);
   } else if (reg.rotated) {
     logInfo('No older server keys were present to revoke.');
   }
@@ -3511,7 +3511,9 @@ function deviceRemove(tunnel, id) {
   if (!result) { logWarn(`No such device: ${id}`); return 1; }
   logSuccess(`Removed ${id}`);
   for (const point of result.unmounted || []) logInfo(`Unmounted ${point}`);
-  logInfo(`Its key stays in ${tunnel.authorizedKeysPath()} — remove that line by hand if the device is gone for good.`);
+  if (result.tunnel_key_revoked) {
+    logInfo(`Revoked its tunnel key from ${tunnel.authorizedKeysPath()} — its port stops answering when its ssh client next drops.`);
+  }
   // Deleting files on somebody's own machine is not this command's business, so
   // say where they are instead of guessing that they are unwanted.
   const left = result.device_side || {};

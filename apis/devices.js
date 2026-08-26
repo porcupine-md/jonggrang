@@ -136,6 +136,7 @@ module.exports = function register(app, io, _ctx) {
         // The mounts this server let go of, and what only the developer can
         // remove from their own machine.
         unmounted: result.unmounted,
+        tunnel_key_revoked: result.tunnel_key_revoked,
         device_side: result.device_side,
       });
     } catch (err) {

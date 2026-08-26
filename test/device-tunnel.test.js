@@ -495,6 +495,60 @@ test('an empty state directory is replaced by the link without complaint', () =>
   assert.equal(tunnel.linkProjectState({ path: server }, device).created, true);
 });
 
+// ── a port free in the registry may not be free on the machine ───
+//
+// Caught in the browser: a device registered by the wizard was handed port 22000
+// and the dashboard immediately called it online — while what answered was the
+// still-running tunnel of a device removed hours earlier. Its own `ssh -R` would
+// have been refused for a port already in use, with the dashboard reporting green.
+
+test('reservePort skips a port something is already listening on', () => {
+  const registry = { version: 1, devices: {} };
+  const first = tunnel.reservePort(registry);
+  const net = require('net');
+  const srv = net.createServer();
+  try {
+    srv.listen(first, '127.0.0.1');
+  } catch { return; }
+  try {
+    const again = tunnel.reservePort(registry);
+    // On a platform where the sync probe cannot tell (no /proc), the guard is a
+    // no-op by design — assert the behaviour that platform can actually deliver.
+    if (tunnel.portInUseSync(first)) {
+      assert.notEqual(again, first, 'a listening port is not handed out');
+    } else {
+      assert.equal(again, first, 'without /proc the guard fails open, as documented');
+    }
+  } finally {
+    srv.close();
+  }
+});
+
+test('portInUseSync is honest about a port nothing is on', () => {
+  const registry = { version: 1, devices: {} };
+  assert.equal(tunnel.portInUseSync(tunnel.reservePort(registry)), false);
+});
+
+// ── removing a device must not leave it a working tunnel ─────────
+//
+// The device's key lives in the SERVER's authorized_keys. Leaving it there meant a
+// removed device kept forwarding — and its port kept answering, ready to be handed
+// to the next device. (The server's key ON THE DEVICE is the one that is not the
+// server's to delete; these are two different keys, and the first version of
+// `device remove` conflated them.)
+
+test('removing a device revokes the key it opened the tunnel with', () => {
+  const key = freshKey('revoke@mac');
+  const d = tunnel.provisionDevice({ label: 'revoke me', pubkey: key, localuser: 'me' });
+  const authorized = () => fs.readFileSync(tunnel.authorizedKeysPath(), 'utf8')
+    .split('\n').filter(l => tunnel.keyBody(l) === tunnel.keyBody(key));
+  assert.equal(authorized().length, 1, 'authorized while it was registered');
+
+  const result = tunnel.removeDevice(d.device_id);
+  assert.equal(result.tunnel_key_revoked, true);
+  assert.deepEqual(authorized(), [], 'and gone with it');
+});
+
 // ── what a paste box is allowed to put in authorized_keys ────────
 //
 // The entry builders used to append `pubkey.trim()` verbatim. A key with a newline

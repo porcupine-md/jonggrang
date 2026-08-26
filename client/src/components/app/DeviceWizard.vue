@@ -145,8 +145,11 @@ let poll = null;
 function toDetails() {
   error.value = '';
   const comment = pubkey.value.trim().split(/\s+/)[2] || '';
+  // Two comment shapes worth reading: `user@host`, and the one `jonggrang device
+  // key` writes for itself — which names the machine but not the account.
   const [user, host] = comment.includes('@') ? comment.split('@') : ['', ''];
-  if (!label.value) label.value = host || '';
+  const named = comment.startsWith('jonggrang-device-') ? comment.slice('jonggrang-device-'.length) : '';
+  if (!label.value) label.value = host || named || '';
   if (!localuser.value) localuser.value = user || '';
   if (!sshHost.value) sshHost.value = props.sshHostDefault || '';
   step.value = 2;
