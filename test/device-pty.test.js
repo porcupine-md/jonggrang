@@ -48,7 +48,6 @@ require.cache[nodePtyPath] = { exports: ptyStub, id: nodePtyPath, filename: node
 const tunnel = require('../lib/tunnel');
 const registerPty = require('../apis/projects/pty');
 
-const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA pty-test@mac';
 
 let server, base, app, router;
 let livePort; // a port that answers — stands in for a device whose tunnel is up
@@ -63,9 +62,16 @@ function registerProject(id, deviceId, workdir) {
     device: { enabled: true, device_id: deviceId, workdir },
   };
 }
+// Each device needs a key of its own — the server refuses a shared one, because the
+// port restriction lives on the authorized_keys line and that file is keyed by the
+// key. These tests provision several devices, so each gets a distinguishable one.
+let keySeq = 0;
+function freshKey() {
+  return `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${String(keySeq++).padStart(4, '0')}DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD pty-test@mac`;
+}
 function provision(label, opts = {}) {
   // platform is recorded so devicePlatform() never probes the port with a real ssh.
-  return tunnel.provisionDevice({ label, pubkey: KEY, localuser: 'me', workdir: '/tmp/dev-app', platform: 'Darwin arm64', ...opts });
+  return tunnel.provisionDevice({ label, pubkey: freshKey(), localuser: 'me', workdir: '/tmp/dev-app', platform: 'Darwin arm64', ...opts });
 }
 function setPort(deviceId, port) {
   const reg = tunnel.readRegistry();
