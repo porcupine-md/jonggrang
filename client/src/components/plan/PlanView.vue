@@ -560,9 +560,12 @@ const genError = ref('');
 // Maps the server command kind → the matching local flag.
 function restorePlanProcessState(info) {
   const command = info?.command;
-  if (command === 'plan' || command === 'plan-extend') generating.value = true;
-  else if (command === 'plan-revise') revising.value = true;
-  else if (command === 'approve') approving.value = true;
+  // Both directions. This only ever set flags, so when the store went back to
+  // idle the watcher fired with null and cleared nothing — a spinner restored
+  // from a snapshot stayed on screen for the rest of the session.
+  generating.value = command === 'plan' || command === 'plan-extend';
+  revising.value = command === 'plan-revise';
+  approving.value = command === 'approve';
 }
 
 // Populate the QA form state from a questions payload (goal + question list).

@@ -122,7 +122,16 @@ module.exports = function register(app, io, ctx) {
         };
         child.stdout.on('data', onData('stdout'));
         child.stderr.on('data', onData('stderr'));
-        child.on('close', (code, signal) => {
+
+        // 'close' waits for the stdio pipes to close, and a grandchild holding one
+        // open keeps it from ever firing — the dashboard then never hears that the
+        // run ended and shows "generating" forever. 'exit' fires when the process
+        // itself ends. Take whichever comes first, once: 'close' preferred, because
+        // it can still flush a trailing partial line, and 'exit' as the floor.
+        let ended = false;
+        const onEnd = (code, signal) => {
+            if (ended) return;
+            ended = true;
             // Flush any trailing partial line (output not terminated by a newline).
             for (const stream of ['stdout', 'stderr']) {
                 if (buffers[stream]) { handleLine(stream, buffers[stream].replace(/\r$/, '')); buffers[stream] = ''; }
@@ -137,7 +146,9 @@ module.exports = function register(app, io, ctx) {
             } catch (err) {
                 console.error('deriveState error after process exit:', err);
             }
-        });
+        };
+        child.on('close', onEnd);
+        child.on('exit', onEnd);
     }
 
     function startProjectWatcher(project) {
@@ -223,7 +234,16 @@ module.exports = function register(app, io, ctx) {
                     planMtime = fs.statSync(planPath).mtimeMs;
                 }
                 const running = activeWork.has(project_id);
-                const planEntry = activePlan.get(project_id);
+                // A plan entry whose child has already exited is a leftover, not a
+                // running op: reporting it made every page load restore the
+                // "generating" spinner, and the phantom row it drew swallowed the
+                // plan list's selection so the finished draft could not be opened.
+                // Drop it here — the read is the one place every stale entry passes.
+                let planEntry = activePlan.get(project_id);
+                if (planEntry && planEntry.child && (planEntry.child.exitCode !== null || planEntry.child.signalCode)) {
+                    activePlan.delete(project_id);
+                    planEntry = null;
+                }
                 // process precedence: work wins if somehow both, then a running
                 // plan-family op reports its stored command kind, else null.
                 let process = null;
@@ -333,7 +353,13 @@ module.exports = function register(app, io, ctx) {
 
     // ── Cleanup ───────────────────────────────────────────────────
 
-    return function cleanup() {
+    // The internals, reachable for tests. The process lifecycle here is glue with
+    // two branches that a live dashboard already got wrong once, and nothing else
+    // in the module is exported to hang a test on.
+    cleanup.deps = deps;
+    return cleanup;
+
+    function cleanup() {
         for (const [, child] of activeWork) {
             if (!child.killed) try { child.kill('SIGKILL'); } catch {}
         }
@@ -350,5 +376,5 @@ module.exports = function register(app, io, ctx) {
             try { w.close(); } catch {}
         }
         try { codeServerRouter._cleanup?.(); } catch {}
-    };
+    }
 };
