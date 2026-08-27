@@ -2,6 +2,7 @@
 
 const { Router } = require('express');
 const sandbox = require('../../lib/sandbox');
+const tunnel = require('../../lib/tunnel');
 const lib = require('../../lib/jonggrang');
 
 module.exports = function(deps) {
@@ -67,8 +68,18 @@ module.exports = function(deps) {
         if (!name || !source) {
             return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'name and source required' } });
         }
-        if (!['git', 'local', 'fresh'].includes(source.type)) {
-            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'source.type must be git|local|fresh' } });
+        if (!['git', 'local', 'fresh', 'device'].includes(source.type)) {
+            return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'source.type must be git|local|fresh|device' } });
+        }
+        // A device project's code lives on the developer's machine and is never
+        // copied here; the server only needs to know which device and where.
+        if (source.type === 'device') {
+            if (!source.device_id || !source.path) {
+                return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'a device source needs device_id and path' } });
+            }
+            if (!tunnel.deviceFor(source.device_id)) {
+                return res.status(404).json({ error: { code: 'DEVICE_NOT_FOUND', message: `No registered device ${source.device_id}` } });
+            }
         }
 
         const path = deps.path;
@@ -99,11 +110,20 @@ module.exports = function(deps) {
 
         const id = webState.generateId('proj');
         const now = new Date().toISOString();
+        // The server-side path holds jonggrang's own state (plans, tasks). For a
+        // device project the CODE is elsewhere — device.workdir — and execution
+        // goes through the tunnel. Two locations on purpose: agent brain here,
+        // source of truth on the device.
+        const devicePatch = source.type === 'device'
+            ? { device: { enabled: true, device_id: source.device_id, workdir: source.path } }
+            : {};
+
         webState.createProject({
             id,
             name,
             path: targetPath,
             source,
+            ...devicePatch,
             init_status: 'importing',
             lanes: { main: { id: 'main', path: targetPath, branch: 'main', is_main: true } },
             created_at: now,
@@ -123,9 +143,32 @@ module.exports = function(deps) {
                 } else if (source.type === 'fresh') {
                     fs.mkdirSync(targetPath, { recursive: true });
                     if (source.git_init !== false) await runGitInit(targetPath);
+                } else if (source.type === 'device') {
+                    // Nothing to fetch: the code stays on the device. This
+                    // directory only ever holds jonggrang's state for it — plus
+                    // the server-side redirect bundle, which sends the agent's
+                    // Bash to the device instead of running it here.
+                    fs.mkdirSync(targetPath, { recursive: true });
+                    emit('prepare', 'Installing the device redirect hook...');
+                    tunnel.installDeviceHooks(targetPath, deps.JONGGRANG_HOME);
+                    // Point this side's .jonggrang at the device's, so plans and
+                    // tasks live with the code they describe. The link may dangle
+                    // until the tunnel is up — that reads as "not there yet",
+                    // which is true.
+                    emit('prepare', 'Linking project state to the device...');
+                    try {
+                        const device = tunnel.deviceFor(source.device_id);
+                        if (device) tunnel.mountDevice(device, source.path);
+                    } catch { /* the first spawn will mount it */ }
+                    tunnel.linkProjectState({ path: targetPath }, source.path);
                 }
 
                 const detected = webState.detectStack(targetPath);
+                // A device project needs initialising like any other — just on the
+                // device side, where its state lives. Marking it `ready` on import
+                // (an earlier shortcut of mine) skipped that, and the planner then
+                // refused with "Project not initialized" against an empty
+                // directory. `imported` is the truth; Initialize runs in the mount.
                 webState.updateProject(id, { init_status: 'imported' });
                 io.to(`project:${id}`).emit('import.done', { project_id: id, detected });
                 startProjectWatcher(webState.getProject(id));
@@ -159,11 +202,37 @@ module.exports = function(deps) {
         // root user) so plain host fs.rmSync EACCESes — purgeProjectFiles clears
         // them via a throwaway container, then removes the empty dirs.
         try {
-            sandbox.purgeProjectFiles(project, { deleteRepo: req.query.delete_files === 'true' });
+            // For a device project, project.path is not the repo — the repo is on
+            // the device and stays there. What sits here is scaffolding this server
+            // wrote: the redirect bundle and a symlink into the mount. It goes with
+            // the project, `delete_files` or not, because keeping it would leave a
+            // directory of dangling links behind every deleted device project.
+            const deleteRepo = req.query.delete_files === 'true' || Boolean(project.device?.enabled);
+            sandbox.purgeProjectFiles(project, { deleteRepo });
         } catch (err) {
             console.error('purgeProjectFiles error during project deletion:', err);
         }
         try { sandbox.removeProjectSshKey(project.id); } catch {}
+
+        // A device project's code is not ours to delete — it is the developer's
+        // machine — but the mount of it is this server's, and it outlived the
+        // project: left behind it answers EIO once the tunnel goes, and it keeps
+        // the path occupied against the next import of the same directory.
+        if (project.device?.enabled) {
+            try {
+                // Unless a sibling project points at the same directory on the
+                // same device — two projects share one mount, and pulling it out
+                // from under a run that is still using it is worse than leaving it.
+                const shared = webState.listProjects().some(p => p.id !== project.id
+                    && p.device?.enabled
+                    && p.device.device_id === project.device.device_id
+                    && p.device.workdir === project.device.workdir);
+                const device = tunnel.deviceFor(project.device.device_id);
+                if (device && !shared) tunnel.unmountDevice(device, project.device.workdir);
+            } catch (err) {
+                console.error('device unmount during project deletion:', err.message);
+            }
+        }
 
         webState.deleteProject(project.id);
         res.status(204).send();

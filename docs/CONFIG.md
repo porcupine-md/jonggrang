@@ -302,7 +302,14 @@ Example:
 
 Task board state file used by the **work loop**. Tasks and progress are **per-feature**, colocated with the feature's `plan.md` and `MANIFEST.yaml`. There is no global/root tasks file — each feature owns its own `jonggrang-tasks.json`.
 
-Task IDs are **globally unique** across all features (so `jonggrang task done task-005` resolves to one task without a `--feature` flag). The CLI scans all feature files via `getAllTasks()` to continue numbering and resolve task-id commands.
+Task IDs are numbered **per feature**, each plan starting again at `task-001`, so a bare id can exist in several plans at once. Task-id commands (`show`, `update`, `done`, `block`, `remove`) resolve it in this order:
+
+1. an explicit `--feature <feature-id>`;
+2. `JONGGRANG_FEATURE_ID`, if set;
+3. the feature recorded in `.jonggrang/.ephemeral/active-feature` — written by a run so the agent's own `jonggrang task …` calls hit the plan being executed, and read from the worktree, which is the one thing the server and a device both see;
+4. the most recently updated plan with a live `MANIFEST.yaml` — a guess, and the reason the three above exist.
+
+An id unique across all plans resolves on its own, as it always did.
 
 ```json
 {
@@ -398,6 +405,7 @@ Persistent orchestration state for a feature run. Located at:
 | `JONGGRANG_PROJECT_ROOT` | Explicit project root for hook resolution | `process.cwd()` |
 | `JONGGRANG_DESIGN_HOME` | Design-template store location (see [DESIGN.md](DESIGN.md)) | `~/.jonggrang/design` |
 | `JONGGRANG_AGENT_IMAGE` | Agent image for the Design studio sandbox container | `ghcr.io/porcupine-md/jonggrang-agent:dev` |
+| `JONGGRANG_REMOTE_BIN` | Command that runs jonggrang **on the server** during `device register` (a non-interactive ssh session may not have it on PATH) | `jonggrang` |
 | `JONGGRANG_HOOKS_DIR` | Path to hooks/ directory | auto-resolved |
 | `JONGGRANG_COMPACTION_THRESHOLD` | Override block threshold (0-1) | 0.85 |
 | `JONGGRANG_WEB_PORT` | `jonggrang web` dashboard port (also `--port`) | `7777` |
@@ -474,3 +482,258 @@ Endpoints (all global): `GET/PUT /api/storage/config`, `POST /api/storage/test`,
 An upload returns a shareable link: the `publicUrl` base when set, else a 7-day presigned
 GET URL. **Plan mode** inserts the link into the description textbox; the **Design studio**
 types it into the running TUI.
+
+---
+
+## Local-sandbox devices
+
+The agent runs on a jonggrang **server**; the code stays on the developer's
+**device**; a reverse SSH tunnel lets the server reach back in. See
+[the design](plans/2026-07-07-local-sandbox-remote-agent.md). Two state files,
+one per side.
+
+### `~/.jonggrang/device.json` — on the device
+
+Written by `jonggrang device register`. Not secret-free: the token identifies
+this device to its server.
+
+```jsonc
+{
+  "device_id": "dev_my-laptop_a1b2c3",
+  "server": "ibnu@jonggrang.example",   // ssh destination, as you would type it
+  "port": 22000,                        // reserved on the SERVER's loopback
+  "token": "…",
+  "key_path": "/home/me/.jonggrang/device.key",  // the key the tunnel must use
+  "localuser": "me",                    // who the agent enters as
+  "workdir": "/home/me/app",
+  "label": "my-laptop"
+}
+```
+
+### Registering: over ssh, or by pasting a key
+
+Two routes to the same registry entry.
+
+**From the device, over ssh** — `jonggrang device register --server <sshhost>`. It
+runs `jonggrang device provision` on the server over ssh and finishes locally. It
+needs an ssh credential on the server *and* jonggrang on that host's
+non-interactive PATH (hence `--remote-jonggrang <path>` when it is not).
+
+**From the dashboard, by pasting the device's public key** — needs neither. The
+tunnel is opened with the *device's* key, so a credential on the server was never
+required for the tunnel itself, only for the registration call:
+
+```bash
+jonggrang device key            # on the device: prints its tunnel public key
+```
+
+Paste that into **Settings → Devices → Add device**, give it a name, the account
+the agent should enter as, and how that machine reaches this server over ssh. The
+dashboard reserves a port and hands back one code:
+
+```bash
+jonggrang device adopt jg1_…    # on the device: trusts the server's key, saves device.json
+jonggrang tunnel up
+```
+
+The code is base64url JSON — server, device id, port, token, and the server's
+public key. Not a secret; it is what the device needs in order to let that server
+back in. `device adopt` prints the key's fingerprint before trusting it, and the
+wizard shows the same fingerprint, so the two can be compared.
+
+`POST /api/devices` is the endpoint behind the wizard:
+
+```jsonc
+POST /api/devices
+{
+  "pubkey": "ssh-ed25519 AAAAC3Nz… you@your-machine",
+  "label": "my-laptop",
+  "localuser": "me",                  // required: who the agent enters as
+  "workdir": "/Users/me/app",         // optional default project directory
+  "ssh_host": "me@jonggrang.example"  // how the DEVICE reaches this server
+}
+→ 201 { device_id, port, code, command, server_pubkey, server_fingerprint, device_fingerprint }
+```
+
+What it will not accept, each with a message rather than a file write: more than
+one key (`authorized_keys` is line-based, so a second line would be a second key —
+and until this was closed, an unrestricted one), a private key, anything that is
+not a key, or a missing account.
+
+**One key, one device.** The restriction that confines a device to its own port
+lives on its `authorized_keys` line, and that file is keyed by the key — so a
+second device sharing a key would get no line of its own and be refused by
+`permitlisten` later, or land on the first device's port. Registering a key that
+another device already has answers `409 PUBKEY_IN_USE` and names the device that
+has it. Re-registering the *same* device with its own key is fine, and keeps its
+port and token.
+
+### `~/.jonggrang/web/devices.json` — on the server
+
+The registry. One reserved port per device, in `22000-22999`; a device keeps its
+port and token across re-registration, so nothing the device was told goes stale.
+`GET /api/devices` returns this **without tokens**, plus live tunnel state.
+
+### The two keys
+
+Registration provisions both directions, and they are deliberately different keys:
+
+| Direction | Key | Authorized where | Allowed to |
+|---|---|---|---|
+| device → server (open the tunnel) | `~/.jonggrang/device.key` (dedicated, generated) | server's `authorized_keys` | forward its own port — nothing else |
+| server → device (agent enters) | `~/.jonggrang/web/ssh/device-agent.key` | device's `authorized_keys` | run commands as `localuser` — `restrict,pty`, so no port/agent/X11 forwarding |
+
+The device key is authorized as
+`restrict,port-forwarding,permitlisten="localhost:<port>",command="/bin/false"`.
+Both halves are load-bearing and were verified against a real sshd: `permitlisten`
+refuses any other port, and the forced `command` refuses execution — `restrict`
+alone still runs `ssh server <cmd>`. `ssh -N` never asks for a session, so the
+forced command does not interfere with the tunnel.
+
+It has to be a *dedicated* key: if it were the developer's own, either sshd
+matches their unrestricted entry first and the restriction does nothing, or they
+lose their own shell on the server.
+
+### A project on a device
+
+Import with `source.type: "device"`:
+
+```jsonc
+POST /api/projects/import
+{
+  "name": "laptop-probe",
+  "source": { "type": "device", "device_id": "dev_my-laptop_a1b2c3", "path": "/tmp/my-app" }
+}
+```
+
+Nothing is fetched — the code stays on the device. The project record gains
+`device: { enabled, device_id, workdir }`, and two locations coexist on purpose:
+
+| | Where | Holds |
+|---|---|---|
+| `project.path` | the server | jonggrang's own state for the project (plans, tasks) |
+| `project.device.workdir` | the device | the code, and where commands actually run |
+
+Its **Terminal** is a shell on the device: `spawnPty` gains a third branch beside
+the host and container ones, and the child is `ssh` through the reserved port.
+Commands run under the device's *interactive* login shell, because a device's
+toolchain usually sits behind a version manager sourced from an rc file that a
+plain `ssh host cmd` never reads.
+
+Starting a terminal while the device's tunnel is down answers
+`503 DEVICE_TUNNEL_DOWN` naming the machine, rather than hanging on ssh.
+
+### The agent stays on the server; its commands go to the device
+
+That boundary is the point of the feature — the device needs no agent installed
+or authenticated. So:
+
+- `spawnPty`'s device branch is scoped to **terminal** sessions.
+- For **agent** sessions the CLI runs on the server, and
+  `hooks/device/redirect-bash.sh` rewrites each Bash tool call into an ssh
+  through the device's tunnel (Claude Code's `PreToolUse` `updatedInput`, so the
+  agent never learns the difference).
+- That hook is a **server-side bundle**, installed into the server's copy of a
+  device project at import — never by `jonggrang init`, which also lands on the
+  device, where a redirect would ssh a command to the machine already running it.
+- It is inert unless the spawn set `JONGGRANG_DEVICE_PORT/USER/WORKDIR/KEY`, so a
+  copy anywhere else does nothing.
+
+### The mount: the agent's files *are* the device's files
+
+The redirect alone moves execution but not the filesystem, and that split is
+visible — asked to list files and run tests, a real agent did both on the device
+and then pointed out that its own working directory "has no such files".
+
+So starting the agent on a device project also `sshfs`-mounts the device's project
+onto the server, **at the same absolute path it has on the device**. That last
+part is what makes the two halves agree: mounted anywhere else the files match but
+the paths do not, and a path read from one tool is invalid in the other.
+
+- The mount is created on agent start and is idempotent.
+- The server **refuses to mount over a non-empty directory of its own**, so a
+  workdir that collides with a real server path fails by name rather than
+  shadowing it.
+- The redirect hook is passed with `--settings`, because the project directory is
+  now the device's and the hook must not land there.
+- A device project's agent is **claude-only** today: the redirect is a Claude Code
+  `PreToolUse` hook, and the other backends' hook models are unverified (§12).
+- Heavy build/test I/O does not cross the mount — Bash still runs on the device.
+
+**The agent is told where its commands run.** It runs on the server and its Bash
+on the device, and it cannot see that. Left to guess it writes for its own
+platform: believing itself on Linux it produced GNU `sed -i 's/x/y/'` and got
+"invalid command code" from BSD sed on a Mac. So the spawn appends a system prompt
+naming the device, its platform (`uname -sm`, reported at registration and
+otherwise learned over the tunnel and remembered), the workdir, and that paths are
+shared — that last part matters, since an agent told only "your Bash runs
+elsewhere" starts defending against a path mismatch that no longer exists.
+
+### What the server can do on your device, and how to narrow it
+
+The server runs the agent's commands on your machine — that is the feature, and
+it cannot be removed. Everything *around* it is removed: the server's key is
+authorized `restrict,pty`, which keeps command execution and a pty (the Terminal
+needs one) while refusing port forwarding, agent forwarding, X11 and user-rc. So a
+compromised server can run commands as that user; it cannot additionally use your
+laptop as a jump host or reach your ssh-agent. Verified — a local forward through
+the device is refused with `administratively prohibited`.
+
+What remains is the account. Register as your own user and the server can read
+whatever you can, `~/.ssh` included — `device register` says so out loud. To
+narrow it, give the agent an account that owns only your projects:
+
+```bash
+# on the device, once (needs admin)
+sudo useradd -m -s /bin/bash jonggrang-agent          # macOS: create via System Settings
+sudo chown -R jonggrang-agent /srv/projects/my-app    # only what it should reach
+
+# then register as that account
+jonggrang device register --server <host> --user jonggrang-agent --path /srv/projects/my-app
+```
+
+The tunnel key is separate and already confined: it may forward its own reserved
+port and nothing else, with a forced command that refuses execution.
+
+**Everything the server runs on your device is logged — on your device.**
+Registration installs `~/.jonggrang/device-audit-shell.sh` and names it as the
+forced command for the server's key, so sshd hands it the real command in
+`$SSH_ORIGINAL_COMMAND`; it records it and then runs it unchanged. The record
+lives at `~/.jonggrang/device-audit.log`:
+
+```
+2026-08-21T14:32:33Z  from=::1  cd '/tmp/my-app' || exit 1 && exec "$SHELL" -lc 'git status'
+2026-08-21T14:33:12Z  from=::1  cd '/tmp/my-app' || exit 1 && exec "$SHELL" -l
+```
+
+It is deliberately on the device and not on the server: a log the server keeps is
+a log the server can rewrite. It rotates itself above 4MB, keeping the tail. And
+it is **visibility, not restriction** — the server can still run anything; a
+dedicated account is what narrows that.
+
+### Rotating the server's key
+
+```bash
+jonggrang device rotate     # on the device; --server is remembered
+```
+
+The server generates a fresh key **for this device**, the device authorizes it and
+**revokes every older jonggrang agent key** — so the previous one stops working,
+which is the only thing that makes a rotation worth doing. Keys you added by hand
+are never touched; the match is on jonggrang's own key comment.
+
+Each device has its own key from the first rotation onwards (a device registered
+earlier keeps using the shared one until then). That is what makes rotation safe:
+with a single key for every device, rotating one would silently lock out all the
+rest.
+
+**When the tunnel drops mid-run.** A device group is watched: every 15 seconds the
+server asks whether the reserved port is still listening, and two consecutive
+misses stop the run — one is not enough, since an `autossh` reconnect should not
+be fatal. The run ends `cancelled` with the device named, and the worktree mount is
+released, so the next start is not handed a directory that answers `EIO`. Without
+this the agent keeps retrying a machine that is gone, at LLM prices, while the run
+reports `running`.
+
+Install `autossh` on the device if you want drops to heal themselves —
+`jonggrang tunnel up` says which supervisor it used.

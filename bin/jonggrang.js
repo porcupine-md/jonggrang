@@ -822,7 +822,14 @@ async function cmdWork(descriptionParts = []) {
         // Phase 8 = Implement — running for the duration of the work loop.
         if (m.active_phases.includes(8)) orchestration.startPhase(mPath, 8);
         workManifest = orchestration.readManifest(mPath);
+      } else {
+        // Tasks without a MANIFEST — not something `approve` produces, but
+        // hand-built state reaches this. Say what silently stops working rather
+        // than running a pipeline whose bookkeeping goes nowhere.
+        logWarn(`No MANIFEST for ${fid} — phase tracking, gate deferral and compact finalize are off for this run.`);
       }
+    } else {
+      logWarn('Could not resolve which plan this worktree is running — phase tracking is off for this run.');
     }
   } else if (!WORKTREE_MODE) {
     if (WORK_FEATURE_ID) {
@@ -903,6 +910,11 @@ async function cmdWork(descriptionParts = []) {
       orchestration.startPhase(workManifestPath, 8);
     workManifest = orchestration.readManifest(workManifestPath);
   }
+
+  // Tell every later `jonggrang task ...` call — including the agent's own, and
+  // on a device project those run over ssh — which plan this run is executing.
+  // Per-feature numbering makes a bare task-001 ambiguous otherwise.
+  if (workFeatureId) lib.writeScopedFeature(PROJECT_ROOT, workFeatureId);
 
   logHeader('JONGGRANG Work Loop');
   logInfo(`Tool: ${TOOL}`);
@@ -2214,6 +2226,11 @@ async function cmdApprove(args, opts = {}) {
       if (previousTasksContent == null) fs.unlinkSync(approvalTasksFile);
       else fs.writeFileSync(approvalTasksFile, previousTasksContent, 'utf8');
     } catch {}
+    restoreUiHandoff();
+  };
+  // Undo only the handoff, keeping whatever tasks the decompose wrote — for the
+  // case where the plan turns out not to be UI work at all and is approved as is.
+  const restoreUiHandoff = () => {
     try {
       if (previousUiHandoff == null) fs.unlinkSync(finalUiHandoffPath);
       else fs.writeFileSync(finalUiHandoffPath, previousUiHandoff, 'utf8');
@@ -2244,6 +2261,20 @@ async function cmdApprove(args, opts = {}) {
     rollbackUiApproval();
     logError('Agent did not create any tasks. plan.md has been preserved — re-run "jonggrang approve" after fixing the issue.');
     process.exit(1);
+  }
+
+  // The UI flow starts from a keyword guess, and `page` matches "page cache" — so a
+  // backend fix can reach approval dressed as UI work. If the decomposition needed
+  // no UI context and the plan proposed no guide change, nothing was designed and
+  // nothing is lost: approve it as the plan it turned out to be. Refusing to approve
+  // at all was the worse answer, and the only one this had.
+  if (approvedUi && uiContext.isNonUiAfterDecompose({
+    uiTaskCount: newTasks.filter(task => task.ui_context).length,
+    guideStatus: approvedUi.guideStatus,
+  })) {
+    logWarn('No task needed UI context and the UI guide is unchanged — approving this as a non-UI plan.');
+    restoreUiHandoff();
+    approvedUi = null;
   }
 
   if (approvedUi) {
@@ -2483,13 +2514,18 @@ async function cmdBug(args) {
   let sub = 'add';
   if (['list', 'convert'].includes(subArgs[0])) sub = subArgs.shift();
 
-  // --feature <featureId> override
+  // --feature <featureId> override. The global option loop runs BEFORE this and
+  // consumes `--feature <id>` into WORK_FEATURE_ID, so the flag never arrives in
+  // subArgs — `bug add --feature X` used to answer "Multiple features found. Use
+  // --feature <featureId>", asking for the flag it had already eaten. Read both,
+  // and fall back to the feature the current run recorded.
   let forcedFeatureId = null;
   const featureIdx = subArgs.indexOf('--feature');
   if (featureIdx !== -1) {
     forcedFeatureId = subArgs[featureIdx + 1];
     subArgs.splice(featureIdx, 2);
   }
+  if (!forcedFeatureId) forcedFeatureId = WORK_FEATURE_ID || lib.readScopedFeature(PROJECT_ROOT) || null;
 
   const features = listFeatures(jonggrangDir);
   if (features.length === 0) {
@@ -3151,6 +3187,411 @@ async function runOrchestrationLoop(featureId, manifest, manifestPath) {
 // ============================================================
 // WEB DASHBOARD
 // ============================================================
+
+// ============================================================
+// DEVICES + REVERSE TUNNEL (local sandbox)
+// ============================================================
+//
+// The agent runs on a jonggrang server; the code stays on the developer's
+// machine; a reverse ssh tunnel lets the server reach back in. P0 (registration)
+// and P1 (tunnel lifecycle) of docs/plans/2026-07-07-local-sandbox-remote-agent.md.
+//
+//   on the DEVICE   jonggrang device register --server <sshhost>
+//                   jonggrang tunnel up | status | down
+//   on the SERVER   jonggrang device provision …   (run for you, over ssh)
+//                   jonggrang device list | remove <id>
+
+function parseFlags(args, valueFlags) {
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith('--')) {
+      const name = a.slice(2);
+      if (valueFlags.has(name)) flags[name] = args[++i];
+      else flags[name] = true;
+    } else positional.push(a);
+  }
+  return { flags, positional };
+}
+
+const DEVICE_VALUE_FLAGS = new Set(['server', 'user', 'localuser', 'path', 'workdir', 'label', 'id', 'pubkey', 'ssh-opt', 'remote-jonggrang', 'platform', 'port', 'token', 'server-key']);
+
+async function cmdDevice(args) {
+  const tunnel = require('../lib/tunnel');
+  const sub = args[0];
+  const { flags } = parseFlags(args.slice(1), DEVICE_VALUE_FLAGS);
+
+  switch (sub) {
+    case 'register': return deviceRegister(tunnel, flags);
+    case 'rotate': return deviceRegister(tunnel, { ...flags, rotate: true });
+    case 'key': return deviceKey(tunnel, flags);
+    case 'adopt': return deviceAdopt(tunnel, flags, args[1]);
+    case 'provision': return deviceProvision(tunnel, flags);
+    case 'list': return deviceList(tunnel, flags);
+    case 'remove': return deviceRemove(tunnel, args[1]);
+    default:
+      console.log(`Usage:
+  On your machine (the device):
+    jonggrang device register --server <sshhost> [--user <localuser>] [--path <dir>] [--label <name>]
+    jonggrang device rotate                        # new server key for this device; the old one stops working
+                              [--remote-jonggrang <cmd>]  # if the server's jonggrang is not on the ssh PATH
+    jonggrang tunnel up | status | down
+
+  Without ssh from here to the server — pair with the dashboard instead:
+    jonggrang device key                           # print this machine's key, paste it into Settings → Devices
+    jonggrang device adopt <code>                  # finish with the code the wizard gives back
+
+  On the jonggrang server:
+    jonggrang device list [--json]
+    jonggrang device remove <device-id>
+    jonggrang device provision --label <l> --localuser <u> --pubkey <key>|--pubkey-stdin [--json]
+`);
+      return sub ? 1 : 0;
+  }
+}
+
+// Run ON THE SERVER, normally by `device register` over ssh. Prints one JSON
+// line the device parses, so anything human-facing goes to stderr.
+function deviceProvision(tunnel, flags) {
+  let pubkey = flags.pubkey;
+  if (flags['pubkey-stdin']) {
+    try { pubkey = fs.readFileSync(0, 'utf8').trim(); } catch { pubkey = ''; }
+  }
+  if (!pubkey) {
+    process.stderr.write('device provision: --pubkey <key> or --pubkey-stdin is required\n');
+    return 1;
+  }
+  let result;
+  try {
+    result = tunnel.provisionDevice({
+      id: flags.id || null,
+      label: flags.label || null,
+      pubkey,
+      localuser: flags.localuser || flags.user || null,
+      workdir: flags.workdir || flags.path || null,
+      platform: flags.platform || null,
+      rotate: Boolean(flags.rotate),
+    });
+  } catch (err) {
+    process.stderr.write(`device provision failed: ${err.message}\n`);
+    return 1;
+  }
+  if (flags.json) console.log(JSON.stringify(result));
+  else {
+    logSuccess(`Device ${result.device_id} provisioned on port ${result.port}`);
+    console.log(`\nAdd this to the device's ~/.ssh/authorized_keys:\n\n${result.server_pubkey}\n`);
+  }
+  return 0;
+}
+
+// Run ON THE DEVICE. Provisions on the server over ssh, then authorizes the
+// server's key here so the agent can come back in.
+async function deviceRegister(tunnel, flags) {
+  // Rotation is registration with a new key: same port, same token, same
+  // everything the device was told — only what the server proves itself with
+  // changes. So it reuses this path rather than duplicating it.
+  const rotating = Boolean(flags.rotate);
+  const server = flags.server || (rotating ? tunnel.readDeviceConfig()?.server : null);
+  if (!server) {
+    logError(`device ${rotating ? 'rotate' : 'register'}: --server <sshhost> is required`);
+    return 1;
+  }
+
+  const localuser = flags.user || flags.localuser || os.userInfo().username;
+  const workdir = flags.path || flags.workdir || process.cwd();
+  const label = flags.label || os.hostname();
+  const existing = tunnel.readDeviceConfig();
+
+  logHeader(rotating ? 'Rotate this device\'s server key' : 'Register this machine as a jonggrang device');
+
+  const key = tunnel.ensureDeviceKey();
+  logInfo(`Tunnel key: ${key.path}${key.generated ? ' (generated)' : ''}`);
+
+  let reg;
+  try {
+    reg = tunnel.requestProvision({
+      server, pubkey: key.pub, label, localuser, workdir,
+      platform: `${os.type()} ${os.arch() === 'arm64' ? 'arm64' : os.arch()}`,
+      id: existing && existing.server === server ? existing.device_id : null,
+      rotate: Boolean(flags.rotate),
+      sshArgs: flags['ssh-opt'] ? ['-o', flags['ssh-opt']] : [],
+      remoteBin: flags['remote-jonggrang'],
+    });
+  } catch (err) {
+    logError(err.message);
+    logInfo('If the server has jonggrang but not on its non-interactive ssh PATH, pass --remote-jonggrang <path>.');
+    return 1;
+  }
+  logSuccess(`Server reserved port ${reg.port} for ${reg.device_id}`);
+  return trustServerAndSave(tunnel, { server, reg, localuser, workdir, label, existing, keyPath: key.path });
+}
+
+/**
+ * The half of registration that happens ON THE DEVICE: trust the server's key,
+ * revoke the one it replaces, and remember what we were told.
+ *
+ * `device register` reaches here after asking the server over ssh. `device adopt`
+ * reaches here with the same answer, carried by hand from the dashboard — the ssh
+ * call is the only difference between them, so everything after it is shared and
+ * cannot drift apart.
+ */
+async function trustServerAndSave(tunnel, { server, reg, localuser, workdir, label, existing, keyPath }) {
+  // Inbound trust: the agent enters through the tunnel as this user. set, not
+  // add, so a device registered before the restrictions existed picks them up.
+  // Record what the server runs here, on this machine, before it runs.
+  const wrapper = tunnel.installAuditShell(JONGGRANG_HOME);
+
+  // Revoke the key this machine was trusting before installing the new one.
+  // Without this a rotation only ADDS a key: the old one keeps working, and the
+  // rotation is theatre. Only when the server actually handed us a different key.
+  const entry = tunnel.agentKeyEntry(reg.server_pubkey, wrapper);
+  const { replaced } = tunnel.setAuthorizedKey(entry);
+
+  // Then drop every OTHER jonggrang agent key. Revoking only the key we recorded
+  // misses the ones installed before this machine kept a record — and a rotation
+  // that leaves the old key working is theatre. Scoped to our own comment, so a
+  // key the user added by hand is never touched.
+  const revoked = tunnel.revokeOtherAgentKeys(reg.server_pubkey);
+  logInfo(`Server key ${replaced ? 'updated in' : 'added to'} ${tunnel.authorizedKeysPath()} (restrict,pty + audit)`);
+  if (revoked > 0) {
+    logSuccess(`Revoked ${revoked} older jonggrang server key${revoked === 1 ? '' : 's'} — ${revoked === 1 ? 'it no longer works' : 'they no longer work'} here.`);
+  } else if (reg.rotated) {
+    logInfo('No older server keys were present to revoke.');
+  }
+  logInfo(`Everything the server runs here is logged to ${tunnel.auditLogPath()}`);
+
+  // Say plainly what was granted. The server can run commands as this user —
+  // that IS the feature — but the user does not have to be the developer's own.
+  if (localuser === os.userInfo().username) {
+    logWarn(`The server can now run commands on this machine as ${localuser} — your own account.`);
+    logInfo('That includes reading anything you can read, ~/.ssh included.');
+    logInfo('To narrow it: create a dedicated account that owns only your projects,');
+    logInfo(`then re-register with --user <that-account>. See docs/CONFIG.md.`);
+  }
+
+  logInfo(`Server key fingerprint: ${tunnel.keyFingerprint(reg.server_pubkey)}`);
+  logInfo(`Compare it with what ${server} shows before trusting it.`);
+
+  tunnel.writeDeviceConfig({
+    device_id: reg.device_id,
+    server,
+    port: reg.port,
+    key_path: keyPath,
+    token: reg.token,
+    localuser,
+    workdir,
+    label,
+    // Remembered so a later rotation knows what to revoke.
+    server_pubkey: reg.server_pubkey,
+    created_at: existing?.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  logSuccess(`Saved ${tunnel.deviceConfigPath()}`);
+
+  // The tunnel forwards to sshd on THIS machine, so check that sshd answers.
+  // `systemsetup -getremotelogin` needs admin and fails without it, which read
+  // as "off" and warned on a machine where Remote Login was on — a connect probe
+  // needs no privileges and tests the thing that actually matters.
+  await probeLocalSshd(tunnel, localuser);
+
+  console.log('');
+  logInfo('Next: jonggrang tunnel up');
+  return 0;
+}
+
+// Run ON THE DEVICE. Prints this machine's tunnel key, making it on first use.
+// One line on stdout so it can be piped, copied, or pasted into the dashboard —
+// which is the whole point: the wizard needs this key and cannot come and get it.
+function deviceKey(tunnel, flags) {
+  const key = tunnel.ensureDeviceKey();
+  if (flags.json) {
+    console.log(JSON.stringify({ path: key.path, pubkey: key.pub, fingerprint: tunnel.keyFingerprint(key.pub) }));
+    return 0;
+  }
+  console.log(key.pub);
+  if (process.stdout.isTTY) {
+    process.stderr.write(`\n${tunnel.keyFingerprint(key.pub)}\nPaste the line above into the dashboard: Settings → Devices → Add device.\n`);
+  }
+  return 0;
+}
+
+/**
+ * Run ON THE DEVICE, to finish what the dashboard started.
+ *
+ * `device register` needs ssh from here to the server, and jonggrang on that
+ * host's non-interactive PATH — two things that are often not true on a laptop
+ * behind a NAT with a server it only reaches through a browser. The wizard does
+ * the server half in the browser and hands back one code; this consumes it.
+ *
+ * The code is not a secret handed to a stranger: it names the server, the port it
+ * reserved, and the key it will come back in with. Which is exactly why this
+ * prints that key's fingerprint — the user is trusting a key, and should see it.
+ */
+async function deviceAdopt(tunnel, flags, positional) {
+  const code = positional && !positional.startsWith('--') ? positional : null;
+  let payload = null;
+
+  if (code) {
+    payload = decodeAdoptCode(code);
+    if (!payload) {
+      logError('device adopt: that code is not readable — copy the whole thing from the dashboard.');
+      return 1;
+    }
+  } else {
+    payload = {
+      server: flags.server,
+      device_id: flags.id,
+      port: flags.port,
+      token: flags.token,
+      server_pubkey: flags['server-key'],
+      localuser: flags.user || flags.localuser,
+      workdir: flags.path || flags.workdir,
+      label: flags.label,
+    };
+  }
+
+  const missing = ['server', 'device_id', 'port', 'token', 'server_pubkey'].filter(k => !payload[k]);
+  if (missing.length) {
+    logError(`device adopt: the code is missing ${missing.join(', ')}`);
+    logInfo('Get it from the dashboard: Settings → Devices → Add device.');
+    return 1;
+  }
+  if (!tunnel.validatePubkey(payload.server_pubkey).body) {
+    logError(`device adopt: ${tunnel.validatePubkey(payload.server_pubkey).error}`);
+    return 1;
+  }
+
+  const localuser = payload.localuser || os.userInfo().username;
+  const workdir = payload.workdir || process.cwd();
+  const label = payload.label || os.hostname();
+  const existing = tunnel.readDeviceConfig();
+
+  logHeader('Finish registering this machine as a jonggrang device');
+
+  // The key this machine will use to open the tunnel. The server already has its
+  // public half — that is what was pasted into the wizard — so this must find the
+  // same key, not make a new one.
+  const key = tunnel.ensureDeviceKey();
+  logInfo(`Tunnel key: ${key.path} (${tunnel.keyFingerprint(key.pub)})`);
+  logInfo(`The server was given this key's public half; if it was a different one, the tunnel will be refused.`);
+
+  return trustServerAndSave(tunnel, {
+    server: payload.server,
+    reg: {
+      device_id: payload.device_id,
+      port: Number(payload.port),
+      token: payload.token,
+      server_pubkey: payload.server_pubkey,
+    },
+    localuser, workdir, label, existing, keyPath: key.path,
+  });
+}
+
+/**
+ * The wizard's code is base64url JSON behind a version tag: one thing to copy,
+ * and nothing to mistype into a half-registration. Tagged so a future format can
+ * be told apart from this one instead of being mis-parsed as it.
+ */
+function decodeAdoptCode(code) {
+  const raw = String(code).trim();
+  const body = raw.startsWith('jg1_') ? raw.slice(4) : null;
+  if (!body) return null;
+  try {
+    const json = Buffer.from(body.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    const parsed = JSON.parse(json);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch { return null; }
+}
+
+function deviceList(tunnel, flags) {
+  const devices = tunnel.listDevices();
+  if (flags.json) { console.log(JSON.stringify({ devices }, null, 2)); return 0; }
+  if (!devices.length) {
+    logInfo('No devices registered on this server.');
+    const own = tunnel.readDeviceConfig();
+    if (own) logInfo(`This machine is registered as a device on ${own.server} (port ${own.port}).`);
+    return 0;
+  }
+  logHeader(`Devices (${devices.length})`);
+  for (const d of devices) {
+    console.log(`  ${d.id}`);
+    console.log(`    label     ${d.label}`);
+    console.log(`    port      ${d.port}`);
+    console.log(`    user@dir  ${d.localuser || '?'}:${d.workdir || '?'}`);
+    console.log(`    last seen ${d.last_seen || 'never'}`);
+  }
+  return 0;
+}
+
+function deviceRemove(tunnel, id) {
+  if (!id) { logError('device remove: a device id is required'); return 1; }
+  const result = tunnel.removeDevice(id);
+  if (!result) { logWarn(`No such device: ${id}`); return 1; }
+  logSuccess(`Removed ${id}`);
+  for (const point of result.unmounted || []) logInfo(`Unmounted ${point}`);
+  if (result.tunnel_key_revoked) {
+    logInfo(`Revoked its tunnel key from ${tunnel.authorizedKeysPath()} — its port stops answering when its ssh client next drops.`);
+  }
+  // Deleting files on somebody's own machine is not this command's business, so
+  // say where they are instead of guessing that they are unwanted.
+  const left = result.device_side || {};
+  logInfo(`On the device itself: worktrees under ${left.worktrees}, ${left.registration}, and ${left.authorized_key}.`);
+  return 0;
+}
+
+// Does sshd here accept a connection at all? A device whose sshd is unreachable
+// registers fine and then the tunnel forwards to nothing.
+async function probeLocalSshd(tunnel, localuser) {
+  const port = 22;
+  const open = await tunnel.portListening(port, 800);
+  if (open) { logInfo(`sshd here answers on port ${port} — the tunnel has something to forward to.`); return; }
+  logWarn(`Nothing is listening on port ${port} here, so the tunnel would forward to nothing.`);
+  if (process.platform === 'darwin') logInfo('Turn Remote Login on: sudo systemsetup -setremotelogin on');
+  else logInfo('Start sshd on this machine (e.g. sudo systemctl enable --now ssh).');
+  logInfo(`The agent will enter as ${localuser}.`);
+}
+
+function cmdTunnel(args) {
+  const tunnel = require('../lib/tunnel');
+  const cfg = tunnel.readDeviceConfig();
+  const sub = args[0] || 'status';
+
+  if (sub !== 'status' && !cfg) {
+    logError('This machine is not registered yet — run: jonggrang device register --server <sshhost>');
+    return 1;
+  }
+
+  switch (sub) {
+    case 'up': {
+      const res = tunnel.tunnelUp(cfg);
+      if (!res.started) { logInfo(`Tunnel already running (pid ${res.pid}).`); return 0; }
+      logSuccess(`Tunnel up: ${cfg.server} loopback :${cfg.port} → this machine's sshd (pid ${res.pid}, ${res.cmd})`);
+      if (res.cmd === 'ssh') logInfo('Install autossh for automatic reconnection.');
+      return 0;
+    }
+    case 'down': {
+      const res = tunnel.tunnelDown();
+      if (res.stopped) logSuccess(`Tunnel stopped (pid ${res.pid}).`);
+      else logInfo('No tunnel was running.');
+      return 0;
+    }
+    case 'status': {
+      const st = tunnel.tunnelStatus(cfg);
+      if (!st.configured) { logWarn('Not registered — run: jonggrang device register --server <sshhost>'); return 1; }
+      logHeader('Tunnel');
+      console.log(`  device     ${cfg.device_id}`);
+      console.log(`  server     ${cfg.server}`);
+      console.log(`  port       ${cfg.port} (on the server's loopback)`);
+      console.log(`  state      ${st.running ? `running (pid ${st.pid})` : 'stopped'}`);
+      console.log(`  supervisor ${st.supervisor}`);
+      return st.running ? 0 : 1;
+    }
+    default:
+      console.log('Usage: jonggrang tunnel up | status | down');
+      return 1;
+  }
+}
 
 function cmdWebTunnel(args) {
   const { spawnSync } = require('child_process');
@@ -4264,7 +4705,7 @@ function resolveFeatureId(flags, taskId) {
       throw e;
     }
   }
-  if (!fid) fid = lib.resolveActiveFeature(PROJECT_ROOT);
+  if (!fid) fid = lib.readScopedFeature(PROJECT_ROOT) || lib.resolveActiveFeature(PROJECT_ROOT);
   if (!fid) throw new Error('No active feature found. Run `jonggrang plan` + `jonggrang approve` first, or pass --feature <id>.');
   return fid;
 }
@@ -4531,6 +4972,12 @@ Add/Update flags:
   --skill <skill>            Skill name
   --blocked-by <id,id,...>   Comma-separated dependency task IDs
   --files <path,path,...>    Comma-separated file paths
+
+Feature scope:
+  --feature <feature-id>     Target a specific plan. Task numbering restarts at
+                             001 per plan, so a bare task-001 can exist in
+                             several; this picks one. Without it, the plan the
+                             current run is executing wins, then the active plan.
 
 Import flags:
   --input '<array>'          JSON array of task objects (inline string)
@@ -5260,6 +5707,16 @@ async function main() {
 
   if (command === 'design') {
     cmdDesign(rest);
+    return;
+  }
+
+  if (command === 'device') {
+    process.exitCode = (await cmdDevice(rest)) || 0;
+    return;
+  }
+
+  if (command === 'tunnel') {
+    process.exitCode = cmdTunnel(rest) || 0;
     return;
   }
 

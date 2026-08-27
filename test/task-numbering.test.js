@@ -155,3 +155,108 @@ test('scoped resolve + markTaskDone hits the correct feature (applySignal collis
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// The run's own feature, recorded in the project (readScopedFeature).
+//
+// These cover the case the tests above missed: with a LIVE manifest present,
+// findTaskFeature never reaches its ambiguity error — resolveActiveFeature
+// answers first, confidently and sometimes wrongly. Observed for real: a
+// worktree running `compact-probe` ran `jonggrang task update task-001` and
+// updated `machine-md-probe`'s task instead, because that plan's manifest was
+// the most recent running one.
+// ---------------------------------------------------------------------------
+
+function liveManifest(root, featureId, updatedAt) {
+  ensureFeature(root, featureId);
+  fs.writeFileSync(
+    path.join(root, '.jonggrang', '.output', 'features', featureId, 'MANIFEST.yaml'),
+    `status: running\nupdated_at: "${updatedAt}"\n`
+  );
+}
+
+test('colliding id: another plan\'s live manifest wins when nothing scopes the run', () => {
+  const root = tmpRepo();
+  try {
+    addTask(root, 'other-plan', { title: 'theirs' });
+    addTask(root, 'my-plan', { title: 'mine' });
+    liveManifest(root, 'other-plan', '2026-08-21T22:00:00.000Z');
+    liveManifest(root, 'my-plan', '2026-08-21T21:00:00.000Z');
+    // Documents the trap, not a wish: this is why the marker exists.
+    assert.equal(lib.findTaskFeature(root, 'task-001'), 'other-plan');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('writeScopedFeature makes the running plan win over another plan\'s manifest', () => {
+  const root = tmpRepo();
+  try {
+    addTask(root, 'other-plan', { title: 'theirs' });
+    addTask(root, 'my-plan', { title: 'mine' });
+    liveManifest(root, 'other-plan', '2026-08-21T22:00:00.000Z');
+    liveManifest(root, 'my-plan', '2026-08-21T21:00:00.000Z');
+    assert.equal(lib.writeScopedFeature(root, 'my-plan'), true);
+    assert.equal(lib.readScopedFeature(root), 'my-plan');
+    assert.equal(lib.findTaskFeature(root, 'task-001'), 'my-plan');
+    // And the write lands where it resolved, not just the read.
+    lib.markTaskDone(lib.tasksFileFor(root, lib.findTaskFeature(root, 'task-001')), 'task-001');
+    const mine = lib.getTasks(lib.tasksFileFor(root, 'my-plan')).tasks[0];
+    const theirs = lib.getTasks(lib.tasksFileFor(root, 'other-plan')).tasks[0];
+    assert.equal(mine.status, 'completed');
+    assert.notEqual(theirs.status, 'completed', 'the other plan\'s task must be untouched');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an explicit feature still beats the recorded one', () => {
+  const root = tmpRepo();
+  try {
+    addTask(root, 'other-plan', { title: 'theirs' });
+    addTask(root, 'my-plan', { title: 'mine' });
+    lib.writeScopedFeature(root, 'my-plan');
+    assert.equal(lib.findTaskFeature(root, 'task-001', { featureId: 'other-plan' }), 'other-plan');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a scoped feature that has no such task does not hijack the resolve', () => {
+  const root = tmpRepo();
+  try {
+    addTask(root, 'other-plan', { title: 'theirs' });   // task-001
+    addTask(root, 'my-plan', { title: 'mine' });        // task-001
+    addTask(root, 'other-plan', { title: 'theirs 2' }); // task-002, only there
+    lib.writeScopedFeature(root, 'my-plan');
+    assert.equal(lib.findTaskFeature(root, 'task-002'), 'other-plan');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('JONGGRANG_FEATURE_ID scopes the resolve where no file can be written', () => {
+  const root = tmpRepo();
+  const saved = process.env.JONGGRANG_FEATURE_ID;
+  try {
+    addTask(root, 'other-plan', { title: 'theirs' });
+    addTask(root, 'my-plan', { title: 'mine' });
+    liveManifest(root, 'other-plan', '2026-08-21T22:00:00.000Z');
+    process.env.JONGGRANG_FEATURE_ID = 'my-plan';
+    assert.equal(lib.findTaskFeature(root, 'task-001'), 'my-plan');
+  } finally {
+    if (saved === undefined) delete process.env.JONGGRANG_FEATURE_ID;
+    else process.env.JONGGRANG_FEATURE_ID = saved;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('readScopedFeature is null when nothing recorded a feature', () => {
+  const root = tmpRepo();
+  try {
+    assert.equal(lib.readScopedFeature(root), null);
+    assert.equal(lib.writeScopedFeature(root, ''), false, 'an empty id records nothing');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

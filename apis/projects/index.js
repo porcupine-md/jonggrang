@@ -1,6 +1,7 @@
 'use strict';
 
 const sandbox = require('../../lib/sandbox');
+const tunnel = require('../../lib/tunnel');
 const lib = require('../../lib/jonggrang');
 
 module.exports = function register(app, io, ctx) {
@@ -52,22 +53,48 @@ module.exports = function register(app, io, ctx) {
             return spawn('docker', dockerArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
         }
 
+        // A device project's code is on the developer's machine, so jonggrang runs
+        // HERE but works THERE: cwd is the mount, and the agent it spawns gets the
+        // redirect env plus the sentence that stops it writing for the wrong
+        // platform. Without this the planner would read an empty directory and
+        // write a plan about nothing.
+        let cwd = project.path;
+        const deviceEnv = {};
+        // `opts.local` means "not in the container" — init uses it because a
+        // container may not be up yet. It must NOT mean "ignore the device": for a
+        // device project the CLI runs here either way, and what changes is only
+        // the directory it works in. Skipping this branch for init left the tool
+        // scaffold (AGENTS.md, .claude) on the server while .jonggrang — a symlink
+        // — landed on the device: one project, its instructions split across two
+        // machines.
+        if (project.device?.enabled) {
+            const device = tunnel.deviceFor(project.device.device_id);
+            if (!device) throw new Error(`device ${project.device.device_id} is no longer registered`);
+            tunnel.mountDevice(device, project.device.workdir);
+            tunnel.linkProjectState(project, project.device.workdir);
+            cwd = project.device.workdir;
+            Object.assign(deviceEnv, tunnel.deviceRedirectEnv(device, project.device.workdir));
+            deviceEnv.JONGGRANG_DEVICE_PROMPT = tunnel.devicePlatformPrompt(
+                device, tunnel.devicePlatform(project.device.device_id), project.device.workdir);
+        }
+
         const nodeCli = path.join(__dirname, '..', '..', 'bin', 'jonggrang.js');
         return spawn('node', [nodeCli, ...args], {
-            cwd: project.path,
+            cwd,
             env: {
                 ...process.env,
                 // Override inherited PWD: Node's `cwd` option sets the child's real
                 // working directory but leaves PWD pointing at the server's launch
                 // dir. Agent CLIs (opencode) resolve their project root from $PWD,
                 // so without this they run in the wrong repo.
-                PWD: project.path,
+                PWD: cwd,
                 JONGGRANG_HOME,
-                JONGGRANG_PROJECT_ROOT: project.path,
+                JONGGRANG_PROJECT_ROOT: cwd,
                 JONGGRANG_MODE: 'autonomous',
                 NO_UPDATE_NOTIFIER: '1',
                 FORCE_COLOR: '0',
                 ...secretVars,
+                ...deviceEnv,
                 ...extraEnv,
             },
             stdio: ['pipe', 'pipe', 'pipe'],

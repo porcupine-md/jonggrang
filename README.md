@@ -84,6 +84,8 @@ Project entry points: CLI binary, Pi TUI extension, web dashboard server. Hooks 
 | `jonggrang design` | Global, reusable design templates + web studio (`list`, `new`, `promote`, `show`, `get`, `validate`) |
 | `jonggrang memory` | Read, recall, stage fragments, compact feature memory, and promote stable project lessons |
 | `jonggrang codemap` | Show/refresh deterministic codebase map (LLM-free, cached at `.jonggrang/codemap/codemap.json`) |
+| `jonggrang device` | Local-sandbox devices: `register` this machine on a jonggrang server, or `key` + `adopt` to pair with the dashboard instead of ssh; `list` / `remove` on the server (`provision` is what register runs there over ssh) |
+| `jonggrang tunnel` | The reverse SSH tunnel a registered device keeps open: `up`, `status`, `down` |
 
 ```bash
 # Quick flags
