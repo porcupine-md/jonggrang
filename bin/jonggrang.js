@@ -2226,6 +2226,11 @@ async function cmdApprove(args, opts = {}) {
       if (previousTasksContent == null) fs.unlinkSync(approvalTasksFile);
       else fs.writeFileSync(approvalTasksFile, previousTasksContent, 'utf8');
     } catch {}
+    restoreUiHandoff();
+  };
+  // Undo only the handoff, keeping whatever tasks the decompose wrote — for the
+  // case where the plan turns out not to be UI work at all and is approved as is.
+  const restoreUiHandoff = () => {
     try {
       if (previousUiHandoff == null) fs.unlinkSync(finalUiHandoffPath);
       else fs.writeFileSync(finalUiHandoffPath, previousUiHandoff, 'utf8');
@@ -2256,6 +2261,20 @@ async function cmdApprove(args, opts = {}) {
     rollbackUiApproval();
     logError('Agent did not create any tasks. plan.md has been preserved — re-run "jonggrang approve" after fixing the issue.');
     process.exit(1);
+  }
+
+  // The UI flow starts from a keyword guess, and `page` matches "page cache" — so a
+  // backend fix can reach approval dressed as UI work. If the decomposition needed
+  // no UI context and the plan proposed no guide change, nothing was designed and
+  // nothing is lost: approve it as the plan it turned out to be. Refusing to approve
+  // at all was the worse answer, and the only one this had.
+  if (approvedUi && uiContext.isNonUiAfterDecompose({
+    uiTaskCount: newTasks.filter(task => task.ui_context).length,
+    guideStatus: approvedUi.guideStatus,
+  })) {
+    logWarn('No task needed UI context and the UI guide is unchanged — approving this as a non-UI plan.');
+    restoreUiHandoff();
+    approvedUi = null;
   }
 
   if (approvedUi) {
