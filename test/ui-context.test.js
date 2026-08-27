@@ -149,6 +149,34 @@ token_template: tokens.css.template
   assert.equal(ui.recommendBaseline('Build an Expo mobile app'), 'mobile-app-minimalist@1');
 })();
 
+(function cacheWorkIsNotUiWorkAndApprovalSurvivesEither() {
+  // Reported from a live dashboard: this description was planned as UI work and
+  // approval then refused the whole plan — "UI plan produced no tasks with
+  // ui_context". The word `page` is in the detector, and it has to be, for "the
+  // settings page"; it also appears in "purge the page cache".
+  const cacheFix = 'Fix editPaymentLinkBySlug so fundraising edits purge the Dragonfly nginx page cache for the subType-specific detail page and both fundraising checkout pages';
+  assert.equal(ui.detectUiWork(cacheFix), false, 'caching language and no UI concern named');
+  assert.equal(ui.isCacheWorkWithoutUiConcern(cacheFix), true);
+
+  // Narrow on purpose: naming any UI concern wins, however much cache is around it.
+  assert.equal(ui.detectUiWork('Cache the dashboard component tree in redis'), true);
+  assert.equal(ui.detectUiWork('Purge the cached page after a theme change'), true);
+  assert.equal(ui.isCacheWorkWithoutUiConcern('Redesign the pricing page layout'), false);
+
+  // Nothing else moved.
+  assert.equal(ui.detectUiWork('Add a keyboard-accessible settings dialog'), true);
+  assert.equal(ui.detectUiWork('Add database retry handling'), false);
+  assert.equal(ui.detectUiWork('Add a new checkout page'), true);
+
+  // Second half of the fix: when UI *is* detected and the decomposition still
+  // needs no UI context, approval continues instead of refusing the plan — but
+  // only when no guide change was proposed, or design work would be lost.
+  assert.equal(ui.isNonUiAfterDecompose({ uiTaskCount: 0, guideStatus: 'unchanged' }), true);
+  assert.equal(ui.isNonUiAfterDecompose({ uiTaskCount: 0, guideStatus: 'update proposed' }), false);
+  assert.equal(ui.isNonUiAfterDecompose({ uiTaskCount: 0, guideStatus: 'new' }), false);
+  assert.equal(ui.isNonUiAfterDecompose({ uiTaskCount: 2, guideStatus: 'unchanged' }), false);
+  assert.equal(ui.isNonUiAfterDecompose({ uiTaskCount: 2, guideStatus: 'update proposed' }), false);
+})();
 (function auditsLocalEvidenceWithoutInventingOptionalTools() {
   const root = tempRoot();
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
