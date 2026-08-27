@@ -20,6 +20,15 @@ function tempRoot() {
   return root;
 }
 
+// The default baseline catalog merges the built-in packs with the user's
+// personal design store (designCatalogPath — ~/.jonggrang/design by default).
+// Unit tests must not depend on what a developer has installed there: a
+// personal pack that predates the built-in `avoid` contract (this machine's
+// `ans-lab` has no avoid list at all) made the "every default pack carries a
+// do-not list" assertion fail locally while CI — with a fresh HOME — stayed
+// green. Point the design catalog at an empty temp dir so the file is hermetic.
+process.env.JONGGRANG_DESIGN_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-ui-design-'));
+
 function guide(overrides = {}) {
   const baseline = overrides.baseline || 'dashboard-operational@1';
   const tokenSource = overrides.tokenSource || 'src/styles/tokens.css';

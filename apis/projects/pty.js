@@ -5,6 +5,7 @@ const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
 const sandbox = require('../../lib/sandbox');
+const tunnel = require('../../lib/tunnel');
 const lib = require('../../lib/jonggrang');
 
 module.exports = function(deps) {
@@ -26,6 +27,13 @@ module.exports = function(deps) {
                 session: base,
                 hostCwd: project.path,
                 containerCwd: project.sandbox?.enabled ? sandbox.getContainerPath(project) : null,
+                // A device project's files are not here at all — its cwd is a
+                // path on the developer's machine, reached through the tunnel.
+                // The agent gets that same path locally, via the sshfs mount.
+                deviceCwd: project.device?.enabled ? project.device.workdir : null,
+                // Where jonggrang's own state for this project lives (the
+                // redirect hook + its settings), which is NOT on the device.
+                serverStateDir: project.path,
             };
         }
         const hostWt = path.join(sandbox.projectWorktreeDir(project.id), featureId);
@@ -36,6 +44,14 @@ module.exports = function(deps) {
                 ? `${sandbox.WORKTREE_MOUNT}/${featureId}`
                 : null,
             hostWt,
+            // The worktree itself lives on the device (§5 of the local-sandbox
+            // plan), but jonggrang's own state for the project — the redirect
+            // bundle and its settings — stays server-side, so the agent's
+            // --settings must point there in Work Mode too. Without it,
+            // ensureDeviceHooks got undefined and the route 500'd before the
+            // redirect could be installed (the split view, silently).
+            deviceCwd: project.device?.enabled ? project.device.workdir : null,
+            serverStateDir: project.path,
         };
     }
 
@@ -121,6 +137,18 @@ module.exports = function(deps) {
         };
     }
 
+    // Drop a device project's mount once nothing is using it. Terminal sessions
+    // do not need it (they run ON the device), so only the agent's departure
+    // matters — and only when no agent session is left.
+    function releaseDeviceMount(project) {
+        if (!project.device?.enabled) return;
+        const stillRunning = [...activePtySessions.keys()]
+            .some(k => k.startsWith(`${project.id}:`) && !k.includes(':terminal'));
+        if (stillRunning) return;
+        const device = tunnel.deviceFor(project.device.device_id);
+        if (device) tunnel.unmountDevice(device, project.device.workdir);
+    }
+
     function spawnPty(project, scope, cmd, args, cols, rows) {
         const { session } = scope;
         const key = `${project.id}:${session}`;
@@ -143,12 +171,39 @@ module.exports = function(deps) {
             const execArgs = sandbox.buildExecArgs(containerName, scope.containerCwd, cmd, args, secretVars);
             cmd = 'docker';
             args = execArgs;
+        } else if (project.device?.enabled && scope.session.startsWith('terminal')) {
+            // Third execution context (the plan's §9): not here, not a container,
+            // but the developer's machine at the far end of its reverse tunnel.
+            //
+            // TERMINAL ONLY, and that boundary is the whole design. The agent
+            // runs HERE, on the server, where it is installed and authenticated
+            // once (§2) — the device needs no agent at all. What crosses the
+            // tunnel is the agent's *commands*, via the redirect hook (§3), not
+            // the agent itself. Sending the agent CLI to the device would also
+            // quietly require it installed and logged in there, which is exactly
+            // the per-machine setup this feature exists to avoid.
+            const device = tunnel.deviceFor(project.device.device_id);
+            if (!device) throw new Error(`device ${project.device.device_id} is no longer registered`);
+            args = tunnel.buildSshExecArgs(device, scope.deviceCwd, cmd, args, secretVars);
+            cmd = 'ssh';
+            tunnel.touchDevice(project.device.device_id);
         }
+
+        // A device project's AGENT runs here, and its Bash is redirected to the
+        // device by the hook in this project's server-side bundle. The hook is
+        // dumb by design: everything it needs to reach the device arrives as env,
+        // so it does nothing anywhere that env is absent.
+        const deviceEnv = (project.device?.enabled && !scope.session.startsWith('terminal'))
+            ? (() => {
+                const d = tunnel.deviceFor(project.device.device_id);
+                return d ? tunnel.deviceRedirectEnv(d, project.device.workdir) : {};
+            })()
+            : {};
 
         const ptyProcess = pty.spawn(cmd, args, {
             name: 'xterm-256color',
             cwd: scope.hostCwd,
-            env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', ...secretVars },
+            env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', ...secretVars, ...deviceEnv },
             cols: cols || 80,
             rows: rows || 24,
         });
@@ -166,6 +221,9 @@ module.exports = function(deps) {
 
         ptyProcess.onExit(({ exitCode }) => {
             activePtySessions.delete(key);
+            // The mount exists for the agent session; when that ends it is just a
+            // hostage to the tunnel's next hiccup.
+            if (!session.startsWith('terminal')) releaseDeviceMount(project);
             io.to(`project:${project.id}`).emit('pty.exit', {
                 project_id: project.id,
                 session,
@@ -217,10 +275,56 @@ module.exports = function(deps) {
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
 
         const { tool, cols = 80, rows = 24, feature_id } = req.body || {};
+        // Mount first: a device project's config is read through a symlink onto the
+        // mount, so reading the tool before mounting reports the fallback. It named
+        // `jonggrang` for a project set to `opencode` — right refusal, wrong reason.
+        if (project.device?.enabled) {
+            const d = tunnel.deviceFor(project.device.device_id);
+            if (d) { try { tunnel.mountDevice(d, project.device.workdir); } catch (err) { console.error('device project mount:', err.message); } }
+        }
         const resolvedTool = tool || readProjectTool(project);
         const { cmd, args } = resolveAgentCommand(resolvedTool, project.sandbox?.enabled);
         const scope = resolveScope(project, 'agent', feature_id);
         if (worktreeMissing(scope, res)) return;
+
+        // A device project's agent runs HERE, over the device's files: sshfs
+        // mounts them at the same absolute path they have on the device, so the
+        // agent's Read/Edit and its redirected Bash address the same bytes by the
+        // same name. The redirect hook is passed with --settings rather than
+        // living in the project dir, because that dir is now the device's and the
+        // hook must never land there (§4).
+        if (project.device?.enabled) {
+            if (resolvedTool !== 'claude') {
+                return res.status(400).json({
+                    error: 'DEVICE_TOOL_UNSUPPORTED',
+                    message: `A device project's agent needs the Bash-redirect hook, which today is claude-only (this project is set to ${resolvedTool}).`,
+                });
+            }
+            const device = tunnel.deviceFor(project.device.device_id);
+            if (!device) return res.status(409).json({ error: 'DEVICE_NOT_REGISTERED', message: 'This project\'s device is no longer registered.' });
+            if (!await tunnel.portListening(device.port)) {
+                // Clear the mount the dead tunnel left behind. Left in place it
+                // answers EIO, and the next start would inherit it.
+                tunnel.unmountDevice(device, project.device.workdir);
+                return res.status(503).json({
+                    error: 'DEVICE_TUNNEL_DOWN',
+                    message: `No tunnel from ${device.label}. Run \`jonggrang tunnel up\` on that machine.`,
+                });
+            }
+            try {
+                tunnel.mountDevice(device, project.device.workdir);
+            } catch (err) {
+                return res.status(500).json({ error: 'DEVICE_MOUNT_FAILED', message: err.message });
+            }
+            scope.hostCwd = project.device.workdir;
+            args.push('--settings', tunnel.ensureDeviceHooks(scope.serverStateDir));
+            // The agent cannot see that its Bash runs elsewhere, and guessing
+            // costs it: believing itself on Linux it writes GNU `sed -i` and gets
+            // "invalid command code" from BSD sed on a Mac. Tell it the truth.
+            const platform = tunnel.devicePlatform(project.device.device_id);
+            args.push('--append-system-prompt',
+                tunnel.devicePlatformPrompt(device, platform, project.device.workdir));
+        }
 
         if (project.sandbox?.enabled) {
             const running = await sandbox.isRunning(project.id);
@@ -239,6 +343,7 @@ module.exports = function(deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: 'PROJECT_NOT_FOUND' });
         stopSession(project, 'agent', (req.body || {}).feature_id);
+        releaseDeviceMount(project);
         res.json({ ok: true });
     });
 
@@ -258,6 +363,19 @@ module.exports = function(deps) {
         if (project.sandbox?.enabled) {
             const running = await sandbox.isRunning(project.id);
             if (!running) return res.status(503).json({ error: 'SANDBOX_NOT_RUNNING', message: 'Docker sandbox is not running. Start it first.' });
+        }
+
+        // A device project is only reachable while its tunnel is up. Saying so
+        // beats an ssh that hangs and then fails with a connection refused.
+        if (project.device?.enabled) {
+            const device = tunnel.deviceFor(project.device.device_id);
+            if (!device) return res.status(409).json({ error: 'DEVICE_NOT_REGISTERED', message: 'This project\'s device is no longer registered.' });
+            if (!await tunnel.portListening(device.port)) {
+                return res.status(503).json({
+                    error: 'DEVICE_TUNNEL_DOWN',
+                    message: `No tunnel from ${device.label}. Run \`jonggrang tunnel up\` on that machine.`,
+                });
+            }
         }
 
         try {

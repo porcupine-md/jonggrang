@@ -60,6 +60,10 @@ const cleanupDesign = require('./apis/design')(app, io, { JONGGRANG_HOME, server
 // Global object-storage API (S3-compatible uploads: R2, MinIO, custom)
 const cleanupStorage = require('./apis/storage')(app, io, { JONGGRANG_HOME });
 
+// Local-sandbox devices (reverse-tunnel registry). Registration happens over
+// ssh from the device; this is the view of it, plus live tunnel state.
+const cleanupDevices = require('./apis/devices')(app, io, { JONGGRANG_HOME });
+
 // ── FRONTEND ──────────────────────────────────────────────────
 // Production (default): serve the built client from client/dist.
 // Development (NODE_ENV=development): run Vite in middleware mode so the

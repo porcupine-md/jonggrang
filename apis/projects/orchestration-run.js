@@ -20,8 +20,14 @@ const path = require('path');
 const lib = require('../../lib/jonggrang');
 const sandbox = require('../../lib/sandbox');
 const sandboxGit = require('../../lib/sandbox-git');
+const tunnel = require('../../lib/tunnel');
 
 const LOG_TAIL_MAX = 200;
+// How often to ask whether a device is still reachable, and how many misses
+// before a run is stopped. 15s × 2 ≈ half a minute of grace, which covers an
+// autossh reconnect without letting an agent burn a turn on a dead mount.
+const DEVICE_WATCH_INTERVAL_MS = 15_000;
+const DEVICE_MISSES_BEFORE_STOP = 2;
 const GIT_MAXBUF = 1024 * 1024 * 64;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -87,6 +93,49 @@ module.exports = function(deps) {
         return project;
     }
 
+    /**
+     * A device project's agent runs on the server with its Bash redirected to the
+     * device — and that redirect is a Claude Code `PreToolUse` hook. Another
+     * backend gets no redirect, so its commands would run HERE while its file
+     * tools act on the device: the split view, silently, for whichever backend the
+     * project happens to be set to. The agent route already refused this; the work
+     * loop did not, and started `opencode run` on the server.
+     *
+     * Answers the request and returns true when it has.
+     */
+    function refusedForDeviceTool(project, res) {
+        if (!project.device?.enabled) return false;
+        const configFile = path.join(project.path, '.jonggrang', 'jonggrang.json');
+        const tool = lib.readConfig(configFile, 'tool', 'claude');
+        if (tool === 'claude') return false;
+        res.status(400).json({
+            error: {
+                code: 'DEVICE_TOOL_UNSUPPORTED',
+                message: `A device project runs its agent here with Bash redirected to the device, which today is claude-only (this project is set to ${tool}).`,
+            },
+        });
+        return true;
+    }
+
+    /**
+     * A device project's state is read through `project.path/.jonggrang`, a symlink
+     * onto the mount — so it has to be mounted BEFORE anything reads it, not when
+     * execution starts.
+     *
+     * This was three separate mysteries before it was one cause: a task list that
+     * read empty ("No pending tasks for this plan"), a worktree registry that read
+     * empty (so a resumed run tried to create a worktree that already existed), and
+     * a git error about a branch that "already exists". All of them were the
+     * project simply not being mounted yet.
+     */
+    function mountIfDevice(project) {
+        if (!project.device?.enabled) return;
+        const device = tunnel.deviceFor(project.device.device_id);
+        if (!device) return;
+        try { tunnel.mountDevice(device, project.device.workdir); }
+        catch (err) { console.error('device project mount:', err.message); }
+    }
+
     // ── execution context (host vs sandbox container) ─────────────
 
     function buildCtx(project) {
@@ -105,6 +154,30 @@ module.exports = function(deps) {
                 hostWt: (fid) => path.join(hostDir, fid),
             };
         }
+        // A device project's repository is on the developer's machine, so its
+        // worktrees are too — `git worktree add` has to run where the repo is.
+        // The orchestrator and the agent still run here, over a mount of that
+        // worktree at the same absolute path, so `wt` and `hostWt` agree.
+        if (project.device?.enabled) {
+            const device = tunnel.deviceFor(project.device.device_id);
+            if (!device) throw new Error(`device ${project.device.device_id} is no longer registered`);
+            // Mount the PROJECT, not just the worktree. jonggrang's own state —
+            // including the worktree registry — is read through
+            // `project.path/.jonggrang`, which is a symlink onto this mount. With
+            // it down the registry reads empty, a resumed run concludes its
+            // worktree is gone, and tries to create one that already exists:
+            // three error messages away from "the project is not mounted".
+            try { tunnel.mountDevice(device, project.device.workdir); }
+            catch (err) { console.error('device project mount:', err.message); }
+            return {
+                mode: 'device',
+                device,
+                root: project.device.workdir,
+                wt: (fid) => tunnel.deviceWorktreePath(device, fid),
+                hostWt: (fid) => tunnel.deviceWorktreePath(device, fid),
+            };
+        }
+
         return {
             mode: 'host',
             root: project.path,
@@ -119,6 +192,10 @@ module.exports = function(deps) {
             return execFileSync('docker', ['exec', '--workdir', cwd, ctx.container, 'git', ...argv],
                 { encoding: 'utf8', maxBuffer: GIT_MAXBUF });
         }
+        // Not against the mount: a worktree's .git points at the repository by
+        // its DEVICE path, so git run here reports "not a git repository" for a
+        // directory it can otherwise read perfectly. Measured, not assumed.
+        if (ctx.mode === 'device') return tunnel.deviceExec(ctx.device, cwd, 'git', argv);
         return execFileSync('git', argv, { cwd, encoding: 'utf8', maxBuffer: GIT_MAXBUF });
     }
 
@@ -184,6 +261,11 @@ module.exports = function(deps) {
     function createWorktreeCtx(ctx, g) {
         const wt = ctx.wt(g.featureId);
         const branch = g.branch;
+        // Device: drop any mount FIRST. This function removes and re-adds the
+        // worktree, and an sshfs session survives that — it then points at a
+        // directory that no longer exists, so the mount looks healthy and every
+        // write into it fails ENOENT.
+        if (ctx.mode === 'device') tunnel.unmountDevice(ctx.device, wt);
         try { gitSync(ctx, ctx.root, ['worktree', 'prune']); } catch {}
         try { gitSync(ctx, ctx.root, ['worktree', 'remove', wt, '--force']); } catch {}
         // Best-effort: drop a worktree left at the OLD in-repo location (migration).
@@ -192,7 +274,21 @@ module.exports = function(deps) {
         try { fs.mkdirSync(path.dirname(ctx.hostWt(g.featureId)), { recursive: true }); } catch {}
         const startRef = resolveStartRef(ctx, g.base);
         const baseSha = gitSync(ctx, ctx.root, ['rev-parse', startRef]).trim();
-        gitSync(ctx, ctx.root, ['worktree', 'add', '-b', branch, wt, startRef]);
+        // Adopt the branch if it is still there rather than insisting on -b.
+        // The `branch -D` above is best-effort and refuses while the branch is
+        // checked out somewhere — which is the normal state when a plan is being
+        // re-run — and then `add -b` fails outright with "a branch named … already
+        // exists" and takes the whole run with it.
+        const hasBranch = (() => {
+            try { gitSync(ctx, ctx.root, ['rev-parse', '--verify', `refs/heads/${branch}`]); return true; }
+            catch { return false; }
+        })();
+        gitSync(ctx, ctx.root, hasBranch
+            ? ['worktree', 'add', wt, branch]
+            : ['worktree', 'add', '-b', branch, wt, startRef]);
+        // Device: git made the worktree on the developer's machine. Mount it here,
+        // at the same path, so the orchestrator and the agent can work in it.
+        if (ctx.mode === 'device') tunnel.mountDevice(ctx.device, wt);
         return { worktreePath: wt, hostWorktreePath: ctx.hostWt(g.featureId), branch, baseSha };
     }
 
@@ -320,6 +416,18 @@ module.exports = function(deps) {
         const all = readWorktreeMeta(project);
         const meta = all[info.featureId];
         const hostWt = ctx.hostWt(info.featureId);
+        // Device: the worktree lives on the developer's machine, so "is it there?"
+        // is only answerable through the mount — try to (re)establish it first.
+        // A run resumed after a tunnel drop otherwise reads as "no worktree" and
+        // would try to create one that already exists.
+        if (ctx.mode === 'device') {
+            // Report a failure here rather than swallowing it. A silent one turns
+            // "the mount did not come up" into three unrelated-looking errors
+            // further down: an empty task list, a missing worktree registry, and
+            // finally git complaining that a branch already exists.
+            try { tunnel.mountDevice(ctx.device, ctx.wt(info.featureId)); }
+            catch (err) { console.error(`device worktree mount (${info.featureId}):`, err.message); }
+        }
         if (meta && fs.existsSync(path.join(hostWt, '.git'))) {
             return {
                 worktreePath: ctx.wt(info.featureId), hostWorktreePath: hostWt,
@@ -336,6 +444,10 @@ module.exports = function(deps) {
                 dst: `${made.worktreePath}/${rel}`,
             })));
         } else {
+            // Device: the source is this server's project dir (jonggrang's own
+            // state, including the redirect bundle) and the destination is the
+            // mount — so a plain copy lands on the device. The seeded paths are
+            // already excluded from feature commits (SEEDED_PATHS).
             lib.copyToWorktree(project.path, made.hostWorktreePath, COPY_INTO_WORKTREE);
         }
         // Base commit so the diff (vs baseSha) shows ONLY work done in the worktree.
@@ -499,10 +611,34 @@ module.exports = function(deps) {
         }
     }
 
+    /**
+     * A snapshot records what was true when it was written. If the dashboard was
+     * restarted (or crashed) while a group was running, its worker died with it —
+     * but the file still says `running`, forever. That is not just cosmetic: the
+     * already-running guard then refuses to start the plan again, so a plan whose
+     * run was interrupted can never be resumed.
+     *
+     * There is no live run for this project, so nothing in the snapshot can still
+     * be running. Say so.
+     */
+    function reconcileSnapshot(snap) {
+        if (!snap) return snap;
+        let touched = false;
+        for (const g of snap.groups || []) {
+            if (g.status === 'running' || g.status === 'queued') {
+                g.status = 'interrupted';
+                g.error = g.error || 'the dashboard restarted while this plan was running';
+                touched = true;
+            }
+        }
+        if (touched && snap.status === 'running') snap.status = 'interrupted';
+        return snap;
+    }
+
     function currentRunView(project) {
         const live = activeRuns.get(project.id);
         if (live) return serializeRun(live);
-        return readSnapshot(project);
+        return reconcileSnapshot(readSnapshot(project));
     }
     deps.orchestrationRunView = currentRunView; // used by the subscribe snapshot
 
@@ -541,6 +677,20 @@ module.exports = function(deps) {
         return run;
     }
 
+    /**
+     * Running means a process is alive, not that a field says so. A worker that
+     * died with its parent leaves `status: running` behind, and trusting that
+     * locks the plan out of being started again.
+     */
+    function groupIsLive(project, fid) {
+        const g = activeRuns.get(project.id)?.groups?.[fid];
+        if (!g) return false;
+        if (g.status !== 'running' && g.status !== 'queued') return false;
+        const pid = g.child?.pid;
+        if (!pid) return g.status === 'queued';
+        try { process.kill(pid, 0); return true; } catch { return false; }
+    }
+
     // Spawn one worktree worker for a plan, in the right context.
     // group.workerArgs lets callers run a single task (`--task`) or resume the
     // pipeline (`--resume`) instead of the default all-group-tasks run.
@@ -575,10 +725,29 @@ module.exports = function(deps) {
         }
 
         const nodeCli = path.join(__dirname, '..', '..', 'bin', 'jonggrang.js');
+
+        // A device project's worker runs HERE, in the mounted worktree — the
+        // orchestrator and the agent stay on the server (§2) and only the agent's
+        // Bash crosses to the device, via the redirect hook seeded into the
+        // worktree. These vars are what make that hook fire, and the prompt is
+        // what stops the agent writing GNU syntax for a BSD userland.
+        const deviceEnv = {};
+        if (ctx.mode === 'device') {
+            Object.assign(deviceEnv, tunnel.deviceRedirectEnv(ctx.device, group.worktreePath));
+            deviceEnv.JONGGRANG_DEVICE_PROMPT = tunnel.devicePlatformPrompt(
+                ctx.device, tunnel.devicePlatform(project.device.device_id), group.worktreePath);
+            // The redirect hook comes from the server-side bundle, not from the
+            // worktree's .claude — that one is seeded from the project and gets
+            // rewritten by `init`, which silently stopped the redirect and ran the
+            // agent's commands on the server.
+            deviceEnv.JONGGRANG_DEVICE_SETTINGS = tunnel.ensureDeviceHooks(project.path);
+        }
+
         return spawn('node', [nodeCli, ...workerArgs], {
             cwd: group.worktreePath,
             env: {
                 ...process.env,
+                ...deviceEnv,
                 // Override inherited PWD so the agent CLI (opencode resolves its
                 // project root from $PWD, not process.cwd()) runs inside the
                 // worktree instead of the server's launch dir.
@@ -764,6 +933,45 @@ module.exports = function(deps) {
         // Live progress: READ the worktree (source of truth) and emit to the UI.
         // No writes to main → no dual-writer revert (the "tasks disappear" bug).
         group.manifestSync = setInterval(() => emitFeatureProgress(project, group), 1500);
+
+        // Device runs need a watchdog. When the tunnel drops the mount answers
+        // EIO, and the agent — which now knows enough to say "the device has been
+        // unreachable" — sits there retrying a machine that is not coming back, at
+        // LLM prices, with the run reporting `running` forever. Measured.
+        //
+        // Two strikes, not one: a brief drop that autossh reconnects through
+        // should not kill a run that is otherwise fine.
+        if (ctx.mode === 'device') {
+            let misses = 0;
+            group.deviceWatch = setInterval(async () => {
+                const live = await tunnel.portListening(ctx.device.port);
+                if (live) { misses = 0; return; }
+                if (++misses < DEVICE_MISSES_BEFORE_STOP) {
+                    pushLog(group, `[jonggrang] ${ctx.device.label} unreachable (${misses}/${DEVICE_MISSES_BEFORE_STOP})`);
+                    return;
+                }
+                clearInterval(group.deviceWatch); group.deviceWatch = null;
+                group.status = 'cancelled';
+                group.error = `${ctx.device.label} went offline — the tunnel dropped mid-run`;
+                // The next agent needs to know its predecessor was cut off
+                // mid-turn, or it will trust half-finished work as deliberate.
+                // It cannot be told now — the device is gone — so remember it and
+                // write it into the worktree when the device is back.
+                markDeviceInterruption(project, group.featureId, group.error);
+                pushLog(group, `[jonggrang] ${group.error}. Stopping so the agent does not retry a machine that is gone.`);
+                emit(project.id, 'orchestration.group.log', { feature_id: group.featureId, stream: 'stderr', line: group.error });
+                try { group.child?.kill('SIGTERM'); } catch { /* already gone */ }
+                // Clear the stale mount so the next start is not handed a
+                // directory that answers EIO.
+                try { tunnel.unmountDevice(ctx.device, group.worktreePath); } catch { /* nothing to drop */ }
+                // The group is terminal; if it was the last one running, the run
+                // is too. Otherwise the dashboard shows a run in progress with
+                // nothing in it.
+                if (!runActive(run)) run.status = 'cancelled';
+                persist(project, run);
+            }, DEVICE_WATCH_INTERVAL_MS);
+        }
+
         let buf = '';
         const onData = (stream) => (data) => {
             buf += data.toString();
@@ -809,6 +1017,12 @@ module.exports = function(deps) {
             group.ptyLive = false;
             group.finishedAt = new Date().toISOString();
             if (group.manifestSync) { clearInterval(group.manifestSync); group.manifestSync = null; }
+            if (group.deviceWatch) { clearInterval(group.deviceWatch); group.deviceWatch = null; }
+            // Nothing is using the worktree mount now, and a mount outliving its
+            // run is just a hostage to the tunnel's next hiccup.
+            if (ctx.mode === 'device') {
+                try { tunnel.unmountDevice(ctx.device, group.worktreePath); } catch { /* already gone */ }
+            }
             // Decision (b): one-time snapshot of the worktree's final progress → main
             // so the dashboard keeps the last state after the worktree is removed.
             snapshotFeatureToMain(project, ctx, group);
@@ -826,6 +1040,21 @@ module.exports = function(deps) {
             } else {
                 group.status = group.status === 'cancelled' ? 'cancelled' : 'failed';
                 group.error = group.error || `worker exited with code ${code}`;
+                // "worker exited with code 1" is true and useless when the real
+                // story is that the developer's machine went away. The agent gets
+                // EIO on every file, gives up, and the user is left reading an
+                // exit code. Name the cause while we still can.
+                if (ctx.mode === 'device' && !group.error.includes('offline')) {
+                    tunnel.portListening(ctx.device.port).then((live) => {
+                        if (live) return;
+                        group.error = `${ctx.device.label} is offline — the tunnel dropped during this run (worker exited ${code})`;
+                        pushLog(group, `[jonggrang] ${group.error}`);
+                        emit(project.id, 'orchestration.group.failed', {
+                            feature_id: group.featureId, branch: group.branch, error: group.error,
+                        });
+                        persist(project, run);
+                    }).catch(() => { /* keep the exit-code message */ });
+                }
                 emit(project.id, 'orchestration.group.failed', {
                     feature_id: group.featureId, branch: group.branch, error: group.error,
                 });
@@ -843,6 +1072,74 @@ module.exports = function(deps) {
     // Ensure worktree + register group in the run + spawn its worker.
     // `g` comes from lib.groupPlans (has featureId/branch/title/taskIds).
     // opts.workerArgs overrides the default all-tasks args (single task / resume).
+    // Interruptions are noted on the server because the device is, by definition,
+    // unreachable when one happens. `applyDeviceInterruption` is what actually
+    // tells the next agent, once the worktree is reachable again.
+    // In the server-side bundle dir, NOT under `.jonggrang` — for a device project
+    // that path is a symlink onto the device, which is exactly what is
+    // unreachable when an interruption happens. First attempt wrote the marker
+    // there and it silently went nowhere.
+    const interruptionsPath = (project) => path.join(tunnel.deviceBundleDir(project.path), 'interruptions.json');
+
+    function markDeviceInterruption(project, featureId, reason) {
+        try {
+            const p = interruptionsPath(project);
+            let all = {};
+            try { all = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { /* first one */ }
+            all[featureId] = { at: new Date().toISOString(), reason };
+            fs.mkdirSync(path.dirname(p), { recursive: true });
+            fs.writeFileSync(p, JSON.stringify(all, null, 2));
+        } catch (err) {
+            console.error('markDeviceInterruption:', err.message);
+        }
+    }
+
+    /**
+     * Tell the next agent that the previous run was cut off mid-turn, and clean up
+     * after it: a task left `in_progress` goes back to `pending` so the queue is
+     * honest about what still needs doing.
+     *
+     * Both writes land in the worktree, which is why this runs at START rather
+     * than when the interruption happened — that was the moment the device
+     * stopped being writable.
+     */
+    function applyDeviceInterruption(project, ctx, featureId) {
+        const p = interruptionsPath(project);
+        let all = {};
+        try { all = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return; }
+        const note = all[featureId];
+        if (!note) return;
+
+        const wt = ctx.hostWt(featureId);
+        try {
+            const progress = path.join(wt, '.jonggrang', '.output', 'features', featureId, 'progress.txt');
+            fs.mkdirSync(path.dirname(progress), { recursive: true });
+            fs.appendFileSync(progress, [
+                '',
+                `## Interrupted run (${note.at})`,
+                `The previous session ended mid-turn: ${note.reason}.`,
+                'Anything it had started may be half-finished — verify the working tree',
+                'against the task before assuming earlier work was deliberate.',
+                '',
+            ].join('\n'));
+        } catch (err) {
+            console.error('applyDeviceInterruption progress:', err.message);
+        }
+
+        try {
+            const tasksFile = path.join(wt, '.jonggrang', '.output', 'features', featureId, 'jonggrang-tasks.json');
+            const data = JSON.parse(fs.readFileSync(tasksFile, 'utf8'));
+            let touched = false;
+            for (const t of data.tasks || []) {
+                if (t.status === 'in_progress') { t.status = 'pending'; touched = true; }
+            }
+            if (touched) fs.writeFileSync(tasksFile, `${JSON.stringify(data, null, 2)}\n`);
+        } catch { /* no task file yet, or unreadable — the note is the important half */ }
+
+        delete all[featureId];
+        try { fs.writeFileSync(p, JSON.stringify(all, null, 2)); } catch { /* it will be re-applied, harmlessly */ }
+    }
+
     function startGroup(project, ctx, run, g, opts = {}) {
         const wt = ensureWorktree(project, ctx, g);
         // Pull the latest approved/appended task list from main into the worktree
@@ -851,6 +1148,9 @@ module.exports = function(deps) {
         // …and the current project settings, which a long-lived worktree would
         // otherwise keep ignoring (see seedProjectConfig).
         seedProjectConfig(project, ctx, g.featureId);
+        // If a previous run on this feature was cut off by its device going away,
+        // this is the first moment the worktree can be told about it.
+        if (ctx.mode === 'device') applyDeviceInterruption(project, ctx, g.featureId);
         const group = {
             featureId: g.featureId, branch: wt.branch, title: g.title, taskIds: g.taskIds,
             status: 'running', worktreePath: wt.worktreePath, hostWorktreePath: wt.hostWorktreePath,
@@ -958,10 +1258,12 @@ module.exports = function(deps) {
         if (deps.activeWork?.has(project.id)) {
             return res.status(409).json({ error: { code: 'PROCESS_ALREADY_RUNNING', message: 'A work process is already running' } });
         }
-        const existing = activeRuns.get(project.id)?.groups?.[fid];
-        if (existing && (existing.status === 'running' || existing.status === 'queued')) {
+        if (groupIsLive(project, fid)) {
             return res.status(409).json({ error: { code: 'GROUP_ALREADY_RUNNING', message: 'This plan is already running' } });
         }
+
+        mountIfDevice(project);
+        if (refusedForDeviceTool(project, res)) return;
 
         let groups;
         try {
@@ -997,10 +1299,12 @@ module.exports = function(deps) {
         if (deps.activeWork?.has(project.id)) {
             return res.status(409).json({ error: { code: 'PROCESS_ALREADY_RUNNING', message: 'A work process is already running' } });
         }
-        const existing = activeRuns.get(project.id)?.groups?.[fid];
-        if (existing && (existing.status === 'running' || existing.status === 'queued')) {
+        if (groupIsLive(project, fid)) {
             return res.status(409).json({ error: { code: 'GROUP_ALREADY_RUNNING', message: 'This plan is already running' } });
         }
+
+        mountIfDevice(project);
+        if (refusedForDeviceTool(project, res)) return;
 
         const info = planGroupInfo(project, fid);
         if (!info) return res.status(404).json({ error: { code: 'PLAN_NOT_FOUND', message: 'Plan not found' } });
@@ -1180,6 +1484,11 @@ module.exports = function(deps) {
             res.status(500).json({ error: { code: 'PUSH_ERROR', message: err.message } });
         }
     });
+
+    // Internal behaviours that unit tests exercise directly — same pattern as
+    // `deps.orchestrationRunView` above and `module.exports.ptyRelay` below.
+    // See test/orchestration-device-liveness.test.js.
+    deps.orchestrationRunTest = { reconcileSnapshot, groupIsLive, runActive };
 
     return router;
 };
