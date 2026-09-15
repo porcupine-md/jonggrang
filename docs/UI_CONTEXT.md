@@ -63,8 +63,13 @@ bounded `ui_context` on UI tasks only.
 
 The guide points to the canonical token and component sources. It may include a
 representative snippet, but it does not duplicate an entire CSS or DTCG file.
-`token_status: ready` requires an existing source. `token_status: planned`
-requires one designated foundation task; all later UI tasks depend on it.
+`token_status: ready` requires an existing source. `token_status: planned` needs
+one designated foundation task, which owns the token source; all later UI tasks
+depend on it. Approval designates it: the task the decomposition marked
+`ui_context.foundation`, the first of them if it marked several, otherwise the
+first UI task — and it says so in the log when the decomposition did not decide.
+Approval no longer refuses a plan over the count, because the flag is set by
+instruction and the same plan would approve on a retry.
 
 ## Starter baselines
 
