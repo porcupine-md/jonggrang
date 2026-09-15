@@ -1254,6 +1254,16 @@ function verifyUiDraftPlan(planFile, sessionId) {
   const fm = parsePlanFrontmatter(planContent);
   if (fm.ui !== 'true') return null;
   if (!fm.ui_baseline || fm.ui_baseline === 'ask-user') throw new Error('UI plan needs an approved ui_baseline before approval.');
+  // A baseline is either the project's own visual system or a pack in the
+  // catalog. Nothing checked that it is one of them, so a plan could name a
+  // baseline that does not exist — `pos-dashboard@1`, invented by the planning
+  // agent — and the only symptom arrived at approval, days later, phrased as a
+  // mismatch with the guide. Say the real thing, and say it while the plan is
+  // still being written.
+  if (fm.ui_baseline !== 'existing-project' && !uiContext.isBaselineKey(fm.ui_baseline)) {
+    const known = uiContext.baselineKeys().join(', ');
+    throw new Error(`Unknown ui_baseline "${fm.ui_baseline}". Use existing-project, or one of: ${known}.`);
+  }
   if (fm.ui_guide_status === 'needs input') throw new Error('UI guide still needs input; revise the plan before approval.');
 
   const handoffDraft = uiContext.draftHandoffPath(PROJECT_ROOT, sessionId);
