@@ -431,8 +431,11 @@
         </template>
 
         <template v-else>
+          <!-- The rationale is already rendered above as "Why: …"; repeating it in the
+               placeholder said the same sentence twice and left no room for a hint
+               about what to type. -->
           <textarea v-model="answerDraft[q.id].freetext" class="qa-textarea" rows="2"
-                    :placeholder="q.rationale || 'Your answer'" />
+                    placeholder="Your answer" />
         </template>
       </div>
     </div>
@@ -1413,9 +1416,16 @@ onUnmounted(() => {
 .qa-question { display: flex; flex-direction: column; gap: 4px; }
 .qa-q-title { font-weight: 600; font-size: 13px; color: var(--jg-text); }
 .qa-q-why { font-size: 12px; color: var(--jg-text-dim); margin-bottom: 4px; }
-.qa-opt { display: flex; align-items: baseline; gap: 6px; font-size: 13px; cursor: pointer; padding: 2px 0; }
+/* The radio keeps its own column; the label and the reason stack in the second.
+   As flex siblings they competed for width and flex-shrink squeezed the shorter
+   one — which is the label, the part you actually choose by. Options in the same
+   question ended up with ragged columns 2-5 lines tall, each a different width. */
+.qa-opt {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1px 6px;
+  align-items: baseline; font-size: 13px; cursor: pointer; padding: 3px 0;
+}
 .qa-opt-label { color: var(--jg-text); }
-.qa-opt-why { color: var(--jg-text-dim); font-size: 12px; }
+.qa-opt-why { color: var(--jg-text-dim); font-size: 12px; grid-column: 2; }
 .qa-input, .qa-textarea {
   width: 100%; padding: 6px 8px; border-radius: 6px; margin-top: 4px;
   background: var(--jg-bg); border: 1px solid var(--jg-border);
