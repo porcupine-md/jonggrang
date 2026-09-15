@@ -123,6 +123,10 @@ module.exports = function register(app, io, ctx) {
 
         const handleLine = (stream, line) => {
             if (!line.trim()) return;
+            if (stream === 'stderr') {
+                const clean = line.replace(/\x1b\[[0-9;]*m/g, '').replace(/^\[jonggrang\]\s*/, '').trim();
+                if (clean) lastError = clean;
+            }
             io.to(`project:${projectId}`).emit('process.log', { project_id: projectId, stream, line, raw: line, seq: seq++ });
             // The planning agent surfaces clarifying questions via a JSON signal
             // line (`{"type":"plan_questions",...}`). Parse the *complete* line.
@@ -138,6 +142,13 @@ module.exports = function register(app, io, ctx) {
         // signal line can be split across chunks. Buffer per stream and only
         // handle a line once its terminating newline has arrived.
         const buffers = { stdout: '', stderr: '' };
+        // The last thing the process said before dying. A failure that happens
+        // before the agent runs — an unknown baseline, a guide that will not
+        // validate — prints one line and exits in under a second, and the
+        // dashboard's own log region can still be empty when the exit arrives.
+        // Carrying the line on the exit event means the page always has the
+        // reason, instead of a fixed sentence that guesses wrong.
+        let lastError = '';
         const onData = (stream) => (data) => {
             buffers[stream] += data.toString();
             let nl;
@@ -163,7 +174,10 @@ module.exports = function register(app, io, ctx) {
             for (const stream of ['stdout', 'stderr']) {
                 if (buffers[stream]) { handleLine(stream, buffers[stream].replace(/\r$/, '')); buffers[stream] = ''; }
             }
-            io.to(`project:${projectId}`).emit('process.exited', { project_id: projectId, code, signal });
+            io.to(`project:${projectId}`).emit('process.exited', {
+                project_id: projectId, code, signal,
+                error: code === 0 ? null : (lastError || null),
+            });
             try {
                 const project = webState.getProject(projectId);
                 if (project) {

@@ -131,6 +131,45 @@ test('a trailing line with no newline is still flushed to the log', () => {
   }
 });
 
+// A failure before the agent even starts — an unknown baseline, a guide that
+// will not validate — prints one line and exits in well under a second. The
+// dashboard's log region can still be empty when the exit lands, so the reason
+// has to travel on the exit itself; otherwise the page falls back to a fixed
+// sentence that says the wrong thing.
+test('the exit carries the process\'s last error line', () => {
+  const h = harness();
+  try {
+    const child = fakeChild();
+    h.deps.wireProjectProcess('p1', child, 'approve');
+    child.stderr.emit('data', Buffer.from('\x1b[31m[jonggrang]\x1b[0m Cannot approve UI plan: Unknown ui_baseline "pos-dashboard@1".\n'));
+    child.exitCode = 1;
+    child.emit('exit', 1, null);
+
+    const exit = h.emitted.find(m => m.name === 'process.exited');
+    assert.equal(exit.payload.code, 1);
+    assert.equal(exit.payload.error, 'Cannot approve UI plan: Unknown ui_baseline "pos-dashboard@1".',
+      'colour codes and the [jonggrang] prefix are stripped');
+  } finally {
+    h.cleanup();
+    fs.rmSync(h.root, { recursive: true, force: true });
+  }
+});
+
+test('a clean exit carries no error, whatever was on stderr', () => {
+  const h = harness();
+  try {
+    const child = fakeChild();
+    h.deps.wireProjectProcess('p1', child, 'approve');
+    child.stderr.emit('data', Buffer.from('[jonggrang] a warning, not a failure\n'));
+    child.exitCode = 0;
+    child.emit('exit', 0, null);
+    assert.equal(h.emitted.find(m => m.name === 'process.exited').payload.error, null);
+  } finally {
+    h.cleanup();
+    fs.rmSync(h.root, { recursive: true, force: true });
+  }
+});
+
 test('a live plan process is reported as running', () => {
   const h = harness();
   try {

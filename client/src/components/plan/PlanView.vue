@@ -78,6 +78,16 @@
           </div>
         </div>
         <div class="plan-list-items">
+          <!-- A Pass A run that never became a plan. It has no entry of its own,
+               so it is offered here instead of as a modal over another plan. -->
+          <div v-if="orphanQuestions" class="plan-orphan">
+            <div class="plan-orphan-title">A plan request is waiting for answers</div>
+            <div class="plan-orphan-actions">
+              <button class="plan-orphan-btn" @click="openOrphanQuestions">Answer</button>
+              <button class="plan-orphan-btn plan-orphan-btn--quiet" @click="discardOrphanQuestions">Discard</button>
+            </div>
+          </div>
+
           <!-- Generating item -->
           <div v-if="generating" class="plan-item plan-item--active">
             <div class="plan-item-title">{{ description || 'New Plan' }}</div>
@@ -554,6 +564,11 @@ const revising = ref(false);
 // a "questions ready" continuation of the (now-finished) generating context — the
 // QA dialog then reads as a follow-on, never a bare dialog appearing from nowhere.
 const questionsReady = ref(false);
+// Questions whose draft is not on screen: a Pass A run that stopped before it
+// wrote a plan, so it appears in no plan list and can only be reached through
+// this. It used to open its dialog over whatever plan WAS on screen — modal,
+// unclosable, hiding the Approve button of a different, finished draft.
+const orphanQuestions = ref(null);   // { sessionId, goal }
 const genLog = ref('');
 const genError = ref('');
 
@@ -600,6 +615,14 @@ async function restorePlanQuestions() {
   if (!pq || pq.projectId !== projectId.value || !pq.pending) return;
   // Don't fight the live Pass A→questions flow or an already-open form.
   if (showQuestionForm.value || pendingQuestions.value) return;
+  // Only the draft the page is showing may raise a modal. Questions belonging to
+  // a draft with no plan.md are not in `plans` at all — those get a line the user
+  // can act on, not a sheet over someone else's plan.
+  const known = pq.sessionId && plans.value.some(plan => plan.sessionId === pq.sessionId);
+  if (pq.sessionId && !known) {
+    orphanQuestions.value = { sessionId: pq.sessionId, goal: '' };
+    return;
+  }
   try {
     const url = pq.sessionId
       ? `/api/projects/${projectId.value}/plan/questions?session=${encodeURIComponent(pq.sessionId)}`
@@ -1010,6 +1033,33 @@ function approveFailureReason(log) {
   return reason ? `Approve failed — ${reason}` : '';
 }
 
+// Open the orphan's questions on purpose — the same dialog, but because the user
+// asked for it.
+async function openOrphanQuestions() {
+  const sid = orphanQuestions.value?.sessionId;
+  if (!sid) return;
+  try {
+    const res = await fetch(`/api/projects/${projectId.value}/plan/questions?session=${encodeURIComponent(sid)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data?.exists || !Array.isArray(data.questions) || !data.questions.length) { orphanQuestions.value = null; return; }
+    questionsReady.value = true;
+    applyPlanQuestions(data.goal_analysis, data.questions);
+  } catch { /* the line stays; nothing is lost by a failed open */ }
+}
+
+// Throw the request away. Until the delete route learned to find a draft with no
+// plan.md, this silently did nothing and the questions came back on every load.
+async function discardOrphanQuestions() {
+  const sid = orphanQuestions.value?.sessionId;
+  if (!sid) return;
+  try {
+    await fetch(`/api/projects/${projectId.value}/plan?session=${encodeURIComponent(sid)}`, { method: 'DELETE' });
+  } catch { /* reported by the list refusing to change */ }
+  orphanQuestions.value = null;
+  loadPlans();
+}
+
 function cancelQuestions() {
   showQuestionForm.value = false;
   pendingQuestions.value = null;
@@ -1156,7 +1206,7 @@ onMounted(async () => {
     }
   });
 
-  socket.on('process.exited', ({ project_id, code }) => {
+  socket.on('process.exited', ({ project_id, code, error }) => {
     if (project_id !== projectId.value) return;
     const wasGenerating = generating.value;
     const wasRevising = revising.value;
@@ -1165,7 +1215,10 @@ onMounted(async () => {
     approving.value = false;
     revising.value = false;
     if (wasApproving && code !== 0) {
-      genError.value = approveFailureReason(genLog.value)
+      // `error` is the process's own last words, carried on the exit event —
+      // the only source that survives a failure too fast to log anything here.
+      genError.value = (error ? `Approve failed — ${error}` : '')
+        || approveFailureReason(genLog.value)
         || 'Approve failed — no new tasks were created. Re-run "Approve & Decompose".';
     }
     // When the agent surfaced questions (Pass A), keep the description and the
@@ -1441,6 +1494,18 @@ onUnmounted(() => {
   display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1px 6px;
   align-items: baseline; font-size: 13px; cursor: pointer; padding: 3px 0;
 }
+.plan-orphan {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px; margin-bottom: 6px;
+  border: 1px dashed var(--jg-border); border-radius: 6px;
+}
+.plan-orphan-title { font-size: 12px; color: var(--jg-text-dim); }
+.plan-orphan-actions { display: flex; gap: 6px; }
+.plan-orphan-btn {
+  font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
+  background: var(--jg-bg); color: var(--jg-text); border: 1px solid var(--jg-border);
+}
+.plan-orphan-btn--quiet { color: var(--jg-text-dim); }
 .qa-opt-label { color: var(--jg-text); }
 .qa-opt-why { color: var(--jg-text-dim); font-size: 12px; grid-column: 2; }
 .qa-input, .qa-textarea {

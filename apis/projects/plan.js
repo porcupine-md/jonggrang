@@ -529,9 +529,17 @@ module.exports = function (deps) {
         const project = webState.getProject(req.params.id);
         if (!project) return res.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Not found' } });
 
-        const draft = resolveDraft(project, requestedSession(req));
+        const requested = requestedSession(req);
+        const draft = resolveDraft(project, requested);
         try {
-            if (draft) sandbox.removeDraftDir(project, lib.draftDirFor(project.path, draft.sessionId));
+            // A draft that stopped at Pass A has questions and no plan.md, and
+            // getAllDrafts is plan.md-gated — so discarding one silently did
+            // nothing, and its questions kept reopening over whatever plan the
+            // user was actually looking at. Fall back to the directory itself.
+            const sessionId = draft ? draft.sessionId : requested;
+            if (sessionId && fs.existsSync(lib.draftDirFor(project.path, sessionId))) {
+                sandbox.removeDraftDir(project, lib.draftDirFor(project.path, sessionId));
+            }
             res.status(204).send();
         } catch (err) {
             res.status(500).json({ error: err.message });

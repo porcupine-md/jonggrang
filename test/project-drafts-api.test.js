@@ -57,6 +57,40 @@ async function withServer(root, fn) {
   }
 }
 
+// A Pass A run that produced questions and no plan.md is invisible to
+// getAllDrafts — so DELETE found nothing, removed nothing, and answered 204. The
+// questions then reopened on every load, over whatever plan was on screen.
+test('a draft with questions but no plan.md can still be discarded', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jong-orphan-draft-'));
+  try {
+    const sid = 'draft-stopped-at-pass-a';
+    writeQuestions(root, sid, { goal_analysis: 'g', questions: [{ id: 'q1', question: 'which?', type: 'text' }] });
+    const dir = lib.draftDirFor(root, sid);
+    assert.equal(fs.existsSync(dir), true, 'the draft exists on disk');
+    assert.equal(fs.existsSync(path.join(dir, 'plan.md')), false, 'and has no plan');
+
+    await withServer(root, async (base) => {
+      const res = await fetch(`${base}/api/projects/p1/plan?session=${encodeURIComponent(sid)}`, { method: 'DELETE' });
+      assert.equal(res.status, 204);
+    });
+    assert.equal(fs.existsSync(dir), false, 'the draft directory is gone');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('discarding a session that does not exist is still a quiet 204', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jong-orphan-none-'));
+  try {
+    await withServer(root, async (base) => {
+      const res = await fetch(`${base}/api/projects/p1/plan?session=draft-never-existed`, { method: 'DELETE' });
+      assert.equal(res.status, 204);
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('project API lists all pending drafts by session id', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jong-project-api-'));
   try {
