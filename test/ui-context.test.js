@@ -186,6 +186,36 @@ token_template: tokens.css.template
   assert.equal(ui.isNonUiAfterDecompose({ uiTaskCount: 2, guideStatus: 'unchanged' }), false);
   assert.equal(ui.isNonUiAfterDecompose({ uiTaskCount: 2, guideStatus: 'update proposed' }), false);
 })();
+(function tokenOwnerIsChosenNotDemanded() {
+  // Reported from a live dashboard: approving a `token_status: planned` plan failed
+  // with "Approve failed — no new tasks were created", and the very same plan
+  // approved on the next attempt. The gate was `foundations.length !== 1` on a flag
+  // the decomposition sets by instruction — a coin flip that discarded the whole run.
+  const ui1 = (id, foundation) => ({ id, ui_context: { foundation } });
+
+  // What the decomposition decided, when it decided cleanly.
+  assert.deepStrictEqual(ui.chooseTokenOwner([ui1('task-001', false), ui1('task-002', true)]),
+    { id: 'task-002', reason: null });
+
+  // Too many: take the first, and say so rather than throwing the approval away.
+  const many = ui.chooseTokenOwner([ui1('task-001', true), ui1('task-002', true)]);
+  assert.equal(many.id, 'task-001');
+  assert.match(many.reason, /marked 2 UI-foundation tasks/);
+
+  // None: the first UI task owns it — the others are ordered behind it anyway.
+  const none = ui.chooseTokenOwner([ui1('task-001', false), ui1('task-002', false)]);
+  assert.equal(none.id, 'task-001');
+  assert.match(none.reason, /marked no UI-foundation task/);
+
+  // No UI task at all is the one case approval still cannot resolve.
+  assert.equal(ui.chooseTokenOwner([]), null);
+  assert.equal(ui.chooseTokenOwner(undefined), null);
+
+  // A task with no ui_context is not a candidate for the flag but can still own it
+  // by position — the caller writes the flag back onto the chosen task.
+  assert.equal(ui.chooseTokenOwner([{ id: 'task-009' }]).id, 'task-009');
+})();
+
 (function auditsLocalEvidenceWithoutInventingOptionalTools() {
   const root = tempRoot();
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({

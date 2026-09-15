@@ -2286,9 +2286,14 @@ async function cmdApprove(args, opts = {}) {
       let finalGuideContent = approvedUi.guideContent;
       let foundationId = null;
       if (approvedUi.tokenStatus === 'planned') {
-        const foundations = uiTasks.filter(task => task.ui_context.foundation === true);
-        if (foundations.length !== 1) throw new Error('planned token source needs exactly one UI-foundation task');
-        foundationId = foundations[0].id;
+        // Choose the token owner rather than demand the decomposition got the count
+        // right — see chooseTokenOwner. Refusing here discarded an entire approval
+        // over a flag the agent sets by instruction, and the next attempt would
+        // succeed unchanged.
+        const owner = uiContext.chooseTokenOwner(uiTasks);
+        if (!owner) throw new Error('planned token source needs a UI task to own it');
+        foundationId = owner.id;
+        if (owner.reason) logWarn(`Token owner: ${foundationId} — ${owner.reason}.`);
         finalGuideContent = uiContext.updateFrontmatter(finalGuideContent, { token_owner_task: foundationId });
       }
       const finalGuideRevision = uiContext.contentDigest(finalGuideContent);
@@ -2304,6 +2309,11 @@ async function cmdApprove(args, opts = {}) {
           task.ui_context.token_source = approvedUi.tokenSource;
           // Every dependent UI task must wait for the token foundation; add the
           // dependency deterministically if the decomposition agent omitted it.
+          if (foundationId && task.id === foundationId) {
+            // The guide now names this task as token_owner_task, so the task has to
+            // agree — it may be one the decomposition never marked.
+            task.ui_context.foundation = true;
+          }
           if (foundationId && task.id !== foundationId) {
             task.blocked_by = Array.isArray(task.blocked_by) ? task.blocked_by : [];
             if (!task.blocked_by.includes(foundationId)) task.blocked_by.push(foundationId);

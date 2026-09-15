@@ -994,6 +994,22 @@ async function submitAnswers() {
   }
 }
 
+// The CLI prints why approval failed; the dashboard replaced that with one fixed
+// sentence — "no new tasks were created" — which was frequently untrue: the tasks
+// were created and then rolled back, and the reason (a UI guide that would not
+// validate, a token owner it refused to pick) reached nobody. The log is right
+// there; read the last line that states a reason, and keep the old sentence for
+// when there is none.
+function approveFailureReason(log) {
+  const lines = String(log || '')
+    .split('\n')
+    .map(line => line.replace(/\x1b\[[0-9;]*m/g, '').replace(/^\[jonggrang\]\s*/, '').trim())
+    .filter(Boolean);
+  const reason = [...lines].reverse()
+    .find(line => /(failed|did not create any tasks|is missing|invalid|not found)/i.test(line));
+  return reason ? `Approve failed — ${reason}` : '';
+}
+
 function cancelQuestions() {
   showQuestionForm.value = false;
   pendingQuestions.value = null;
@@ -1149,7 +1165,8 @@ onMounted(async () => {
     approving.value = false;
     revising.value = false;
     if (wasApproving && code !== 0) {
-      genError.value = 'Approve failed — no new tasks were created. Re-run "Approve & Decompose".';
+      genError.value = approveFailureReason(genLog.value)
+        || 'Approve failed — no new tasks were created. Re-run "Approve & Decompose".';
     }
     // When the agent surfaced questions (Pass A), keep the description and the
     // question form — generation isn't done; we're waiting for the user's answers.
