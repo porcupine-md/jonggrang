@@ -183,6 +183,17 @@ test('autossh is used for reconnection when available', () => {
   assert.ok(args.includes('-R'));
 });
 
+// A tunnel that gives up at boot is the failure this feature keeps hitting: the
+// device reboots, `@reboot … tunnel up` runs before the network is ready, ssh
+// dies on ExitOnForwardFailure inside autossh's 30s gate, and autossh exits for
+// good — reporting success on the way out. Three separate disconnections on one
+// machine traced to this.
+test('autossh is told never to give up on an early failure', () => {
+  const { env } = tunnel.tunnelArgv({ server: 'sj', port: 22042 }, { useAutossh: true });
+  assert.equal(env.AUTOSSH_GATETIME, '0',
+    'without this a first dial that fails fast makes autossh quit instead of re-dialling');
+});
+
 // Without this the server-side permitlisten restriction is decoration: ssh would
 // authenticate with whatever other key the server accepts.
 test('the tunnel offers only the registered key', () => {
@@ -861,6 +872,27 @@ test('revoking drops every jonggrang agent key but the one kept', () => {
     assert.equal(lines.length, 2, 'the kept agent key and the personal one remain');
     assert.ok(lines.some(l => l.includes('me@laptop')), "a key the user added by hand is never touched");
     assert.ok(lines.some(l => tunnel.keyBody(l) === tunnel.keyBody(mine)));
+  } finally { process.env.HOME = prev; }
+});
+
+// The test above hand-builds its authorized_keys lines, which is how the entry
+// jonggrang actually writes drifted away from the one it looks for: normalising
+// the key dropped the comment, so rotation matched nothing and silently kept
+// every previous server key working. Go through agentKeyEntry, as a device does.
+test('the entry a device really installs is one rotation can revoke', () => {
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'jg-revoke3-'));
+  const prev = process.env.HOME;
+  process.env.HOME = fresh;
+  try {
+    const older = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOLDSERVER old-server@somewhere';
+    const mine = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMINE new-server@here';
+    tunnel.addAuthorizedKey(tunnel.agentKeyEntry(older, '/home/me/.jonggrang/device-audit-shell.sh'));
+    tunnel.addAuthorizedKey(tunnel.agentKeyEntry(mine, '/home/me/.jonggrang/device-audit-shell.sh'));
+
+    assert.equal(tunnel.revokeOtherAgentKeys(mine), 1, 'the previous server key goes');
+    const lines = fs.readFileSync(tunnel.authorizedKeysPath(), 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+    assert.equal(tunnel.keyBody(lines[0]), tunnel.keyBody(mine));
   } finally { process.env.HOME = prev; }
 });
 
