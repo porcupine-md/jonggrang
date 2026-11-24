@@ -125,7 +125,9 @@ test('the work loop counts failures per task and does not re-queue a blocked one
   const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'jonggrang.js'), 'utf8');
   assert.match(src, /const failCounts = new Map\(\)/, 'failures are counted per task');
   assert.doesNotMatch(src, /lastFailedTask/, 'the single rolling counter is gone');
-  assert.match(src, /if \(status === 'blocked'\)/, 'a blocked task is recognised');
+  // Two ways a task reaches 'blocked': runIteration escapes to a human, or the
+  // agent blocks it itself. Re-queuing either one burns a pass on a dead end.
+  assert.match(src, /outcome\.kind === 'escape' \|\| status === 'blocked'/, 'a blocked task is recognised');
   assert.match(src, /leaving it for a human instead of re-queuing/, 'and not re-queued');
 });
 
