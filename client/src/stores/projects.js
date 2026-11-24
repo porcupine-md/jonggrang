@@ -25,7 +25,13 @@ export const useProjectsStore = defineStore('projects', () => {
 
   async function fetchOne(id) {
     const res = await window.fetch(`/api/projects/${id}`);
-    if (!res.ok) throw new Error('Project not found');
+    // Carry the status: "the server says it is gone" and "I could not ask" are
+    // different answers, and the import flow has to tell them apart.
+    if (!res.ok) {
+      const err = new Error('Project not found');
+      err.status = res.status;
+      throw err;
+    }
     const data = await res.json();
     const idx = list.value.findIndex(p => p.id === id);
     if (idx >= 0) list.value[idx] = data;

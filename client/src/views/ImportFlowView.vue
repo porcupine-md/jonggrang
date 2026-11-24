@@ -88,6 +88,7 @@
         <div class="progress-log">
           <div v-for="(msg, i) in progressLog" :key="i" class="progress-line">{{ msg }}</div>
         </div>
+        <div v-if="stalledNote" class="progress-stalled">{{ stalledNote }}</div>
       </div>
 
       <!-- Step 3: init -->
@@ -133,6 +134,10 @@ const freshGitInit = ref(true);
 const importing = ref(false);
 const importError = ref('');
 const progressLog = ref([]);
+// Shown when the status check cannot reach the server. Not an error: the import
+// may well be running. Silence here is what makes a dropped link look identical
+// to a hang — measured, when the ssh forward to the dashboard timed out.
+const stalledNote = ref('');
 const detected = ref(null);
 const currentProjectId = ref(null);
 const currentProject = computed(() => currentProjectId.value ? projects.byId[currentProjectId.value] : null);
@@ -219,26 +224,52 @@ async function doImport() {
       detected.value = d;
       step.value = 3;
     });
-    socket.on('import.error', ({ project_id, message }) => {
-      if (project_id !== id) return;
-      // Backend deleted the project — purge from local store too
+    // Backend deleted the project — purge from local store too. Reached two
+    // ways: the socket event, and the fallback below when that event was emitted
+    // before we were listening.
+    const failImport = (message) => {
       projects.list = projects.list.filter(p => p.id !== id);
       ws.unsubscribe(id);
       currentProjectId.value = null;
       importError.value = message;
       step.value = 1;
       importing.value = false;
+    };
+
+    socket.on('import.error', ({ project_id, message }) => {
+      if (project_id !== id) return;
+      failImport(message);
     });
 
-    // Timeout fallback — if import was already done before we subscribed
-    setTimeout(async () => {
-      if (step.value === 2) {
-        const p = await projects.fetchOne(id).catch(() => null);
-        if (p?.init_status === 'imported') {
-          step.value = 3;
-        }
+    // Timeout fallback — the import may have finished, either way, before we
+    // joined the room above. The server emits `import.done` / `import.error`
+    // from a setImmediate right after answering the POST, so for a fast import
+    // (and a fast FAILURE — a full disk fails the clone at once) the event lands
+    // in an empty room and is gone. Ask the server what actually happened.
+    let checks = 0;
+    const checkImport = async () => {
+      if (step.value !== 2) return;
+      checks++;
+      let p = null;
+      let gone = false;
+      let unreachable = false;
+      try {
+        p = await projects.fetchOne(id);
+      } catch (e) {
+        // 404 is an answer: the import's own error handler deletes the project.
+        // Anything else means we could not ask — say so, but never report a
+        // failure that may not have happened.
+        if (e.status === 404) gone = true;
+        else unreachable = true;
       }
-    }, 3000);
+      if (p?.init_status === 'imported') return void (step.value = 3);
+      if (gone) return void failImport('Import failed and the project was rolled back — check the server log. A full disk is the usual cause.');
+      stalledNote.value = unreachable
+        ? 'Cannot reach the server right now — the import may still be running. Reopen the project list to check.'
+        : '';
+      if (checks < 5) setTimeout(checkImport, 3000);
+    };
+    setTimeout(checkImport, 3000);
 
   } catch (e) {
     importError.value = e.message;
@@ -304,5 +335,11 @@ function goHome() {
   max-height: 200px; overflow-y: auto; color: var(--jg-text-muted);
 }
 .progress-line { line-height: 1.6; }
+.progress-stalled {
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--p-amber-500, #d97706);
+}
 .detected-info { margin-bottom: 16px; }
 </style>
