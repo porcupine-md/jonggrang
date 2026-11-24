@@ -71,6 +71,11 @@ first UI task — and it says so in the log when the decomposition did not decid
 Approval no longer refuses a plan over the count, because the flag is set by
 instruction and the same plan would approve on a retry.
 
+A plan's `ui_baseline` must be either `existing-project` or a key in the starter
+catalog. Nothing used to check it, so a plan could name a baseline that does not
+exist — and the only symptom was a mismatch error at approval, days later.
+Planning now refuses an unknown id and lists the ones that are available.
+
 ## Starter baselines
 
 Jonggrang discovers valid, versioned starter packs from

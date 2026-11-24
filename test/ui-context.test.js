@@ -186,6 +186,20 @@ token_template: tokens.css.template
   assert.equal(ui.isNonUiAfterDecompose({ uiTaskCount: 2, guideStatus: 'unchanged' }), false);
   assert.equal(ui.isNonUiAfterDecompose({ uiTaskCount: 2, guideStatus: 'update proposed' }), false);
 })();
+(function baselineMustExistInTheCatalog() {
+  // Reported from a live dashboard: a plan carried `ui_baseline: pos-dashboard@1`,
+  // an id the planning agent invented. Nothing checked it against the catalog, so
+  // the only symptom arrived days later at approval — phrased as a mismatch with
+  // the project guide rather than "that baseline does not exist".
+  const keys = ui.baselineKeys();
+  assert.ok(keys.length >= 3, 'the shipped catalog has packs to name');
+  assert.equal(ui.isBaselineKey('pos-dashboard@1'), false, 'an invented id is not a baseline');
+  assert.equal(ui.isBaselineKey(keys[0]), true, 'a catalog key is');
+  // `existing-project` is a baseline everywhere else in the flow, but it is not a
+  // pack — the caller has to allow it explicitly, which is why this is asserted.
+  assert.equal(ui.isBaselineKey('existing-project'), false);
+})();
+
 (function tokenOwnerIsChosenNotDemanded() {
   // Reported from a live dashboard: approving a `token_status: planned` plan failed
   // with "Approve failed — no new tasks were created", and the very same plan

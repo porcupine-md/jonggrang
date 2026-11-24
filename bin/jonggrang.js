@@ -304,6 +304,18 @@ function updateTaskMode(tasksFile, taskId, status, worktreeMode = false) {
   if (worktreeMode) emitSignal('task_status', { taskId, status });
 }
 
+/**
+ * Block a task and say why, then let the host refresh.
+ *
+ * The reason is what `task block --reason` has always written; the work loop's
+ * own give-up path wrote none, which is how a blocked task reached a human with
+ * an empty error_log.
+ */
+function blockWithReason(tasksFile, taskId, reason, worktreeMode = false) {
+  try { lib.blockTask(tasksFile, taskId, reason); } catch { /* file may not exist yet */ }
+  if (worktreeMode) emitSignal('task_status', { taskId, status: 'blocked' });
+}
+
 const TEST_RETRY_LIMIT = 3;
 // How many times human feedback may restart the TEST_RETRY_LIMIT budget for one
 // task. Without a cap, each round resets testAttempt to 0 and runIteration never
@@ -417,10 +429,15 @@ async function runWorkLoop(tasksFile, options) {
       return { completed: true, reason: 'all_done', stats: { completed: lib.countCompleted(tasksFile), total: lib.countTotal(tasksFile) } };
     }
 
-    const success = await runIteration(tasksFile, iteration, taskId, MODE, dryRun, worktreeMode);
+    const outcome = await runIteration(tasksFile, iteration, taskId, MODE, dryRun, worktreeMode);
 
-    if (success) {
+    if (outcome.ok) {
       failCounts.delete(taskId);
+    } else if (outcome.kind === 'die') {
+      // An invariant is broken. Every further pass would spawn an agent against
+      // the same broken premise, so stop and hand the reason to the human.
+      logError(`Stopping the run: ${outcome.reason}`);
+      return { completed: false, reason: `defect: ${outcome.reason}`, stats: { completed: lib.countCompleted(tasksFile), total: lib.countTotal(tasksFile) } };
     } else {
       // Count failures PER TASK. A single "last failed task" counter is reset by
       // any other task failing in between, so with two or more failing tasks in
@@ -429,21 +446,27 @@ async function runWorkLoop(tasksFile, options) {
       const fails = (failCounts.get(taskId) || 0) + 1;
       failCounts.set(taskId, fails);
 
-      // runIteration blocks a task itself when its tests keep failing. Blocked
-      // means "a human has to look at this", so re-queuing it just burns another
-      // agent pass on the same dead end.
+      // 'escape' means runIteration already blocked the task and recorded why.
+      // The status check stays alongside it because the *agent* can block a task
+      // too, and that path produces no outcome of ours. Either way, re-queuing
+      // just burns another agent pass on the same dead end.
       const status = lib.getTask(tasksFile, taskId)?.status;
-      if (status === 'blocked') {
+      if (outcome.kind === 'escape' || status === 'blocked') {
         logWarn(`Task ${taskId} is blocked — leaving it for a human instead of re-queuing.`);
       } else if (fails >= killAfter) {
         logError(`Task ${taskId} failed ${fails} times. Marking as blocked.`);
-        updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
+        // Say so in the task itself. `task block --reason` records why; this path
+        // did not, so a task blocked here carried an empty error_log and the
+        // dashboard showed "blocked" with nothing behind it — indistinguishable
+        // from a real defect. Observed when the agent's quota ran out mid-run:
+        // five tasks blocked, no reason anywhere, one of them already finished.
+        blockWithReason(tasksFile, taskId, `${outcome.reason} (failed ${fails} times in one run, work.kill_after_fails=${killAfter})`, worktreeMode);
       } else if (groupTaskIds.length > 0) {
         // Group/worktree mode never falls back to getNextTask, so a task that
         // got reverted to pending would be dropped from the queue and the run
         // would falsely report "All tasks completed". Re-queue it to retry
         // within this run (bounded by kill_after_fails above).
-        logWarn(`Re-queuing ${taskId} for retry (attempt ${fails}/${killAfter}).`);
+        logWarn(`Re-queuing ${taskId} for retry (attempt ${fails}/${killAfter}): ${outcome.reason}`);
         taskQueue.push(taskId);
       }
     }
@@ -473,9 +496,24 @@ function askUserFeedback(prompt) {
   });
 }
 
+// A pass either produced the task's work or it did not, and *why* it did not is
+// what decides the next move. The loop used to receive a bare boolean, so a quota
+// that ran dry, an agent that crashed and a genuine defect were the same value —
+// all three got "retry until kill_after_fails, then block", and the reason never
+// survived to the human. Each failure now names its own strategy and carries why.
+//
+//   retry  — transient; dispatch again, and say why if it keeps happening
+//   escape — a human has to look; runIteration has already blocked the task
+//   die    — an invariant is broken; stop the run instead of burning more passes
+const OK = { ok: true };
+const fail = (kind, reason) => ({ ok: false, kind, reason });
+
 async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, worktreeMode = false) {
   const task = lib.getTask(tasksFile, taskId);
-  const taskTitle = task ? task.title : taskId;
+  // Dispatching a task that is not in the file spawns an agent against a prompt
+  // built from nothing. That is a broken queue, not a task that failed.
+  if (!task) return fail('die', `task ${taskId} is not in ${tasksFile}`);
+  const taskTitle = task.title;
 
   logHeader(`Iteration ${iteration}: ${taskTitle}`);
 
@@ -487,7 +525,7 @@ async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, 
   if (dryRun) {
     logWarn(`[DRY RUN] Would execute prompt for task: ${taskId}`);
     console.log(lib.buildWorkPrompt(taskId, tasksFile, mode));
-    return true;
+    return OK;
   }
 
   const testCmd = lib.readConfig(CONFIG_FILE, 'testing.command', '');
@@ -505,7 +543,7 @@ async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, 
     if (exitCode !== 0) {
       logWarn(`Agent exited with error (code: ${exitCode}). Reverting task to pending.`);
       updateTaskMode(tasksFile, taskId, 'pending', worktreeMode);
-      return false;
+      return fail('retry', `agent exited with code ${exitCode}`);
     }
 
     // ── Check task completion ─────────────────────────────────
@@ -514,14 +552,14 @@ async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, 
     if (!t || t.status !== 'completed') {
       logWarn('Agent finished but did not mark task complete. Reverting to pending.');
       updateTaskMode(tasksFile, taskId, 'pending', worktreeMode);
-      return false;
+      return fail('retry', `agent exited 0 but left the task ${t ? t.status : 'absent from the file'}`);
     }
 
     // ── Run tests ─────────────────────────────────────────────
     if (!testCmd) {
       logSuccess(`Task ${taskId} completed successfully`);
       updateTaskMode(tasksFile, taskId, 'completed', worktreeMode);
-      return true;
+      return OK;
     }
 
     logInfo('Running tests...');
@@ -530,7 +568,7 @@ async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, 
     if (passed) {
       logSuccess(`Task ${taskId} completed — tests passed`);
       updateTaskMode(tasksFile, taskId, 'completed', worktreeMode);
-      return true;
+      return OK;
     }
 
     testAttempt++;
@@ -555,13 +593,13 @@ async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, 
     if (!process.stdin.isTTY) {
       logError(`Task ${taskId} marked as blocked after ${TEST_RETRY_LIMIT} failed test retries (non-interactive — no feedback possible).`);
       updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
-      return false;
+      return fail('escape', `tests still failed after ${TEST_RETRY_LIMIT} retries; non-interactive run, so no feedback was possible`);
     }
 
     if (feedbackRounds >= TEST_FEEDBACK_ROUND_LIMIT) {
       logError(`Task ${taskId} marked as blocked — feedback did not make the tests pass after ${TEST_FEEDBACK_ROUND_LIMIT} rounds.`);
       updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
-      return false;
+      return fail('escape', `feedback did not make the tests pass after ${TEST_FEEDBACK_ROUND_LIMIT} rounds`);
     }
 
     const userInput = await askUserFeedback(
@@ -572,7 +610,7 @@ async function runIteration(tasksFile, iteration, taskId, mode, dryRun = false, 
       if (userInput) logWarn('Ignoring a jonggrang control frame read from stdin — that is not human feedback.');
       logError(`Task ${taskId} marked as blocked after ${TEST_RETRY_LIMIT} failed test retries.`);
       updateTaskMode(tasksFile, taskId, 'blocked', worktreeMode);
-      return false;
+      return fail('escape', `tests still failed after ${TEST_RETRY_LIMIT} retries and no feedback was given`);
     }
     feedbackRounds++;
 
@@ -1254,6 +1292,16 @@ function verifyUiDraftPlan(planFile, sessionId) {
   const fm = parsePlanFrontmatter(planContent);
   if (fm.ui !== 'true') return null;
   if (!fm.ui_baseline || fm.ui_baseline === 'ask-user') throw new Error('UI plan needs an approved ui_baseline before approval.');
+  // A baseline is either the project's own visual system or a pack in the
+  // catalog. Nothing checked that it is one of them, so a plan could name a
+  // baseline that does not exist — `pos-dashboard@1`, invented by the planning
+  // agent — and the only symptom arrived at approval, days later, phrased as a
+  // mismatch with the guide. Say the real thing, and say it while the plan is
+  // still being written.
+  if (fm.ui_baseline !== 'existing-project' && !uiContext.isBaselineKey(fm.ui_baseline)) {
+    const known = uiContext.baselineKeys().join(', ');
+    throw new Error(`Unknown ui_baseline "${fm.ui_baseline}". Use existing-project, or one of: ${known}.`);
+  }
   if (fm.ui_guide_status === 'needs input') throw new Error('UI guide still needs input; revise the plan before approval.');
 
   const handoffDraft = uiContext.draftHandoffPath(PROJECT_ROOT, sessionId);
@@ -4902,17 +4950,9 @@ function taskBlock(flags, positional, pretty) {
   if (!taskId) throw new Error('Task ID required. Usage: jonggrang task block <task-id> [--reason "..."]');
 
   const tasksFile = resolveTasksFile(flags, taskId);
-  lib.updateTask(tasksFile, taskId, { status: 'blocked' });
-
-  if (flags.reason) {
-    const data = lib.getTasks(tasksFile);
-    const t = data.tasks.find(x => x.id === taskId);
-    if (t) {
-      if (!t.error_log) t.error_log = [];
-      t.error_log.push(`[${new Date().toISOString()}] Blocked: ${flags.reason}`);
-      lib.writeJSON(tasksFile, data);
-    }
-  }
+  // A typo in the id used to raise "Task <id> not found"; keep that, or the CLI
+  // reports a block it never performed.
+  if (!lib.blockTask(tasksFile, taskId, flags.reason)) throw new Error(`Task ${taskId} not found`);
 
   const task = lib.getTask(tasksFile, taskId);
   if (pretty) {
